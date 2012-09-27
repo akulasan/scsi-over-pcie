@@ -64,7 +64,9 @@ static int controller_num;
 
 static DEFINE_SPINLOCK(dev_list_lock);
 
-static void sop_make_request(struct request_queue *q, struct bio *bio);
+static int sop_add_disk(struct sop_device *h);
+static void sop_remove_disk(struct sop_device *h);
+
 static int sop_compat_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
 static int sop_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
 
@@ -1391,70 +1393,6 @@ static int sop_set_dma_mask(struct pci_dev * pdev)
 	return rc;
 }
 
-static int sop_add_disk(struct sop_device *h)
-{
-	struct gendisk *disk;
-	struct request_queue *rq;
-
-	dev_warn(&h->pdev->dev, "sop_add_disk 1\n");
-	rq = blk_alloc_queue(GFP_KERNEL);
-	if (IS_ERR(rq))
-		return -ENOMEM;
-	
-	/* Save the field in device struct */
-	h->rq = rq;
-
-	rq->queue_flags = QUEUE_FLAG_DEFAULT;
-/* #if (!defined(REDHAT5) && !defined(SUSE10)) */
-	queue_flag_set_unlocked(QUEUE_FLAG_NOMERGES, rq);
-	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, rq);
-/* #endif */
-	blk_queue_make_request(rq, sop_make_request);
-	rq->queuedata = h;
-
-	dev_warn(&h->pdev->dev, "sop_add_disk 2\n");
-	disk = alloc_disk(SOP_MINORS);
-	if (!disk)
-		goto out_free_queue;
-
-	h->disk = disk;
-	dev_warn(&h->pdev->dev, "sop_add_disk 3\n");
-	blk_queue_logical_block_size(rq, 512);	/* TODO: change hardcode */
-	if (h->max_hw_sectors)
-		blk_queue_max_hw_sectors(rq, h->max_hw_sectors);
-	blk_queue_max_segments(rq, MAX_SGLS);
-	/* TODO: Setup other blk queue parameters too - e.g for segment limit */
-	disk->major = sop_major;
-	disk->minors = SOP_MINORS;
-	disk->first_minor = SOP_MINORS * h->instance;
-	disk->fops = &sop_fops;
-	disk->private_data = h;
-	disk->queue = rq;
-	disk->driverfs_dev = &h->pdev->dev;
-	sprintf(disk->disk_name, SOP"%d", h->instance);
-	set_capacity(disk, h->capacity);
-	dev_warn(&h->pdev->dev, "Creating SOP drive '%s'- Capacity %d sectors\n", 
-		disk->disk_name, (int)(h->capacity));
-	add_disk(disk);
-
-	return 0;
-
- out_free_queue:
-	blk_cleanup_queue(rq);
-	return -ENOSYS;
-}
-
-
-static void sop_remove_disk(struct sop_device *h)
-{
-	/* First free the disk */
-	del_gendisk(h->disk);
-
-	/* Free the request queue */
-	blk_cleanup_queue(h->rq);
-}
-
-
 static DEFINE_IDA(sop_instance_ida);
 
 static int sop_set_instance(struct sop_device *h)
@@ -1971,12 +1909,16 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs)
 	return 0;
 }
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0) )
 /*
  * NB: return value of non-zero would mean
  * that we were a stacking driver.
  * make_request must always succeed.
  */
+static int sop_make_request(struct request_queue *q, struct bio *bio)
+#else
 static void sop_make_request(struct request_queue *q, struct bio *bio)
+#endif
 {
 	struct sop_device *h = q->queuedata;
 	int nsegs;
@@ -1992,7 +1934,75 @@ static void sop_make_request(struct request_queue *q, struct bio *bio)
 			result);
 	}
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36) )
+	return 0;
+#else
 	return;
+#endif
+}
+
+
+static int sop_add_disk(struct sop_device *h)
+{
+	struct gendisk *disk;
+	struct request_queue *rq;
+
+	dev_warn(&h->pdev->dev, "sop_add_disk 1\n");
+	rq = blk_alloc_queue(GFP_KERNEL);
+	if (IS_ERR(rq))
+		return -ENOMEM;
+	
+	/* Save the field in device struct */
+	h->rq = rq;
+
+	rq->queue_flags = QUEUE_FLAG_DEFAULT;
+/* #if (!defined(REDHAT5) && !defined(SUSE10)) */
+	queue_flag_set_unlocked(QUEUE_FLAG_NOMERGES, rq);
+	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, rq);
+/* #endif */
+	blk_queue_make_request(rq, sop_make_request);
+	rq->queuedata = h;
+
+	dev_warn(&h->pdev->dev, "sop_add_disk 2\n");
+	disk = alloc_disk(SOP_MINORS);
+	if (!disk)
+		goto out_free_queue;
+
+	h->disk = disk;
+	dev_warn(&h->pdev->dev, "sop_add_disk 3\n");
+	blk_queue_logical_block_size(rq, 512);	/* TODO: change hardcode */
+	if (h->max_hw_sectors)
+		blk_queue_max_hw_sectors(rq, h->max_hw_sectors);
+	blk_queue_max_segments(rq, MAX_SGLS);
+	/* TODO: Setup other blk queue parameters too - e.g for segment limit */
+	disk->major = sop_major;
+	disk->minors = SOP_MINORS;
+	disk->first_minor = SOP_MINORS * h->instance;
+	disk->fops = &sop_fops;
+	disk->private_data = h;
+	disk->queue = rq;
+	disk->driverfs_dev = &h->pdev->dev;
+	sprintf(disk->disk_name, SOP"%d", h->instance);
+	set_capacity(disk, h->capacity);
+	dev_warn(&h->pdev->dev, "Creating SOP drive '%s'- Capacity %d sectors\n", 
+		disk->disk_name, (int)(h->capacity));
+	add_disk(disk);
+
+	return 0;
+
+ out_free_queue:
+	blk_cleanup_queue(rq);
+	return -ENOSYS;
+}
+
+
+static void sop_remove_disk(struct sop_device *h)
+{
+	/* First free the disk */
+	del_gendisk(h->disk);
+
+	/* Free the request queue */
+	blk_cleanup_queue(h->rq);
 }
 
 
