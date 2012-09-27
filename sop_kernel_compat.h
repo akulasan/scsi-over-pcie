@@ -26,4 +26,19 @@ void usleep_range(unsigned long min, unsigned long max)
 }
 #endif
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0) )
+#define MRFN_TYPE	int
+
+/*
+ * NB: return value of non-zero would mean
+ * that we were a stacking driver.
+ * make_request must always succeed.
+ */
+#define MRFN_RET	0
+#else
+/* Function return is eliminated */
+#define MRFN_TYPE	void
+#define MRFN_RET
 #endif
+
+#endif /* SOP_KERNEL_COMPAT_H */

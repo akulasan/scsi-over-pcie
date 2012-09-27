@@ -1909,16 +1909,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs)
 	return 0;
 }
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0) )
-/*
- * NB: return value of non-zero would mean
- * that we were a stacking driver.
- * make_request must always succeed.
- */
-static int sop_make_request(struct request_queue *q, struct bio *bio)
-#else
-static void sop_make_request(struct request_queue *q, struct bio *bio)
-#endif
+static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct sop_device *h = q->queuedata;
 	int nsegs;
@@ -1934,11 +1925,7 @@ static void sop_make_request(struct request_queue *q, struct bio *bio)
 			result);
 	}
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0) )
-	return 0;
-#else
-	return;
-#endif
+	return MRFN_RET;
 }
 
 
