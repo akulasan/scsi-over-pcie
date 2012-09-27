@@ -1934,7 +1934,7 @@ static void sop_make_request(struct request_queue *q, struct bio *bio)
 			result);
 	}
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36) )
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0) )
 	return 0;
 #else
 	return;
