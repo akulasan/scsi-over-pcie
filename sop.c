@@ -67,7 +67,9 @@ static DEFINE_SPINLOCK(dev_list_lock);
 static int sop_add_disk(struct sop_device *h);
 static void sop_remove_disk(struct sop_device *h);
 
+#ifdef CONFIG_COMPAT
 static int sop_compat_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
+#endif
 static int sop_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
 
 static const struct block_device_operations sop_fops = {
@@ -2014,6 +2016,7 @@ static int sop_device_reset_handler(struct scsi_cmnd *sc)
 
 #endif
 
+#ifdef CONFIG_COMPAT
 static int sop_compat_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg)
 {
 	struct sop_device *h = bdev_to_hba(dev);
@@ -2021,6 +2024,7 @@ static int sop_compat_ioctl(struct block_device *dev, fmode_t mode, unsigned int
 	dev_warn(&h->pdev->dev, "sop_compat_ioctl called but not implemented\n");
 	return 0;
 }
+#endif
 
 static int sop_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg)
 {
