@@ -48,9 +48,6 @@ MODULE_SUPPORTED_DEVICE("sop devices");
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
 
-#ifndef PCI_VENDOR_SANDISK
-#define PCI_VENDOR_SANDISK 0x15b7
-#endif
 #define PCI_CLASS_STORAGE_SOP	0x010800
 
 DEFINE_PCI_DEVICE_TABLE(sop_id_table) = {
@@ -799,7 +796,7 @@ static int sop_setup_msix(struct sop_device *h)
 	h->niqs = h->noqs = h->nr_queues / 2;
 
 	for (i = 0; i < h->noqs-1; i++) {
-		//msix_entry[i].vector = 0;
+		msix_entry[i].vector = 0;
 		msix_entry[i].entry = i;
 	}
 
@@ -1021,15 +1018,15 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 	struct sop_device *h = q->h;
 	u8 sq;
 
-	//printk(KERN_WARNING "Got admin oq interrupt, q = %p (%d)\n", q, q->pqiq->queue_id);
+	/* printk(KERN_WARNING "Got admin oq interrupt, q = %p (%d)\n", q, q->pqiq->queue_id); */
 
 	do {
 		struct sop_request *r = h->admin_q_from_dev.request;
 
-		//dev_warn(&h->pdev->dev, "admin intr, r = %p\n", r);
+		/* dev_warn(&h->pdev->dev, "admin intr, r = %p\n", r); */
 
 		if (pqi_from_device_queue_is_empty(&h->admin_q_from_dev)) {
-			//dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q);
+			/* dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q); */
 			break;
 		}
 
@@ -1042,20 +1039,20 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 					iu_type, request_id);
 					*/
 			r = h->admin_q_from_dev.request = &h->qinfo[sq].request[request_id & 0x00ff];
-			// dev_warn(&h->pdev->dev, "intr: r = %p\n", r);
+			/* dev_warn(&h->pdev->dev, "intr: r = %p\n", r); */
 			r->response_accumulated = 0;
 		}
 		rc = pqi_dequeue_from_device(&h->admin_q_from_dev,
 			&r->response[r->response_accumulated]); 
-		// dev_warn(&h->pdev->dev, "dequeued from q %p\n", q);
+		/* dev_warn(&h->pdev->dev, "dequeued from q %p\n", q); */
 		if (rc) { /* queue is empty */
-			// dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q);
+			/* dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q); */
 			return IRQ_HANDLED;
 		}
 		r->response_accumulated += h->admin_q_from_dev.element_size;
-		// dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated);
+		/* dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated); */
 		if (sop_response_accumulated(r)) {
-			//dev_warn(&h->pdev->dev, "accumlated response\n");
+			/* dev_warn(&h->pdev->dev, "accumlated response\n");*/
 			h->admin_q_from_dev.request = NULL;
 			wmb();
 			complete(r->waiting);
@@ -1114,7 +1111,6 @@ static int sop_request_irqs(struct sop_device *h,
 		}
 	}
 	sop_irq_affinity_hints(h);
-
 	return 0;
 
 default_int_mode:
