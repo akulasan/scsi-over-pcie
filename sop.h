@@ -39,7 +39,7 @@ struct pqi_device_queue {
 					 * written to *pi for inbound queues 
 					 */
 	u16 element_size;		/* must be multiple of 16 */
-	u8 nelements;
+	u16 nelements;
 	dma_addr_t dhandle;
 	u16 queue_id;
 	u8 direction;
@@ -183,8 +183,8 @@ struct pqi_capability {
 
 #define IQ_IU_SIZE 64
 #define OQ_IU_SIZE 64
-#define IQ_NELEMENTS 64
-#define OQ_NELEMENTS 64
+#define IQ_NELEMENTS 256
+#define OQ_NELEMENTS 256
 
 struct sop_device;
 struct pqi_sgl_descriptor;
@@ -194,6 +194,8 @@ struct queue_info {
 	int msix_vector;
 	spinlock_t qlock;
 	u16 qdepth;
+	atomic_t cur_qdepth;
+	u32 max_qdepth;
 	struct sop_request *request;
 	unsigned long *request_bits;
 	struct pqi_device_queue *pqiq;
@@ -207,8 +209,8 @@ struct sop_device {
 	struct pci_dev *pdev;
 	struct pqi_capability pqicap;
 	__iomem struct pqi_device_register_set *pqireg;
-#define MAX_TO_DEVICE_QUEUES 6
-#define MAX_FROM_DEVICE_QUEUES 6
+#define MAX_TO_DEVICE_QUEUES 32
+#define MAX_FROM_DEVICE_QUEUES 32
 #define MAX_IO_QUEUES (MAX_TO_DEVICE_QUEUES + MAX_FROM_DEVICE_QUEUES)
 #define MAX_TOTAL_QUEUES (MAX_IO_QUEUES + 2)
 	int nr_queues, niqs, noqs; /* total, inbound and outbound queues */
@@ -222,6 +224,8 @@ struct sop_device {
 	struct pqi_device_queue *io_q_to_dev;
 	struct pqi_device_queue *io_q_from_dev;
 	u16 current_id;
+	atomic_t cmd_pending;
+	u32  max_cmd_pending;
 	struct queue_info qinfo[MAX_TOTAL_QUEUES];
 	int instance;
 	sector_t capacity;

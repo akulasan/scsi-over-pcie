@@ -51,9 +51,10 @@ MODULE_LICENSE("GPL");
 #ifndef PCI_VENDOR_SANDISK
 #define PCI_VENDOR_SANDISK 0x15b7
 #endif
+#define PCI_CLASS_STORAGE_SOP	0x010800
 
 DEFINE_PCI_DEVICE_TABLE(sop_id_table) = {
-	{ PCI_VENDOR_SANDISK, 0x0012, PCI_VENDOR_SANDISK, 0x0000 },
+	{ PCI_DEVICE_CLASS(PCI_CLASS_STORAGE_SOP, 0xffffff) },
 	{ 0, },
 };
 
@@ -83,6 +84,29 @@ static const struct block_device_operations sop_fops = {
 	.compat_ioctl		= sop_compat_ioctl,
 #endif
 };
+
+static u32 sop_dbg_lvl;
+
+static ssize_t
+sop_sysfs_show_dbg_lvl(struct device_driver *dd, char *buf)
+{
+	return sprintf(buf, "%u\n", sop_dbg_lvl);
+}
+
+static ssize_t
+sop_sysfs_set_dbg_lvl(struct device_driver *dd, const char *buf, size_t count)
+{
+	int retval = count;
+	if(sscanf(buf,"%u",&sop_dbg_lvl)<1){
+		printk(KERN_ERR "sop: could not set dbg_lvl\n");
+		retval = -EINVAL;
+	}
+	return retval;
+}
+
+static DRIVER_ATTR(dbg_lvl, S_IRUGO|S_IWUSR, sop_sysfs_show_dbg_lvl,
+		sop_sysfs_set_dbg_lvl);
+
 
 /* 
  * 32-bit readq and writeq implementations taken from old
@@ -279,7 +303,7 @@ bailout:
 static void pqi_device_queue_init(struct pqi_device_queue *q,
 		__iomem void *queue_vaddr, __iomem u16 *pi,
 		__iomem u16 *ci,
-		u16 element_size, u8 nelements,
+		u16 element_size, u16 nelements,
 		dma_addr_t dhandle)
 {
 	q->queue_vaddr = queue_vaddr;
@@ -327,6 +351,8 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 
 	if (pqi_to_device_queue_is_full(q, nelements)) {
 		printk(KERN_WARNING "pqi device queue %d is full!\n", q->queue_id);
+		printk(KERN_WARNING "  unposted_index = %d, nelements=%d, ci = %d\n",
+			q->unposted_index, q->nelements, *(q->ci));
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -578,7 +604,7 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	dev_warn(&h->pdev->dev, "PQI admin OQ element length: %hhu\n",
 		h->pqicap.admin_oq_element_length);
 
-#define ADMIN_QUEUE_ELEMENT_COUNT ((MAX_IO_QUEUES + 1) * 2)
+#define ADMIN_QUEUE_ELEMENT_COUNT 64	/* ((MAX_IO_QUEUES + 1) * 2) */
 
 	if (h->pqicap.max_admin_iq_elements < ADMIN_QUEUE_ELEMENT_COUNT ||
 		h->pqicap.max_admin_oq_elements < ADMIN_QUEUE_ELEMENT_COUNT) {
@@ -765,31 +791,31 @@ static int sop_setup_msix(struct sop_device *h)
 
 	struct msix_entry msix_entry[MAX_TOTAL_QUEUES];
 
-	h->nr_queues = num_online_cpus() * 2;
+	h->nr_queues = (num_online_cpus() + 1) * 2;
 	BUILD_BUG_ON((MAX_TOTAL_QUEUES % 2) != 0);
 	if (h->nr_queues > MAX_TOTAL_QUEUES)
 		h->nr_queues = MAX_TOTAL_QUEUES;
 
 	h->niqs = h->noqs = h->nr_queues / 2;
-	h->niqs = h->noqs;
 
-	for (i = 0; i < h->noqs; i++) {
-		msix_entry[i].vector = 0;
+	for (i = 0; i < h->noqs-1; i++) {
+		//msix_entry[i].vector = 0;
 		msix_entry[i].entry = i;
 	}
 
 	if (!pci_find_capability(h->pdev, PCI_CAP_ID_MSIX))
 		goto default_int_mode;
-	err = pci_enable_msix(h->pdev, msix_entry, h->noqs);
+	err = pci_enable_msix(h->pdev, msix_entry, h->noqs-1);
 	if (err > 0)
 		h->noqs = err;
 
-	if (err >= 0) {
+	if (err == 0) {
 		for (i = 0; i < h->noqs; i++) {
-			int idx = i ? i + 1 : i;
-			h->qinfo[idx].msix_vector = msix_entry[i].vector;
+			int idx = i ? i + 1 : 0;
+			int vid = i ? i - 1 : 0;
+			h->qinfo[idx].msix_vector = msix_entry[vid].vector;
 			dev_warn(&h->pdev->dev, "q[%d] msix_entry[%d] = %d\n",
-				idx, i, msix_entry[i].vector);
+				idx, vid, msix_entry[vid].vector);
 		}
 		h->intr_mode = INTR_MODE_MSIX;
 		return 0;
@@ -840,7 +866,6 @@ static void complete_block_cmd(struct sop_device *h,
 	dma_unmap_sg(&h->pdev->dev, sgl, r->num_sg, dma_dir);
 
 	result = 0;
-	free_request(h, sqid, r->request_id);
 
 	/* dev_warn(&h->pdev->dev, "Response IU type is 0x%02x\n", r->response[0]); */
 	switch (r->response[0]) {
@@ -903,6 +928,7 @@ static void complete_block_cmd(struct sop_device *h,
 	}
 
         bio_endio(r->bio, result);
+	free_request(h, sqid, r->request_id);
 }
 
 irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
@@ -913,9 +939,15 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 	int rc;
 	struct queue_info *q = devid;
 	struct sop_device *h = q->h;
+        int count = 0;
+	int ncmd=0;
+
 #if 0
-	printk(KERN_WARNING "=========> Got ioq interrupt, q = %p (%d) vector = %d\n",
-			q, q->pqiq->queue_id, q->msix_vector);
+	int cpu;
+
+	cpu = smp_processor_id();
+	printk(KERN_WARNING "=========> Got ioq interrupt, q = %p (%d) vector = %d, cpu %d\n",
+			q, q->pqiq->queue_id, q->msix_vector, cpu);
 #endif
 	do {
 		struct sop_request *r = q->pqiq->request;
@@ -937,8 +969,12 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 		}
 		rc = pqi_dequeue_from_device(q->pqiq,
 				&r->response[r->response_accumulated]); 
+		ncmd++;
 		if (rc) { /* queue is empty */
 			dev_warn(&h->pdev->dev, "=-=-=- io OQ %hhu is empty\n", q->pqiq->queue_id);
+#if 0
+			printk(KERN_WARNING "=========> abort handler[cpu %d] processed %d\n", cpu, ncmd);
+#endif
 			return IRQ_HANDLED;
 		}
 		r->response_accumulated += q->pqiq->element_size;
@@ -960,10 +996,19 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 					dev_warn(&h->pdev->dev, "r->bio and r->waiting both null\n");
 				}
 			}
+			atomic_dec(&h->cmd_pending);
+			atomic_dec(&q->cur_qdepth);
 			pqi_notify_device_queue_read(q->pqiq);
 		}
+                count++;
+                if (count > 1000) {
+                    panic("Too many completions\n");
+                }
 	} while (1);
 
+#if 0
+	printk(KERN_WARNING "=========> exit handler[cpu %d] processed %d\n", cpu, ncmd);
+#endif
 	return IRQ_HANDLED;
 }
 
@@ -976,15 +1021,15 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 	struct sop_device *h = q->h;
 	u8 sq;
 
-	printk(KERN_WARNING "Got admin oq interrupt, q = %p (%d)\n", q, q->pqiq->queue_id);
+	//printk(KERN_WARNING "Got admin oq interrupt, q = %p (%d)\n", q, q->pqiq->queue_id);
 
 	do {
 		struct sop_request *r = h->admin_q_from_dev.request;
 
-		dev_warn(&h->pdev->dev, "admin intr, r = %p\n", r);
+		//dev_warn(&h->pdev->dev, "admin intr, r = %p\n", r);
 
 		if (pqi_from_device_queue_is_empty(&h->admin_q_from_dev)) {
-			dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q);
+			//dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q);
 			break;
 		}
 
@@ -993,23 +1038,24 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 			iu_type = pqi_peek_ui_type_from_device(&h->admin_q_from_dev);
 			request_id = pqi_peek_request_id_from_device(&h->admin_q_from_dev);
 			sq = request_id >> 8; /* queue that request was submitted on */
-			dev_warn(&h->pdev->dev, "new completion, iu type: %hhu, id = %hu\n",
+			/* dev_warn(&h->pdev->dev, "new completion, iu type: %hhu, id = %hu\n",
 					iu_type, request_id);
+					*/
 			r = h->admin_q_from_dev.request = &h->qinfo[sq].request[request_id & 0x00ff];
-			dev_warn(&h->pdev->dev, "intr: r = %p\n", r);
+			// dev_warn(&h->pdev->dev, "intr: r = %p\n", r);
 			r->response_accumulated = 0;
 		}
 		rc = pqi_dequeue_from_device(&h->admin_q_from_dev,
 			&r->response[r->response_accumulated]); 
-		dev_warn(&h->pdev->dev, "dequeued from q %p\n", q);
+		// dev_warn(&h->pdev->dev, "dequeued from q %p\n", q);
 		if (rc) { /* queue is empty */
-			dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q);
+			// dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q);
 			return IRQ_HANDLED;
 		}
 		r->response_accumulated += h->admin_q_from_dev.element_size;
-		dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated);
+		// dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated);
 		if (sop_response_accumulated(r)) {
-			dev_warn(&h->pdev->dev, "accumlated response\n");
+			//dev_warn(&h->pdev->dev, "accumlated response\n");
 			h->admin_q_from_dev.request = NULL;
 			wmb();
 			complete(r->waiting);
@@ -1022,13 +1068,18 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 
 static void sop_irq_affinity_hints(struct sop_device *h)
 {
-	int i, cpu;
+	int i, cpu, ret;
 
 	cpu = cpumask_first(cpu_online_mask);
-	for (i = 0; i < h->noqs; i++) {
-		int idx = i ? i + 1 : i;
-		irq_set_affinity_hint(h->qinfo[idx].msix_vector,
+	ret = irq_set_affinity_hint(h->qinfo[0].msix_vector, get_cpu_mask(cpu));
+	dev_warn(&h->pdev->dev, "Affinity for Q[0], vector %d, cpu %x, return %d\n",
+				h->qinfo[0].msix_vector, cpu, ret);
+
+	for (i = 2; i < h->noqs+1; i++) {
+		ret = irq_set_affinity_hint(h->qinfo[i].msix_vector,
 					get_cpu_mask(cpu));
+		dev_warn(&h->pdev->dev, "Affinity for Q[%d], vector %d, cpu %x, return %d\n",
+					i, h->qinfo[i].msix_vector, cpu, ret);
 		cpu = cpumask_next(cpu, cpu_online_mask);
 	}
 }
@@ -1042,8 +1093,8 @@ static int sop_request_irqs(struct sop_device *h,
 
 	dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (admin)\n",
 			h->qinfo[0].msix_vector, 0);
-	rc = request_irq(h->qinfo[0].msix_vector, msix_adminq_handler, 0,
-					h->devname, &h->qinfo[0]);
+	rc = request_irq(h->qinfo[0].msix_vector, msix_adminq_handler,
+					IRQF_SHARED, h->devname, &h->qinfo[0]);
 	if (rc != 0) {
 		dev_warn(&h->pdev->dev, "request_irq failed, i = %d\n", 0);
 	}
@@ -1053,8 +1104,8 @@ static int sop_request_irqs(struct sop_device *h,
 	for (i = 2; i < h->noqs + 1; i++) {
 		dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (oq)\n",
 				h->qinfo[i].msix_vector, i - 1);
-		rc = request_irq(h->qinfo[i].msix_vector, msix_ioq_handler, 0,
-					h->devname, &h->qinfo[i]);
+		rc = request_irq(h->qinfo[i].msix_vector, msix_ioq_handler, 
+				IRQF_SHARED, h->devname, &h->qinfo[i]);
 		if (rc != 0) {
 			dev_warn(&h->pdev->dev,
 					"request_irq failed, i = %d\n", i);
@@ -1063,6 +1114,7 @@ static int sop_request_irqs(struct sop_device *h,
 		}
 	}
 	sop_irq_affinity_hints(h);
+
 	return 0;
 
 default_int_mode:
@@ -1098,24 +1150,33 @@ static void sop_free_irqs_and_disable_msix(
 static u16 alloc_request(struct sop_device *h, u8 q)
 {
 	u16 rc;
-	unsigned long flags;
+	/* unsigned long flags; */
 
 	/* I am encoding q number in high bight of request id */
 	BUG_ON(h->qinfo[q].qdepth > MAX_CMDS);
 	BUG_ON(q > 127); /* high bit reserved for error reporting */
 
 	/* FIXME, may be able to get rid of these spin locks */
-	spin_lock_irqsave(&h->qinfo[q].qlock, flags);
+	/*
+	if (!lock_held)
+		spin_lock_irqsave(&h->qinfo[q].qlock, flags);
+
+	*/
+
         do {
                 rc = (u16) find_first_zero_bit(h->qinfo[q].request_bits,
 						h->qinfo[q].qdepth);
                 if (rc >= h->qinfo[q].qdepth) {
-			spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
+			/* spin_unlock_irqrestore(&h->qinfo[q].qlock, flags); */
 			dev_warn(&h->pdev->dev, "alloc_request failed.\n");
                         return (u16) -EBUSY;
 		}
         } while (test_and_set_bit((int) rc, h->qinfo[q].request_bits));
-	spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
+
+	/*
+	if (!lock_held)
+		spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
+	*/
 	return rc | (q << 8);
 }
 
@@ -1247,7 +1308,7 @@ static int sop_setup_io_queues(struct sop_device *h)
 		if (request_id < 0) { /* FIXME: now what? */
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
 		}
-		fill_create_io_queue_request(h, r, q, 0, request_id, q->queue_id - 1);
+		fill_create_io_queue_request(h, r, q, 0, request_id, q->queue_id - 2);
 		send_admin_command(h, request_id);
 		resp = (volatile struct pqi_create_operational_queue_response *)
 			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
@@ -1584,8 +1645,15 @@ static int __init sop_init(void)
 	if (result < 0)
 		goto register_fail;
 
+	result = driver_create_file(&sop_pci_driver.driver, &driver_attr_dbg_lvl);
+	if (result)
+		goto create_fail;
+
 	printk("SOP Init copmpleted!\n");
 	return 0;
+
+ create_fail:
+	pci_unregister_driver(&sop_pci_driver);
 
  register_fail:
 	printk("SOP Init: PCI register failed with %d!\n", result);
@@ -1596,6 +1664,7 @@ static int __init sop_init(void)
 
 static void __exit sop_exit(void)
 {
+	driver_remove_file(&sop_pci_driver.driver, &driver_attr_dbg_lvl);
 	pci_unregister_driver(&sop_pci_driver);
 	printk("Unregistering Blockdevice with major=%d\n", sop_major);
 	unregister_blkdev(sop_major, SOP);
@@ -1607,15 +1676,15 @@ static inline struct sop_device *bdev_to_hba(struct block_device *bdev)
 	return (struct sop_device *)priv;
 }
 
-static struct queue_info *find_submission_queue(struct sop_device *h)
+static struct queue_info *find_submission_queue(struct sop_device *h, int cpu)
 {
-	int q = h->noqs + 1 + (smp_processor_id() % (h->niqs - 1));
+	int q = h->noqs + 1 + (cpu % (h->niqs - 1));
 	return &h->qinfo[q];
 }
 
-static struct queue_info *find_reply_queue(struct sop_device *h)
+static struct queue_info *find_reply_queue(struct sop_device *h, int cpu)
 {
-	int q = 2 + (smp_processor_id() % (h->noqs - 1));
+	int q = 2 + (cpu % (h->noqs - 1));
 	return &h->qinfo[q];
 }
 
@@ -1832,7 +1901,7 @@ static int sop_scatter_gather(struct sop_device *h,
 	return 0;
 }
 
-static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs)
+static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs, int cpu)
 {
 	struct queue_info *submitq, *replyq;
 	struct sop_limited_cmd_iu *r;
@@ -1842,8 +1911,8 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs)
 	u16 request_id;
 	int prev_index, num_sg;
 
-	submitq = find_submission_queue(h);
-	replyq = find_reply_queue(h);
+	submitq = find_submission_queue(h, cpu);
+	replyq = find_reply_queue(h, cpu);
 	if (!submitq)
 		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
 	if (!submitq->pqiq)
@@ -1851,6 +1920,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs)
 	r = pqi_alloc_elements(submitq->pqiq, 1);
 	if (IS_ERR(r)) {
 		dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %ld\n", PTR_ERR(r));
+		return -EBUSY;
 	}
 	request_id = alloc_request(h, submitq->pqiq->queue_id);
 	if (request_id == (u16) -EBUSY)
@@ -1896,6 +1966,26 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs)
 				"Need to implement handling of dma_map failure.\n");
 		return -EBUSY;
 	}
+	atomic_inc(&replyq->cur_qdepth);
+	submitq->max_qdepth++;
+	if (replyq->max_qdepth < atomic_read(&replyq->cur_qdepth))
+		replyq->max_qdepth = atomic_read(&replyq->cur_qdepth);
+	atomic_inc(&h->cmd_pending);
+	if (atomic_read(&h->cmd_pending) > h->max_cmd_pending)
+		h->max_cmd_pending = atomic_read(&h->cmd_pending);
+	if (sop_dbg_lvl == 1) {
+		int i;
+
+		sop_dbg_lvl = 0;
+		printk("@@@@ Total CMD Pending= %d Max = %d @@@@\n", atomic_read(&h->cmd_pending),
+				h->max_cmd_pending);
+		for (i = 0; i < h->noqs - 1; i++) {
+			printk("        OQ depth[%d] = %d, Max %d, Total = %d\n", i,
+				atomic_read(&replyq->cur_qdepth),
+				h->qinfo[h->io_q_from_dev[i].queue_id].max_qdepth,
+				h->qinfo[h->io_q_to_dev[i].queue_id].max_qdepth);
+		}
+	}
 
 	ser->num_sg = num_sg;
 #if 0
@@ -1916,11 +2006,14 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 	struct sop_device *h = q->queuedata;
 	int nsegs;
 	int result;
+	int cpu;
 
 	nsegs = bio_phys_segments(q, bio);
 
 	/* Prepare the SOP IU and fire */
-	result = sop_process_bio(h, bio, nsegs);
+	cpu = get_cpu();
+	result = sop_process_bio(h, bio, nsegs, cpu);
+	put_cpu();
 	if (unlikely(result)) {
 		/* TODO: handle busy return by queueing */
 		dev_warn(&h->pdev->dev, "Not Handled: error return (%d) from SOP Issue\n", 
