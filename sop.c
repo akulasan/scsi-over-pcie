@@ -938,6 +938,7 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 	struct sop_device *h = q->h;
         int count = 0;
 	int ncmd=0;
+	struct sop_request *r;
 
 #if 0
 	int cpu;
@@ -946,15 +947,15 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 	printk(KERN_WARNING "=========> Got ioq interrupt, q = %p (%d) vector = %d, cpu %d\n",
 			q, q->pqiq->queue_id, q->msix_vector, cpu);
 #endif
+	if (pqi_from_device_queue_is_empty(q->pqiq)) {
+#if 0
+		printk(KERN_WARNING "=========> abort handler[cpu %d] processed %d\n", cpu, ncmd);
+#endif
+		return IRQ_NONE;
+	}
+
+	r = q->pqiq->request;
 	do {
-		struct sop_request *r = q->pqiq->request;
-
-		if (pqi_from_device_queue_is_empty(q->pqiq)) {
-			/* dev_warn(&h->pdev->dev, "==== interrupt, ioq %d is empty ====\n",
-					q->pqiq->queue_id); */
-			break;
-		}
-
 		if (r == NULL) {
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(q->pqiq);
@@ -969,10 +970,7 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 		ncmd++;
 		if (rc) { /* queue is empty */
 			dev_warn(&h->pdev->dev, "=-=-=- io OQ %hhu is empty\n", q->pqiq->queue_id);
-#if 0
-			printk(KERN_WARNING "=========> abort handler[cpu %d] processed %d\n", cpu, ncmd);
-#endif
-			return IRQ_HANDLED;
+			break;
 		}
 		r->response_accumulated += q->pqiq->element_size;
 		/* dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated); */
@@ -980,7 +978,6 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 			/* dev_warn(&h->pdev->dev, "accumlated response\n"); */
 			q->pqiq->request = NULL;
 			wmb();
-			WARN_ON((!r->waiting && !r->bio));
 			if (likely(r->bio)) {
 				complete_block_cmd(h, r);
 				r = NULL;
@@ -997,11 +994,12 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 			atomic_dec(&q->cur_qdepth);
 			pqi_notify_device_queue_read(q->pqiq);
 		}
+
                 count++;
                 if (count > 1000) {
                     panic("Too many completions\n");
                 }
-	} while (1);
+	} while (!pqi_from_device_queue_is_empty(q->pqiq));
 
 #if 0
 	printk(KERN_WARNING "=========> exit handler[cpu %d] processed %d\n", cpu, ncmd);
@@ -1018,47 +1016,45 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 	struct sop_device *h = q->h;
 	u8 sq;
 
-	/* printk(KERN_WARNING "Got admin oq interrupt, q = %p (%d)\n", q, q->pqiq->queue_id); */
+	if (pqi_from_device_queue_is_empty(&h->admin_q_from_dev)) {
+		/* dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q); */
+		return IRQ_NONE;
+	}
 
+	printk(KERN_WARNING "Got admin oq interrupt, q = %p (%d)\n", q, q->pqiq->queue_id);
 	do {
 		struct sop_request *r = h->admin_q_from_dev.request;
 
-		/* dev_warn(&h->pdev->dev, "admin intr, r = %p\n", r); */
-
-		if (pqi_from_device_queue_is_empty(&h->admin_q_from_dev)) {
-			/* dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q); */
-			break;
-		}
-
+		dev_warn(&h->pdev->dev, "admin intr, r = %p\n", r);
 		if (r == NULL) {
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(&h->admin_q_from_dev);
 			request_id = pqi_peek_request_id_from_device(&h->admin_q_from_dev);
 			sq = request_id >> 8; /* queue that request was submitted on */
-			/* dev_warn(&h->pdev->dev, "new completion, iu type: %hhu, id = %hu\n",
+			dev_warn(&h->pdev->dev, "new completion, iu type: %hhu, id = %hu\n",
 					iu_type, request_id);
-					*/
 			r = h->admin_q_from_dev.request = &h->qinfo[sq].request[request_id & 0x00ff];
-			/* dev_warn(&h->pdev->dev, "intr: r = %p\n", r); */
+			dev_warn(&h->pdev->dev, "intr: r = %p\n", r);
 			r->response_accumulated = 0;
 		}
 		rc = pqi_dequeue_from_device(&h->admin_q_from_dev,
-			&r->response[r->response_accumulated]); 
-		/* dev_warn(&h->pdev->dev, "dequeued from q %p\n", q); */
+					&r->response[r->response_accumulated]); 
+		dev_warn(&h->pdev->dev, "dequeued from q %p\n", q);
 		if (rc) { /* queue is empty */
-			/* dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q); */
-			return IRQ_HANDLED;
+			dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q);
+			break;
 		}
 		r->response_accumulated += h->admin_q_from_dev.element_size;
-		/* dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated); */
+		dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated);
 		if (sop_response_accumulated(r)) {
-			/* dev_warn(&h->pdev->dev, "accumlated response\n");*/
+			dev_warn(&h->pdev->dev, "accumlated response\n");
 			h->admin_q_from_dev.request = NULL;
 			wmb();
 			complete(r->waiting);
 			pqi_notify_device_queue_read(&h->admin_q_from_dev);
 		}
-	} while (1);
+
+	} while (!pqi_from_device_queue_is_empty(&h->admin_q_from_dev));
 
 	return IRQ_HANDLED;
 }
