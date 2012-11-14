@@ -469,6 +469,7 @@ static void print_iu(unsigned char *iu)
 	print_bytes(iu, (int) iu_length, 1, 0);
 }
 
+/* Can only be called for Admin queue: the q->local_pi is not updated elsewhere */
 static void __attribute__((unused)) print_unsubmitted_commands(struct pqi_device_queue *q)
 {
 	u16 pi;
@@ -501,7 +502,7 @@ static void __attribute__((unused)) print_unsubmitted_commands(struct pqi_device
 	spin_unlock_irqrestore(&q->index_lock, flags);
 }
 
-static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
+static void pqi_notify_device_queue_written_admin(struct pqi_device_queue *q)
 {
 	unsigned long flags;
 	/*
@@ -1142,18 +1143,10 @@ static void sop_free_irqs_and_disable_msix(
 static u16 alloc_request(struct sop_device *h, u8 q)
 {
 	u16 rc;
-	/* unsigned long flags; */
 
 	/* I am encoding q number in high bight of request id */
 	BUG_ON(h->qinfo[q].qdepth > MAX_CMDS);
 	BUG_ON(q > 127); /* high bit reserved for error reporting */
-
-	/* FIXME, may be able to get rid of these spin locks */
-	/*
-	if (!lock_held)
-		spin_lock_irqsave(&h->qinfo[q].qlock, flags);
-
-	*/
 
         do {
                 rc = (u16) find_first_zero_bit(h->qinfo[q].request_bits,
@@ -1165,10 +1158,6 @@ static u16 alloc_request(struct sop_device *h, u8 q)
 		}
         } while (test_and_set_bit((int) rc, h->qinfo[q].request_bits));
 
-	/*
-	if (!lock_held)
-		spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
-	*/
 	return rc | (q << 8);
 }
 
@@ -1235,7 +1224,7 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	request->waiting = &wait;
 	request->response_accumulated = 0;
 	dev_warn(&h->pdev->dev, "sending request %hu\n", request_id);
-	pqi_notify_device_queue_written(aq);
+	pqi_notify_device_queue_written_admin(aq);
 	dev_warn(&h->pdev->dev, "waiting for completion\n");
 	wait_for_completion(&wait);
 	dev_warn(&h->pdev->dev, "wait_for_completion returned\n");
@@ -1893,9 +1882,9 @@ static int sop_scatter_gather(struct sop_device *h,
 	return 0;
 }
 
-static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs, int cpu)
+static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs,
+			   struct queue_info *submitq, struct queue_info *replyq)
 {
-	struct queue_info *submitq, *replyq;
 	struct sop_limited_cmd_iu *r;
 	struct sop_request *ser;
 	enum dma_data_direction dma_dir;
@@ -1903,12 +1892,6 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs, int
 	u16 request_id;
 	int prev_index, num_sg;
 
-	submitq = find_submission_queue(h, cpu);
-	replyq = find_reply_queue(h, cpu);
-	if (!submitq)
-		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
-	if (!submitq->pqiq)
-		dev_warn(&h->pdev->dev, "queuecommand: q->pqiq is null!\n");
 	r = pqi_alloc_elements(submitq->pqiq, 1);
 	if (IS_ERR(r)) {
 		dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %ld\n", PTR_ERR(r));
@@ -1989,7 +1972,10 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs, int
 	sop_scatter_gather(h, submitq, num_sg, r, sgl, &ser->xfer_size);
 
 	r->xfer_size = cpu_to_le32(ser->xfer_size);
-	pqi_notify_device_queue_written(submitq->pqiq);
+	
+	/* Submit it to the device */
+	writew(submitq->pqiq->unposted_index, submitq->pqiq->pi);
+
 	return 0;
 }
 
@@ -1999,18 +1985,34 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 	int nsegs;
 	int result;
 	int cpu;
+	struct queue_info *submitq, *replyq;
 
 	nsegs = bio_phys_segments(q, bio);
 
 	/* Prepare the SOP IU and fire */
 	cpu = get_cpu();
-	result = sop_process_bio(h, bio, nsegs, cpu);
-	put_cpu();
+
+	/* Get the queues */
+	submitq = find_submission_queue(h, cpu);
+	replyq = find_reply_queue(h, cpu);
+	if (!submitq)
+		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
+	if (!submitq->pqiq)
+		dev_warn(&h->pdev->dev, "queuecommand: q->pqiq is null!\n");
+
+	spin_lock_irq(&submitq->qlock);
+
+	/* Try to submit the command */
+	result = sop_process_bio(h, bio, nsegs, submitq, replyq);
+
 	if (unlikely(result)) {
 		/* TODO: handle busy return by queueing */
 		dev_warn(&h->pdev->dev, "Not Handled: error return (%d) from SOP Issue\n", 
 			result);
 	}
+
+	spin_unlock_irq(&submitq->qlock);
+	put_cpu();
 
 	return MRFN_RET;
 }
