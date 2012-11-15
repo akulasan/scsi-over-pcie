@@ -186,6 +186,12 @@ struct pqi_capability {
 #define IQ_NELEMENTS 256
 #define OQ_NELEMENTS 256
 
+struct sop_wait_queue {
+	wait_queue_head_t iq_full;
+	wait_queue_t iq_cong_wait;
+	struct bio_list iq_cong;
+};
+
 struct sop_device;
 struct pqi_sgl_descriptor;
 struct queue_info {
@@ -202,10 +208,12 @@ struct queue_info {
 	struct pqi_sgl_descriptor *sg;
 	struct scatterlist *sgl;
 	dma_addr_t sg_bus_addr;
+	struct sop_wait_queue *wq;
 };
 
 
 struct sop_device {
+	struct list_head node;
 	struct pci_dev *pdev;
 	struct pqi_capability pqicap;
 	__iomem struct pqi_device_register_set *pqireg;
@@ -232,7 +240,6 @@ struct sop_device {
 	struct request_queue *rq;
 	struct gendisk *disk;
 	int max_hw_sectors;
-	struct Scsi_Host *sh;
 	dma_addr_t iq_dhandle, oq_dhandle;
 	void *iq_vaddr, *oq_vaddr;
 };

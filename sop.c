@@ -28,6 +28,7 @@
 #include <linux/pci.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
+#include <linux/kthread.h>
 #include <linux/kernel.h>
 #include <linux/io.h>
 #include <linux/sched.h>
@@ -61,9 +62,12 @@ static int sop_major;
 static int controller_num;
 
 static DEFINE_SPINLOCK(dev_list_lock);
+static LIST_HEAD(dev_list);
+static struct task_struct *sop_thread;
 
 static int sop_add_disk(struct sop_device *h);
 static void sop_remove_disk(struct sop_device *h);
+static int sop_thread_proc(void *data);
 
 #ifdef CONFIG_COMPAT
 static int sop_compat_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
@@ -205,6 +209,23 @@ static void free_all_q_request_buffers(struct sop_device *h)
 		free_q_request_buffers(&h->qinfo[i]);
 }
 
+static int allocate_wait_queue(struct queue_info *q)
+{
+	struct sop_wait_queue *wq;
+
+	/* Allocate wait queue structure for TO DEVICE queue */
+	wq = kzalloc(sizeof(struct sop_wait_queue), GFP_KERNEL);
+	if (!wq)
+		return -ENOMEM;
+	q->wq = wq;
+
+	init_waitqueue_head(&wq->iq_full);
+	init_waitqueue_entry(&wq->iq_cong_wait, sop_thread);
+	bio_list_init(&wq->iq_cong);
+
+	return 0;
+}
+
 static int pqi_device_queue_array_alloc(struct sop_device *h,
 		struct pqi_device_queue **xq, int num_queues,
 		u16 n_q_elements, u8 q_element_size_over_16,
@@ -244,18 +265,27 @@ static int pqi_device_queue_array_alloc(struct sop_device *h,
 		dev_warn(&h->pdev->dev, "4 allocating request buffers\n");
 		for (i = 0; i < num_queues; i++) {
 			int q = i + starting_queue_id;
-			if (allocate_q_request_buffers(&h->qinfo[q],
+			struct queue_info *qinfo;
+
+			qinfo = &h->qinfo[q];
+			if (allocate_q_request_buffers(qinfo,
 					n_q_elements,
 					sizeof(struct sop_request)))
 				goto bailout;
-			dev_warn(&h->pdev->dev, "   5 Allocated #%d\n", i);
+
+			dev_warn(&h->pdev->dev, "   5 Allocationg waitq #%d, qid[%d]\n", 
+				i, q);
+			if (allocate_wait_queue(qinfo))
+				goto bailout;
+			dev_warn(&h->pdev->dev, "   6 Allocated #%d\n", i);
 		}
 
 		/* Allocate SGL area for each submission queue */
 		for (i = 0; i < num_queues; i++) {
 			int q = i + starting_queue_id;
 
-			dev_warn(&h->pdev->dev, "Allocating SGL area for submission queue %d q=%d\n", i, q);
+			dev_warn(&h->pdev->dev, "   7 Allocating SGL "
+				"area for submission queue %d q=%d\n", i, q);
 			if (allocate_sgl_area(h, &h->qinfo[q]))
 				goto bailout;
 		}
@@ -840,7 +870,7 @@ static int sop_response_accumulated(struct sop_request *r)
 
 static void free_request(struct sop_device *h, u8 q, u16 request_id);
 
-static void complete_block_cmd(struct sop_device *h,
+static void sop_complete_bio(struct sop_device *h,
 				struct sop_request *r)
 {
 	struct sop_cmd_response *scr;
@@ -929,13 +959,12 @@ static void complete_block_cmd(struct sop_device *h,
 	free_request(h, sqid, r->request_id);
 }
 
-irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
+int sop_msix_handle_ioq(struct queue_info *q)
 {
 	u16 request_id;
 	u8 iu_type;
 	u8 sq;
 	int rc;
-	struct queue_info *q = devid;
 	struct sop_device *h = q->h;
         int count = 0;
 	int ncmd=0;
@@ -980,7 +1009,7 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 			q->pqiq->request = NULL;
 			wmb();
 			if (likely(r->bio)) {
-				complete_block_cmd(h, r);
+				sop_complete_bio(h, r);
 				r = NULL;
 			} else {
 				if (likely(r->waiting)) {
@@ -1008,9 +1037,8 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 	return IRQ_HANDLED;
 }
 
-irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
+int sop_msix_handle_adminq(struct queue_info *q)
 {
-	struct queue_info *q = devid;
 	u8 iu_type;
 	u16 request_id;
 	int rc;
@@ -1058,6 +1086,30 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 	} while (!pqi_from_device_queue_is_empty(&h->admin_q_from_dev));
 
 	return IRQ_HANDLED;
+}
+
+irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
+{
+	struct queue_info *q = devid;
+	int ret;
+
+	spin_lock(&q->qlock);
+	ret = sop_msix_handle_ioq(q);
+	spin_unlock(&q->qlock);
+
+	return ret;
+}
+
+irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
+{
+	struct queue_info *q = devid;
+	int ret;
+
+	spin_lock(&q->qlock);
+	ret = sop_msix_handle_adminq(q);
+	spin_unlock(&q->qlock);
+
+	return ret;
 }
 
 static void sop_irq_affinity_hints(struct sop_device *h)
@@ -1558,8 +1610,18 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (rc)
 		goto bail;
 
+	spin_lock(&dev_list_lock);
+	list_add(&h->node, &dev_list);
+	spin_unlock(&dev_list_lock);
+
 	return 0;
 bail:
+	spin_lock(&dev_list_lock);
+	list_del(&h->node);
+	spin_unlock(&dev_list_lock);
+
+	/* FIXME: Do other cleanup in cascading order */
+
 	dev_warn(&h->pdev->dev, "Bailing out in probe - not freeing a lot\n");
 	if (h && h->pqireg)
 		iounmap(h->pqireg);
@@ -1617,9 +1679,15 @@ static int __init sop_init(void)
 {
 	int	result;
 
+	sop_thread = kthread_run(sop_thread_proc, NULL, "sop");
+	if (IS_ERR(sop_thread)) {
+		printk("SOP Init: Thread creation failed with %p!\n", sop_thread);
+		return PTR_ERR(sop_thread);
+	}
+
 	result = register_blkdev(sop_major, SOP);
 	if (result <= 0)
-		return result;
+		goto blkdev_fail;
 	sop_major = result;
 
 	result = pci_register_driver(&sop_pci_driver);
@@ -1630,7 +1698,7 @@ static int __init sop_init(void)
 	if (result)
 		goto create_fail;
 
-	printk("SOP Init copmpleted!\n");
+	printk("SOP driver initialized!\n");
 	return 0;
 
  create_fail:
@@ -1639,6 +1707,10 @@ static int __init sop_init(void)
  register_fail:
 	printk("SOP Init: PCI register failed with %d!\n", result);
 	unregister_blkdev(sop_major, SOP);
+
+ blkdev_fail:
+	printk("SOP Init: Blkdev register failed with %d!\n", result);
+	kthread_stop(sop_thread);
 	return result;
 
 }
@@ -1649,6 +1721,7 @@ static void __exit sop_exit(void)
 	pci_unregister_driver(&sop_pci_driver);
 	printk("Unregistering Blockdevice with major=%d\n", sop_major);
 	unregister_blkdev(sop_major, SOP);
+	kthread_stop(sop_thread);
 }
 
 static inline struct sop_device *bdev_to_hba(struct block_device *bdev)
@@ -1666,6 +1739,15 @@ static struct queue_info *find_submission_queue(struct sop_device *h, int cpu)
 static struct queue_info *find_reply_queue(struct sop_device *h, int cpu)
 {
 	int q = 2 + (cpu % (h->noqs - 1));
+	return &h->qinfo[q];
+}
+
+static struct queue_info *find_submission_queue_fm_replyq(struct queue_info *sq)
+{
+	struct sop_device *h = sq->h;
+	int rqid = sq->pqiq->queue_id;
+	int q = rqid + h->noqs - 1;
+
 	return &h->qinfo[q];
 }
 
@@ -1882,7 +1964,7 @@ static int sop_scatter_gather(struct sop_device *h,
 	return 0;
 }
 
-static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs,
+static int sop_process_bio(struct sop_device *h, struct bio *bio,
 			   struct queue_info *submitq, struct queue_info *replyq)
 {
 	struct sop_limited_cmd_iu *r;
@@ -1891,6 +1973,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs,
 	struct scatterlist *sgl;
 	u16 request_id;
 	int prev_index, num_sg;
+	int nsegs;
 
 	r = pqi_alloc_elements(submitq->pqiq, 1);
 	if (IS_ERR(r)) {
@@ -1900,6 +1983,8 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs,
 	request_id = alloc_request(h, submitq->pqiq->queue_id);
 	if (request_id == (u16) -EBUSY)
 		dev_warn(&h->pdev->dev, "Failed to allocate request! Trouble ahead.\n");
+
+	nsegs = bio_phys_segments(h->rq, bio);
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
 	r->compatible_features = 0;
@@ -1982,12 +2067,10 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio, int nsegs,
 static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct sop_device *h = q->queuedata;
-	int nsegs;
 	int result;
 	int cpu;
 	struct queue_info *submitq, *replyq;
-
-	nsegs = bio_phys_segments(q, bio);
+	struct sop_wait_queue *wq;
 
 	/* Prepare the SOP IU and fire */
 	cpu = get_cpu();
@@ -1996,19 +2079,27 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 	submitq = find_submission_queue(h, cpu);
 	replyq = find_reply_queue(h, cpu);
 	if (!submitq)
-		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
+		dev_warn(&h->pdev->dev, "make_request: q is null!\n");
 	if (!submitq->pqiq)
-		dev_warn(&h->pdev->dev, "queuecommand: q->pqiq is null!\n");
+		dev_warn(&h->pdev->dev, "make_request: q->pqiq is null!\n");
+	wq = submitq->wq;
+	if (!wq) {
+		dev_warn(&h->pdev->dev, "make_request: wq null for SubmitQ[%d], RQ[%d]!\n",
+					submitq->pqiq->queue_id, replyq->pqiq->queue_id);
+		return MRFN_RET;
+	}
 
 	spin_lock_irq(&submitq->qlock);
 
-	/* Try to submit the command */
-	result = sop_process_bio(h, bio, nsegs, submitq, replyq);
+	result = -EBUSY;
+	if (bio_list_empty(&wq->iq_cong))
+		/* Try to submit the command */
+		result = sop_process_bio(h, bio, submitq, replyq);
 
 	if (unlikely(result)) {
-		/* TODO: handle busy return by queueing */
-		dev_warn(&h->pdev->dev, "Not Handled: error return (%d) from SOP Issue\n", 
-			result);
+		if (bio_list_empty(&wq->iq_cong))
+			add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
+		bio_list_add(&wq->iq_cong, bio);
 	}
 
 	spin_unlock_irq(&submitq->qlock);
@@ -2074,6 +2165,11 @@ static int sop_add_disk(struct sop_device *h)
 
 static void sop_remove_disk(struct sop_device *h)
 {
+	/* Cleanup the node info */
+	spin_lock(&dev_list_lock);
+	list_del(&h->node);
+	spin_unlock(&dev_list_lock);
+
 	/* First free the disk */
 	del_gendisk(h->disk);
 
@@ -2118,6 +2214,89 @@ static int sop_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, u
 	struct sop_device *h = bdev_to_hba(dev);
 
 	dev_warn(&h->pdev->dev, "sop_ioctl called but not implemented\n");
+	return 0;
+}
+
+static void sop_timeout_ios(struct queue_info *q, uint flag)
+{
+}
+
+static void sop_timeout_admin(struct sop_device *h)
+{
+}
+
+static void sop_resubmit_waitq(struct queue_info *rq)
+{
+	struct sop_wait_queue *wq;
+	struct sop_device *h;
+	struct queue_info *sq;
+
+	/* Compute the reply Q from submission queue */
+	sq = find_submission_queue_fm_replyq(rq);
+
+	h = rq->h;
+	wq = sq->wq;
+	if (!wq) {
+		dev_warn(&h->pdev->dev, "make_request: wq null for SubmitQ[%d]!\n",
+					sq->pqiq->queue_id);
+		return;
+	}
+
+	spin_lock_irq(&sq->qlock);
+	while (bio_list_peek(&wq->iq_cong)) {
+		struct bio *bio = bio_list_pop(&wq->iq_cong);
+
+		if (sop_process_bio(h, bio, sq, rq)) {
+			bio_list_add_head(&wq->iq_cong, bio);
+			break;
+		}
+		if (bio_list_empty(&wq->iq_cong))
+			remove_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
+	}
+	spin_unlock_irq(&sq->qlock);
+}
+
+static int sop_thread_proc(void *data)
+{
+	struct sop_device *h;
+
+	while (!kthread_should_stop()) {
+		__set_current_state(TASK_RUNNING);
+		spin_lock(&dev_list_lock);
+		list_for_each_entry(h, &dev_list, node) {
+			int i;
+			struct queue_info *q = &h->qinfo[0];
+
+			/* Admin queue */
+			spin_lock_irq(&q->qlock);
+			sop_msix_handle_adminq(q);
+			sop_timeout_admin(h);
+			spin_unlock_irq(&q->qlock);
+
+			/* Io Queue */
+			for (i = 2; i < h->noqs+1; i++) {
+				q = &h->qinfo[i];
+
+				if (!q)
+					continue;
+				
+				spin_lock_irq(&q->qlock);
+				/* Process any pending ISR */
+				sop_msix_handle_ioq(q);
+
+				/* Handle errors */
+				sop_timeout_ios(q, true);
+				spin_unlock_irq(&q->qlock);
+
+				/* Process wait queue */
+				sop_resubmit_waitq(q);
+
+			}
+		}
+		spin_unlock(&dev_list_lock);
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(HZ);
+	}
 	return 0;
 }
 
