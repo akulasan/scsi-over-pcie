@@ -38,7 +38,7 @@
 #include "sop_kernel_compat.h"
 #include "sop.h"
 
-#define DRIVER_VERSION "1.0.0"
+#define DRIVER_VERSION "1.0.0.1"
 #define DRIVER_NAME "sop (v " DRIVER_VERSION ")"
 #define SOP "sop"
 
@@ -377,9 +377,9 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 	void *p;
 
 	if (pqi_to_device_queue_is_full(q, nelements)) {
-		printk(KERN_WARNING "pqi device queue %d is full!\n", q->queue_id);
-		printk(KERN_WARNING "  unposted_index = %d, nelements=%d, ci = %d\n",
-			q->unposted_index, q->nelements, *(q->ci));
+		printk(KERN_WARNING "pqi device queue [%d] is full!\n", q->queue_id);
+		printk(KERN_WARNING "  unposted_index = %d, ci = %d, nelements=%d\n",
+			q->unposted_index, *(q->ci), q->nelements);
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -391,9 +391,11 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 	if (q->nelements - q->unposted_index < nelements) {
 		int extra_elements = q->nelements - q->unposted_index;
 		if (pqi_to_device_queue_is_full(q, nelements + extra_elements)) {
-			printk(KERN_WARNING "pqi_alloc_elements, device queue is full!\n");
-			printk(KERN_WARNING "q->nelements = %d, q->unposted_index = %hu, extra_elements = %d\n",
-					q->nelements, q->unposted_index, extra_elements);
+			printk(KERN_WARNING "pqi device queue [%d] End is full!\n", 
+				q->queue_id);
+			printk(KERN_WARNING "q->nelements = %d, q->unposted_index = %hu,"
+				" extra_elements = %d\n", q->nelements, 
+				q->unposted_index, extra_elements);
 			return ERR_PTR(-ENOMEM);
 		}
 		p = q->queue_vaddr + q->unposted_index * q->element_size;
@@ -404,6 +406,12 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 	p = q->queue_vaddr + q->unposted_index * q->element_size;
 	q->unposted_index = (q->unposted_index + nelements) % q->nelements;
 	return p;
+}
+
+static void pqi_unalloc_elements(struct pqi_device_queue *q,
+					int nelements)
+{
+	q->unposted_index = (q->unposted_index + q->nelements - nelements) % q->nelements;
 }
 
 static int __attribute__((unused)) pqi_enqueue_to_device(struct pqi_device_queue *q, void *element)
@@ -966,7 +974,6 @@ int sop_msix_handle_ioq(struct queue_info *q)
 	u8 sq;
 	int rc;
 	struct sop_device *h = q->h;
-        int count = 0;
 	int ncmd=0;
 	struct sop_request *r;
 
@@ -999,7 +1006,8 @@ int sop_msix_handle_ioq(struct queue_info *q)
 				&r->response[r->response_accumulated]); 
 		ncmd++;
 		if (rc) { /* queue is empty */
-			dev_warn(&h->pdev->dev, "=-=-=- io OQ %hhu is empty\n", q->pqiq->queue_id);
+			dev_warn(&h->pdev->dev, "=-=-=- io OQ[%hhu] PI %d CI %d empty(rc=%d)\n", 
+				q->pqiq->queue_id, *(q->pqiq->pi), q->pqiq->unposted_index, rc);
 			break;
 		}
 		r->response_accumulated += q->pqiq->element_size;
@@ -1024,11 +1032,9 @@ int sop_msix_handle_ioq(struct queue_info *q)
 			atomic_dec(&q->cur_qdepth);
 			pqi_notify_device_queue_read(q->pqiq);
 		}
-
-                count++;
-                if (count > 1000) {
-                    panic("Too many completions\n");
-                }
+		else
+			dev_warn(&h->pdev->dev, "Multiple entry completion Q[%d] CI %d\n",
+				q->pqiq->queue_id, q->pqiq->unposted_index);
 	} while (!pqi_from_device_queue_is_empty(q->pqiq));
 
 #if 0
@@ -1130,36 +1136,39 @@ static void sop_irq_affinity_hints(struct sop_device *h)
 	}
 }
 
-static int sop_request_irqs(struct sop_device *h,
-					irq_handler_t msix_adminq_handler,
-					irq_handler_t msix_ioq_handler)
+static int sop_request_irqs(struct sop_device *h, int intr_type, 
+					irq_handler_t msix_handler)
 {
 	u8 i;
 	int rc;
 
-	dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (admin)\n",
-			h->qinfo[0].msix_vector, 0);
-	rc = request_irq(h->qinfo[0].msix_vector, msix_adminq_handler,
-					IRQF_SHARED, h->devname, &h->qinfo[0]);
-	if (rc != 0) {
-		dev_warn(&h->pdev->dev, "request_irq failed, i = %d\n", 0);
-	}
-		
-
-	/* for loop starts at 2 to skip over the admin queues */
-	for (i = 2; i < h->noqs + 1; i++) {
-		dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (oq)\n",
-				h->qinfo[i].msix_vector, i - 1);
-		rc = request_irq(h->qinfo[i].msix_vector, msix_ioq_handler, 
-				IRQF_SHARED, h->devname, &h->qinfo[i]);
+	if (intr_type == PQI_ADMIN_INTR) {
+		dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (admin)\n",
+				h->qinfo[0].msix_vector, 0);
+		rc = request_irq(h->qinfo[0].msix_vector, msix_handler,
+						IRQF_SHARED, h->devname, &h->qinfo[0]);
 		if (rc != 0) {
-			dev_warn(&h->pdev->dev,
-					"request_irq failed, i = %d\n", i);
-			/* FIXME release irq's 0 through i - 1 */
+			dev_warn(&h->pdev->dev, "request_irq failed, i = %d\n", 0);
 			goto default_int_mode;
 		}
 	}
-	sop_irq_affinity_hints(h);
+
+	else {
+		/* for loop starts at 2 to skip over the admin queues */
+		for (i = 2; i < h->noqs + 1; i++) {
+			dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (oq)\n",
+					h->qinfo[i].msix_vector, i - 1);
+			rc = request_irq(h->qinfo[i].msix_vector, msix_handler, 
+					IRQF_SHARED, h->devname, &h->qinfo[i]);
+			if (rc != 0) {
+				dev_warn(&h->pdev->dev,
+						"request_irq failed, i = %d\n", i);
+				/* FIXME release irq's 0 through i - 1 */
+				goto default_int_mode;
+			}
+		}
+		sop_irq_affinity_hints(h);
+	}
 	return 0;
 
 default_int_mode:
@@ -1203,9 +1212,17 @@ static u16 alloc_request(struct sop_device *h, u8 q)
         do {
                 rc = (u16) find_first_zero_bit(h->qinfo[q].request_bits,
 						h->qinfo[q].qdepth);
-                if (rc >= h->qinfo[q].qdepth) {
-			/* spin_unlock_irqrestore(&h->qinfo[q].qlock, flags); */
-			dev_warn(&h->pdev->dev, "alloc_request failed.\n");
+                if (rc >= h->qinfo[q].qdepth-1) {
+			/*
+			int i, lim;
+
+			dev_warn(&h->pdev->dev, "Q[%d] alloc_request failed. Bit=%d Qdepth=%d.\n",
+				q, rc, h->qinfo[q].qdepth);
+			lim = BITS_TO_LONGS(h->qinfo[q].qdepth) + 1;
+			for (i=0; i < lim; i++)
+				dev_warn(&h->pdev->dev, "Bits [%02d]: %08lx\n", i, 
+					h->qinfo[q].request_bits[i]);
+			*/
                         return (u16) -EBUSY;
 		}
         } while (test_and_set_bit((int) rc, h->qinfo[q].request_bits));
@@ -1216,6 +1233,7 @@ static u16 alloc_request(struct sop_device *h, u8 q)
 static void free_request(struct sop_device *h, u8 q, u16 request_id)
 {
 	BUG_ON((request_id >> 8) != q);
+	BUG_ON((request_id & 0x00ff) >= h->qinfo[q].qdepth);
 	clear_bit(request_id & 0x00ff, h->qinfo[q].request_bits);
 }
 
@@ -1588,8 +1606,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (rc)
 		goto bail;
 
-	rc = sop_request_irqs(h, sop_adminq_msix_handler,
-					sop_ioq_msix_handler);
+	rc = sop_request_irqs(h, PQI_ADMIN_INTR, sop_adminq_msix_handler);
 	if (rc != 0)
 		goto bail;
 
@@ -1598,6 +1615,11 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (rc)
 		goto bail;
 	dev_warn(&h->pdev->dev, "Finished Setting up i/o queues, rc = %d\n", rc);
+
+	rc = sop_request_irqs(h, PQI_IOQ_INTR, sop_ioq_msix_handler);
+	if (rc)
+		goto bail;
+
 	rc = sop_set_instance(h);
 	if (rc)
 		goto bail;
@@ -1975,15 +1997,22 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	int prev_index, num_sg;
 	int nsegs;
 
-	r = pqi_alloc_elements(submitq->pqiq, 1);
-	if (IS_ERR(r)) {
-		dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %ld\n", PTR_ERR(r));
+	request_id = alloc_request(h, submitq->pqiq->queue_id);
+	if (request_id == (u16) -EBUSY) {
+		/*
+		dev_warn(&h->pdev->dev, "Failed to allocate request for bio %p!\n", bio);
+		dev_warn(&h->pdev->dev, "SUBQ[%d] PI %d, CI %d \n", submitq->pqiq->queue_id,
+			submitq->pqiq->unposted_index,  *(submitq->pqiq->ci));
+			*/
 		return -EBUSY;
 	}
-	request_id = alloc_request(h, submitq->pqiq->queue_id);
-	if (request_id == (u16) -EBUSY)
-		dev_warn(&h->pdev->dev, "Failed to allocate request! Trouble ahead.\n");
 
+	r = pqi_alloc_elements(submitq->pqiq, 1);
+	if (IS_ERR(r)) {
+		dev_warn(&h->pdev->dev, "SUBQ[%d] pqi_alloc_elements for bio %p returned %ld\n", 
+			submitq->pqiq->queue_id, bio, PTR_ERR(r));
+		goto alloc_elem_fail;
+	}
 	nsegs = bio_phys_segments(h->rq, bio);
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
@@ -2018,13 +2047,9 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	num_sg = dma_map_sg(&h->pdev->dev, sgl, num_sg, dma_dir);
 	if (num_sg < 0) {
 		bio->bi_idx = prev_index;
-		/* FIXME:  What to do here?  We already allocated a
-		 * slot in the submission ring buffer.  Either make
-		 * it a NULL IU, or unallocate it somehow while avoiding races.
-		 */
-		dev_warn(&h->pdev->dev,
-				"Need to implement handling of dma_map failure.\n");
-		return -EBUSY;
+		dev_warn(&h->pdev->dev, "dma_map failure bio %p, SQ[%d].\n",
+			bio, submitq->pqiq->queue_id);
+		goto sg_map_fail;
 	}
 	atomic_inc(&replyq->cur_qdepth);
 	submitq->max_qdepth++;
@@ -2033,20 +2058,6 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	atomic_inc(&h->cmd_pending);
 	if (atomic_read(&h->cmd_pending) > h->max_cmd_pending)
 		h->max_cmd_pending = atomic_read(&h->cmd_pending);
-	if (sop_dbg_lvl == 1) {
-		int i;
-
-		sop_dbg_lvl = 0;
-		printk("@@@@ Total CMD Pending= %d Max = %d @@@@\n", atomic_read(&h->cmd_pending),
-				h->max_cmd_pending);
-		for (i = 0; i < h->noqs - 1; i++) {
-			printk("        OQ depth[%d] = %d, Max %d, Total = %d\n", i,
-				atomic_read(&replyq->cur_qdepth),
-				h->qinfo[h->io_q_from_dev[i].queue_id].max_qdepth,
-				h->qinfo[h->io_q_to_dev[i].queue_id].max_qdepth);
-		}
-	}
-
 	ser->num_sg = num_sg;
 #if 0
 	dev_warn(&h->pdev->dev, "CDB: [0]%02x [1]%02x [2]%02x %02x %02x %02x"
@@ -2062,6 +2073,13 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	writew(submitq->pqiq->unposted_index, submitq->pqiq->pi);
 
 	return 0;
+
+sg_map_fail:
+	pqi_unalloc_elements(submitq->pqiq, 1);
+
+alloc_elem_fail:
+	free_request(h, submitq->pqiq->queue_id, request_id);
+	return -EBUSY;
 }
 
 static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
@@ -2230,6 +2248,7 @@ static void sop_resubmit_waitq(struct queue_info *rq)
 	struct sop_wait_queue *wq;
 	struct sop_device *h;
 	struct queue_info *sq;
+	int ret;
 
 	/* Compute the reply Q from submission queue */
 	sq = find_submission_queue_fm_replyq(rq);
@@ -2237,7 +2256,7 @@ static void sop_resubmit_waitq(struct queue_info *rq)
 	h = rq->h;
 	wq = sq->wq;
 	if (!wq) {
-		dev_warn(&h->pdev->dev, "make_request: wq null for SubmitQ[%d]!\n",
+		dev_warn(&h->pdev->dev, "sop_resubmit_waitq: wq null for SubmitQ[%d]!\n",
 					sq->pqiq->queue_id);
 		return;
 	}
@@ -2246,12 +2265,20 @@ static void sop_resubmit_waitq(struct queue_info *rq)
 	while (bio_list_peek(&wq->iq_cong)) {
 		struct bio *bio = bio_list_pop(&wq->iq_cong);
 
-		if (sop_process_bio(h, bio, sq, rq)) {
+		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: proc bio %p Q[%d], PI %d CI %d!\n",
+			bio, sq->pqiq->queue_id, sq->pqiq->unposted_index, *(sq->pqiq->ci)); */
+
+		if ((ret = sop_process_bio(h, bio, sq, rq))) {
+			/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: Error %d for [%d]!\n",
+						ret, sq->pqiq->queue_id); */
 			bio_list_add_head(&wq->iq_cong, bio);
 			break;
 		}
 		if (bio_list_empty(&wq->iq_cong))
 			remove_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
+
+		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: done bio %p Q[%d], PI %d CI %d!\n",
+			bio, sq->pqiq->queue_id, sq->pqiq->unposted_index, *(sq->pqiq->ci)); */
 	}
 	spin_unlock_irq(&sq->qlock);
 }
@@ -2281,6 +2308,7 @@ static int sop_thread_proc(void *data)
 					continue;
 				
 				spin_lock_irq(&q->qlock);
+
 				/* Process any pending ISR */
 				sop_msix_handle_ioq(q);
 
@@ -2291,6 +2319,20 @@ static int sop_thread_proc(void *data)
 				/* Process wait queue */
 				sop_resubmit_waitq(q);
 
+			}
+
+			if (sop_dbg_lvl == 1) {
+				int i;
+
+				sop_dbg_lvl = 0;
+				printk("@@@@ Total CMD Pending= %d Max = %d @@@@\n", atomic_read(&h->cmd_pending),
+						h->max_cmd_pending);
+				for (i = 0; i < h->noqs - 1; i++) {
+					printk("        OQ depth[%d] = %d, Max %d, Total = %d\n", i,
+						atomic_read(&h->qinfo[h->io_q_from_dev[i].queue_id].cur_qdepth),
+						h->qinfo[h->io_q_from_dev[i].queue_id].max_qdepth,
+						h->qinfo[h->io_q_to_dev[i].queue_id].max_qdepth);
+				}
 			}
 		}
 		spin_unlock(&dev_list_lock);
