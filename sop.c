@@ -38,7 +38,7 @@
 #include "sop_kernel_compat.h"
 #include "sop.h"
 
-#define DRIVER_VERSION "1.0.0.1"
+#define DRIVER_VERSION "1.0.0.2"
 #define DRIVER_NAME "sop (v " DRIVER_VERSION ")"
 #define SOP "sop"
 

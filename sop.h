@@ -186,8 +186,8 @@ struct pqi_capability {
 
 #define IQ_IU_SIZE 64
 #define OQ_IU_SIZE 64
-#define IQ_NELEMENTS 256
-#define OQ_NELEMENTS 256
+#define IQ_NELEMENTS 128
+#define OQ_NELEMENTS 128
 
 struct sop_wait_queue {
 	wait_queue_head_t iq_full;
