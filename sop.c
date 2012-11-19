@@ -38,7 +38,7 @@
 #include "sop_kernel_compat.h"
 #include "sop.h"
 
-#define DRIVER_VERSION "1.0.0.2"
+#define DRIVER_VERSION "1.0.0.3"
 #define DRIVER_NAME "sop (v " DRIVER_VERSION ")"
 #define SOP "sop"
 
@@ -1625,7 +1625,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail;
 
 	/* TODO: Need to get capacity and LUN info before continuing */
-	h->capacity = 0x8000;		/* TODO: For now hard-code it for FPGA */
+	h->capacity = 0x8B000;		/* TODO: For now hard-code it for FPGA */
 	h->max_hw_sectors = 2048;	/* TODO: For now hard code it */
 	rc = sop_add_disk(h);
 	dev_warn(&h->pdev->dev, "Finished adding disk, rc = %d\n", rc);
@@ -1996,6 +1996,10 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	u16 request_id;
 	int prev_index, num_sg;
 	int nsegs;
+
+	/* FIXME: Temporarily limit the outstanding FW commands to 128 */
+	if (atomic_read(&h->cmd_pending) >= 128)
+		return -EBUSY;
 
 	request_id = alloc_request(h, submitq->pqiq->queue_id);
 	if (request_id == (u16) -EBUSY) {

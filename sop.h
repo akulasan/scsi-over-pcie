@@ -186,8 +186,8 @@ struct pqi_capability {
 
 #define IQ_IU_SIZE 64
 #define OQ_IU_SIZE 64
-#define IQ_NELEMENTS 128
-#define OQ_NELEMENTS 128
+#define IQ_NELEMENTS 256
+#define OQ_NELEMENTS 256
 
 struct sop_wait_queue {
 	wait_queue_head_t iq_full;
@@ -220,8 +220,8 @@ struct sop_device {
 	struct pci_dev *pdev;
 	struct pqi_capability pqicap;
 	__iomem struct pqi_device_register_set *pqireg;
-#define MAX_TO_DEVICE_QUEUES 2
-#define MAX_FROM_DEVICE_QUEUES 2
+#define MAX_TO_DEVICE_QUEUES 32
+#define MAX_FROM_DEVICE_QUEUES 32
 #define MAX_IO_QUEUES (MAX_TO_DEVICE_QUEUES + MAX_FROM_DEVICE_QUEUES)
 #define MAX_TOTAL_QUEUES (MAX_IO_QUEUES + 2)
 	int nr_queues, niqs, noqs; /* total, inbound and outbound queues */
