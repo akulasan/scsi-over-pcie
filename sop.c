@@ -571,13 +571,13 @@ static int wait_for_admin_command_ack(struct sop_device *h)
 #define ADMIN_SLEEP_INTERATIONS 1000 /* total of 100 milliseconds */
 
 	do {
+		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+				ADMIN_SLEEP_INTERVAL_MAX);
 		paf = readq(&h->pqireg->process_admin_function);
 		function_and_status = paf & 0xff;
 		if (function_and_status == 0x00)
 			return 0;
 		count++;
-		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
-				ADMIN_SLEEP_INTERVAL_MAX);
 	} while (count < ADMIN_SLEEP_INTERATIONS);
 	return -1;
 }
