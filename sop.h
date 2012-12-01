@@ -28,108 +28,7 @@
 
 struct sop_request;
 
-struct pqi_device_queue {
-	__iomem void *queue_vaddr;
-	__iomem u16 *pi;		/* producer index */
-	__iomem u16 *ci;		/* consumer index */
-	u16 unposted_index;		/* temporary host copy of pi or ci,
-					 * depending on direction of queue.
-					 */
-	u16 local_pi;			/* local copy of what was last
-					 * written to *pi for inbound queues 
-					 */
-	u16 element_size;		/* must be multiple of 16 */
-	u16 nelements;
-	dma_addr_t dhandle;
-	u16 queue_id;
-	u8 direction;
-	spinlock_t index_lock;
-#define PQI_DIR_TO_DEVICE 0
-#define PQI_DIR_FROM_DEVICE 1
-	struct sop_request *request; /* used by oq only */
-};
-
-#define PQI_QUEUE_FULL (-1)
-#define PQI_QUEUE_EMPTY (-2)
-
-#define	PQI_ADMIN_INTR	0
-#define PQI_IOQ_INTR	2
-
-
 #pragma pack(1)
-
-struct pqi_oq_extra_params {
-	u16 interrupt_message_number;
-	u16 wait_for_rearm;
-	u16 coalesce_count;
-	u16 min_coalesce_time;
-	u16 max_coalesce_time;
-	u8 operational_queue_protocol;
-};
-
-struct pqi_iq_extra_params {
-	u8 operational_queue_protocol;
-	u8 reserved[10];
-};
-
-struct pqi_create_operational_queue_request {
-	u8 iu_type;
-	u8 compatible_features;
-	u16 iu_length;
-	u16 response_oq;
-	u16 work_area;
-	u16 request_id;
-	u8 function_code;
-	u8 reserved2;
-	u16 queue_id;
-	u8 reserved3[2];
-	u64 element_array_addr;
-	u64 index_addr;
-	u16 nelements;
-	u16 element_length;
-	union {
-		struct pqi_iq_extra_params iqp;
-		struct pqi_oq_extra_params oqp;
-	};
-	u8 reserved4[17];
-};
-
-struct pqi_create_operational_queue_response {
-	u8 ui_type;
-	u8 compatible_features;
-	u16 ui_length;
-	u8 reserved[4];
-	u16 request_id;
-	u8 function_code;
-	u8 status;
-	u8 reserved2[4];
-	u64 index_offset;
-	u8 reserved3[40];
-};
-
-struct pqi_delete_operational_queue_request {
-	u8 iu_type;
-	u8 compatible_features;
-	u16 iu_length;
-	u8 reserved[4];
-	u16 request_id;
-	u8 function_code;
-	u8 reserved2;
-	u16 queue_id;
-	u8 reserved3[37];
-};
-
-struct pqi_delete_operational_queue_response {
-	u8 ui_type;
-	u8 compatible_features;
-	u16 ui_length;
-	u8 reserved[4];
-	u16 request_id;
-	u8 function_code;
-	u8 status;
-	u8 reserved2[52];
-};
-
 /*
  * A note about variable names:
  *
@@ -172,6 +71,118 @@ struct pqi_device_register_set {
 	u8  reserved4[4];
 	u32 power_action;
 };
+#pragma pack()
+
+struct pqi_device_queue {
+	__iomem void *queue_vaddr;
+	__iomem u16 *pi;		/* producer index */
+	__iomem u16 *ci;		/* consumer index */
+	u16 unposted_index;		/* temporary host copy of pi or ci,
+					 * depending on direction of queue.
+					 */
+	u16 local_pi;			/* local copy of what was last
+					 * written to *pi for inbound queues 
+					 */
+	u16 element_size;		/* must be multiple of 16 */
+	u16 nelements;
+	dma_addr_t dhandle;
+	u16 queue_id;
+	u8 direction;
+	spinlock_t index_lock;
+#define PQI_DIR_TO_DEVICE 0
+#define PQI_DIR_FROM_DEVICE 1
+	struct sop_request *request; /* used by oq only */
+	struct pqi_device_register_set *registers;
+};
+
+#define PQI_QUEUE_FULL (-1)
+#define PQI_QUEUE_EMPTY (-2)
+
+#define	PQI_ADMIN_INTR	0
+#define PQI_IOQ_INTR	2
+
+
+#pragma pack(1)
+
+struct pqi_oq_extra_params {
+	u16 interrupt_message_number;
+	u16 wait_for_rearm;
+	u16 coalesce_count;
+	u16 min_coalesce_time;
+	u16 max_coalesce_time;
+	u8 operational_queue_protocol;
+};
+
+struct pqi_iq_extra_params {
+	u8 operational_queue_protocol;
+	u8 reserved[10];
+};
+
+struct pqi_create_operational_queue_request {
+	u8 iu_type;
+#define OPERATIONAL_QUEUE_IU_TYPE 0x60
+	u8 compatible_features;
+	u16 iu_length;
+	u16 response_oq;
+	u16 work_area;
+	u16 request_id;
+	u8 function_code;
+#define CREATE_QUEUE_TO_DEVICE 0x10
+#define CREATE_QUEUE_FROM_DEVICE 0x11
+#define DELETE_QUEUE_TO_DEVICE 0x12
+#define DELETE_QUEUE_FROM_DEVICE 0x13
+	u8 reserved2;
+	u16 queue_id;
+	u8 reserved3[2];
+	u64 element_array_addr;
+	u64 index_addr;
+	u16 nelements;
+	u16 element_length;
+	union {
+		struct pqi_iq_extra_params iqp;
+		struct pqi_oq_extra_params oqp;
+	};
+	u8 reserved4[17];
+};
+
+struct pqi_create_operational_queue_response {
+	u8 ui_type;
+	u8 compatible_features;
+	u16 ui_length;
+	u16 response_oq;
+	u16 work_area;
+	u16 request_id;
+	u8 function_code;
+	u8 status;
+	u8 reserved2[4];
+	u64 index_offset;
+	u8 reserved3[40];
+};
+
+struct pqi_delete_operational_queue_request {
+	u8 iu_type;
+	u8 compatible_features;
+	u16 iu_length;
+	u16 response_oq;
+	u16 work_area;
+	u16 request_id;
+	u8 function_code;
+	u8 reserved2;
+	u16 queue_id;
+	u8 reserved3[37];
+};
+
+struct pqi_delete_operational_queue_response {
+	u8 ui_type;
+	u8 compatible_features;
+	u16 ui_length;
+	u16 response_oq;
+	u16 work_area;
+	u16 request_id;
+	u8 function_code;
+	u8 status;
+	u8 reserved2[52];
+};
 
 struct pqi_capability {
 	u8 max_admin_iq_elements;
@@ -180,8 +191,69 @@ struct pqi_capability {
 	u8 admin_oq_element_length; /* length in 16 byte units */
 	u8 reserved[4];
 };
-#pragma pack()
 
+struct pqi_sgl_descriptor {
+	u64 address;
+	u32 length;
+	u8 reserved[3];
+	u8 descriptor_type;
+#define PQI_SGL_DATA_BLOCK (0x00 << 4)
+#define PQI_SGL_BIT_BUCKET (0x01 << 4)
+#define PQI_SGL_STANDARD_SEG (0x02 << 4)
+#define PQI_SGL_STANDARD_LAST_SEG (0x03 << 4)
+};
+
+struct report_pqi_device_capability_iu {
+	u8 iu_type;
+#define REPORT_PQI_DEVICE_CAPABILITY 0x60
+	u8 compatible_features;
+	u16 iu_length;
+	u16 response_oq;
+	u16 work_area;
+	u16 request_id;
+	u8 function_code;
+	u8 reserved[33];
+	u32 buffer_size;
+	struct pqi_sgl_descriptor sg;
+};
+
+struct report_pqi_device_capability_response {
+	u8 iu_type;
+#define REPORT_PQI_DEVICE_CAPABILITY_RESPONSE 0xE0
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u8 function_code;
+	u8 status;
+	u32 additional_status;
+	u8 reserved[63-15];
+};
+
+struct pqi_device_capabilities {
+	u16 length;
+	u8 reserved[14];
+	u16 max_iqs;
+	u16 max_iq_elements;
+	u8 reserved2[4];
+	u16 max_iq_element_length;
+	u16 min_iq_element_length;
+	u16 max_oqs;
+	u16 max_oq_elements;
+	u8 reserved3[2];
+	u16 intr_coalescing_time_granularity;
+	u16 max_oq_element_length;
+	u16 min_oq_element_length;
+	u8 iq_alignment_exponent;
+	u8 oq_alignment_exponent;
+	u8 iq_ci_alignment_exponent;
+	u8 oq_pi_alignment_exponent;
+	u32 protocol_support_bitmask;
+	u16 admin_sgl_support_bitmask;
+	u8 reserved4[63 - 49];
+};
+#pragma pack()
 #define SOP_MINORS 64
 
 #define IQ_IU_SIZE 64
@@ -240,6 +312,7 @@ struct sop_device {
 	struct queue_info qinfo[MAX_TOTAL_QUEUES];
 	int instance;
 	sector_t capacity;
+	int block_size;
 	struct request_queue *rq;
 	struct gendisk *disk;
 	int max_hw_sectors;
@@ -261,18 +334,6 @@ struct sop_request {
 	u8 response[MAX_RESPONSE_SIZE];
 };
 
-#pragma pack(1)
-struct pqi_sgl_descriptor {
-	u64 address;
-	u32 length;
-	u8 reserved[3];
-	u8 descriptor_type;
-#define PQI_SGL_DATA_BLOCK (0x00 << 4)
-#define PQI_SGL_BIT_BUCKET (0x01 << 4)
-#define PQI_SGL_STANDARD_SEG (0x02 << 4)
-#define PQI_SGL_STANDARD_LAST_SEG (0x03 << 4)
-};
-#pragma pack()
 
 #pragma pack(1)
 struct sop_limited_cmd_iu {
@@ -359,6 +420,131 @@ struct sop_cmd_ui {
 	u8 additional_cdb_bytes;
 	u8 cdb[16];
 	/* total size is 64 bytes, sgl follows in next IU. */
+};
+#pragma pack()
+
+#pragma pack(1)
+struct sop_task_mgmt_iu {
+	u8 iu_type;
+#define SOP_TASK_MGMT_IU	0x13
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u16 nexus_id;
+	u32 reserved;
+	u64 lun;
+	u16 protocol_specific;
+	u16 reserved2;
+	u16 request_id_to_manage;
+	u8 task_mgmt_function;
+#define SOP_ABORT_TASK 0x01
+#define SOP_ABORT_TASK_SET 0x02
+#define SOP_CLEAR_TASK_SET 0x04
+#define SOP_LUN_RESET 0x08
+#define SOP_I_T_NEXUS_RESET 0x10
+#define SOP_CLEAR_ACA 0x40
+#define SOP_QUERY_TASK 0x80
+#define SOP_QUERY_TASK_SET 0x81
+#define SOP_QUERY_ASYNC_EVENT 0x82
+	u8 reserved3;
+};
+#pragma pack()
+
+#pragma pack(1)
+struct sop_task_mgmt_response {
+	u8 iu_type;
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u16 nexus_id;
+	u8 additional_response_info[3];
+	u8 response_code;
+#define SOP_TMF_COMPLETE 0x00
+#define SOP_TMF_REJECTED 0x04
+#define SOP_TMF_FAILED 0x05
+#define SOP_TMF_SUCCEEDED 0x08
+#define SOP_INCORRECT_LUN 0x09
+#define SOP_OVERLAPPED_REQUEST_ID_ATTEMPTED 0x0A
+#define SOP_INVALID_IU_TYPE 0x20
+#define SOP_INVALID_IU_LENGTH 0x21
+#define SOP_INVALID_LENGTH_IN_IU 0x22
+#define SOP_MISALIGNED_LENGTH_IN_IU 0x23
+#define SOP_INVALID_FIELD_IN_IU 0x24
+#define SOP_IU_TOO_LONG 0x25
+
+};
+#pragma pack()
+
+#pragma pack(1)
+struct report_general_iu {
+	u8 iu_type;
+#define REPORT_GENERAL_IU 0x01
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u16 reserved;
+	u32 allocation_length;
+	u8 reserved2[16];
+	u8 data_in[0]; /* if any */
+};
+#pragma pack()
+
+#pragma pack(1)
+struct report_general_response_iu {
+	u8 reserved[4];
+	u8 lun_bridge_present_flags;
+#define SOP_TARGET_BRIDGE_PRESENT 0x01
+#define LOGICAL_UNITS_PRESENT 0x02
+	u8 reserved2[3];
+	u8 app_clients_present_flags;
+#define SOP_APPLICATION_CLIENTS_PRESENT 0x02
+	u8 reserved3[9];
+	u16 max_incoming_iu_size;
+	u16 max_incoming_embedded_data_buffers;
+	u16 max_data_buffers;
+	u8 reserved4[8];
+	u8 incoming_iu_type_support_bitmask[32];
+	u8 vendor_specific[8];
+	u8 reserved5[2];
+	u16 queuing_layer_specific_data_len;
+	u16 incoming_sgl_support_bitmask;
+	u8 reserved6[2];
+};
+#pragma pack()
+
+#pragma pack(1)
+struct management_response_iu {
+	u8 iu_type;
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u8 result;
+#define MGMT_RSP_RSLT_GOOD 0
+#define MGMT_RSP_RSLT_UNKNOWN_ERROR 0x40
+#define MGMT_RSP_RSLT_INVALID_FIELD_IN_REQUEST_IU 0x41
+#define MGMT_RSP_RSLT_INVALID_FIELD_IN_DATA_OUT_BUFFER 0x42
+#define MGMT_RSP_RSLT_VENDOR_SPECIFIC_ERROR 0x7f
+#define MGMT_RSP_RSLT_VENDOR_SPECIFIC_ERROR2 0xff
+	u8 reserved[5];
+	union {
+		struct {
+			u16 byte_ptr;
+			u8 reserved;
+			u8 bit_ptr;
+		} invalid_field_in_request_ui;
+		struct {
+			u32 byte_ptr;
+			u8 bit_ptr;
+		} invalid_field_in_data_out;
+	};
 };
 #pragma pack()
 

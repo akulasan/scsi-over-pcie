@@ -34,7 +34,7 @@
 #include <linux/sched.h>
 #include <linux/version.h>
 #include <linux/completion.h>
-
+#include <scsi/scsi.h>
 #include "sop_kernel_compat.h"
 #include "sop.h"
 
@@ -65,6 +65,7 @@ static DEFINE_SPINLOCK(dev_list_lock);
 static LIST_HEAD(dev_list);
 static struct task_struct *sop_thread;
 
+static int sop_get_disk_params(struct sop_device *h);
 static int sop_add_disk(struct sop_device *h);
 static void sop_remove_disk(struct sop_device *h);
 static int sop_thread_proc(void *data);
@@ -114,7 +115,7 @@ static DRIVER_ATTR(dbg_lvl, S_IRUGO|S_IWUSR, sop_sysfs_show_dbg_lvl,
  * version of arch/x86/include/asm/io.h 
  */
 #ifndef readq
-static inline __u64 readq(const volatile void __iomem *addr)
+static inline u64 readq(const volatile void __iomem *addr)
 {
 	const volatile u32 __iomem *p = addr;
 	u32 low, high;
@@ -127,12 +128,57 @@ static inline __u64 readq(const volatile void __iomem *addr)
 #endif
 
 #ifndef writeq
-static inline void writeq(__u64 val, volatile void __iomem *addr)
+static inline void writeq(u64 val, volatile void __iomem *addr)
 {
 	writel(val, addr);
 	writel(val >> 32, addr+4);
 }
 #endif
+
+static inline int check_for_read_failure(__iomem void *sig)
+{
+	/*
+	 * do a readl of a known constant value, if it comes back -1,
+	 * we know we're not able to read.
+	 */
+	u64 signature;
+
+	signature = readq(sig);
+	return signature == 0xffffffffffffffffULL;
+}
+
+static inline int safe_readw(__iomem void *sig, u16 *value,
+				const volatile void __iomem *addr)
+{
+	*value = readw(addr);
+	if (unlikely(*value == (u16) 0xffff)) {
+		if (check_for_read_failure(sig))
+			return -1;
+	}
+	return 0;
+}
+
+static inline int safe_readl(__iomem void *sig, u32 *value,
+				const volatile void __iomem *addr)
+{
+	*value = readl(addr);
+	if (unlikely(*value == 0xffffffff)) {
+		if (check_for_read_failure(sig))
+			return -1;
+	}
+	return 0;
+}
+
+static inline int safe_readq(__iomem void *sig, u64 *value,
+				const volatile void __iomem *addr)
+{
+	*value = readq(addr);
+	if (unlikely(*value == 0xffffffffffffffffULL)) {
+		if (check_for_read_failure(sig))
+			return -1;
+	}
+	return 0;
+}
 
 static void free_q_request_buffers(struct queue_info *q)
 {
@@ -371,8 +417,7 @@ static int pqi_from_device_queue_is_empty(struct pqi_device_queue *q)
 	return qpi == q->unposted_index;
 }
 
-static void *pqi_alloc_elements(struct pqi_device_queue *q,
-					int nelements)
+static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
 {
 	void *p;
 
@@ -412,20 +457,6 @@ static void pqi_unalloc_elements(struct pqi_device_queue *q,
 					int nelements)
 {
 	q->unposted_index = (q->unposted_index + q->nelements - nelements) % q->nelements;
-}
-
-static int __attribute__((unused)) pqi_enqueue_to_device(struct pqi_device_queue *q, void *element)
-{
-	void *p;
-
-	if (pqi_to_device_queue_is_full(q, 1))
-		return PQI_QUEUE_FULL;
-
-	/* FIXME, this is wrong, shouldn't memcpy. */
-	p = q->queue_vaddr + q->unposted_index * q->element_size;
-	memcpy(p, element, q->element_size);
-	q->unposted_index = (q->unposted_index + 1) % q->nelements;
-	return 0;
 }
 
 static int pqi_dequeue_from_device(struct pqi_device_queue *q, void *element)
@@ -540,7 +571,7 @@ static void __attribute__((unused)) print_unsubmitted_commands(struct pqi_device
 	spin_unlock_irqrestore(&q->index_lock, flags);
 }
 
-static void pqi_notify_device_queue_written_admin(struct pqi_device_queue *q)
+static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 {
 	unsigned long flags;
 	/*
@@ -778,46 +809,72 @@ bailout:
 		pci_free_consistent(h->pdev, total_admin_queue_size,
 					admin_iq, admin_iq_busaddr);
 	free_all_q_request_buffers(h);
+	dev_warn(&h->pdev->dev, "%s: %s\n", __func__, "Create Admin");
 	return -1;	
+}
+
+static int wait_for_admin_queues_to_become_idle(struct sop_device *h)
+{
+	int i;
+	u64 paf;
+	u32 status;
+	u8 pqi_device_state, function_and_status;
+	__iomem void *sig = &h->pqireg->signature;
+
+	for (i = 0; i < ADMIN_SLEEP_INTERATIONS; i++) {
+		if (safe_readq(sig, &paf,
+				&h->pqireg->process_admin_function)) {
+			dev_warn(&h->pdev->dev,
+				"Cannot read process admin function register");
+			return -1;
+		}
+		paf &= 0x0ff;
+		if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
+			dev_warn(&h->pdev->dev,
+				"Cannot read device status register");
+			return -1;
+		}
+		function_and_status = paf & 0xff;
+		pqi_device_state = status & 0xff;
+		if (function_and_status == PQI_IDLE &&
+			pqi_device_state == PQI_READY_FOR_IO)
+			return 0;
+		if (i == 0)
+			dev_warn(&h->pdev->dev,
+				"Waiting for admin queues to become idle\n");
+		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+				ADMIN_SLEEP_INTERVAL_MAX);
+	}
+	dev_warn(&h->pdev->dev,
+			"Failed waiting for admin queues to become idle.");
+	return -1;
 }
 
 static int sop_delete_admin_queues(struct sop_device *h)
 {
 	u64 paf;
 	u32 status;
-	int rc;
-	u8 pqi_device_state, function_and_status;
+	u8 function_and_status;
 
-	paf = 0x0ff & readq(&h->pqireg->process_admin_function);
-	status = readl(&h->pqireg->pqi_device_status);
-	function_and_status = paf & 0xff;
-	pqi_device_state = status & 0xff;
-
-	if (function_and_status != PQI_IDLE) {
-		dev_warn(&h->pdev->dev,
-			"Cannot remove admin queues, device not idle\n");
+	if (wait_for_admin_queues_to_become_idle(h))
 		return -1;
-	}
-
-	if (pqi_device_state != PQI_READY_FOR_IO) {
-		dev_warn(&h->pdev->dev,
-			"Cannot remove admin queues, device not ready for i/o\n");
-		return -1;
-	}
 	writeq(PQI_DELETE_ADMIN_QUEUES, &h->pqireg->process_admin_function);
-	rc = wait_for_admin_command_ack(h);
-	if (!rc)
+	if (!wait_for_admin_command_ack(h))
 		return 0;
+
+	/* Try to get some clues about why it failed. */
 	paf = readq(&h->pqireg->process_admin_function);
 	function_and_status = paf & 0xff;
 	dev_warn(&h->pdev->dev,
 		"Failed to delete admin queues: function_and_status = 0x%02x\n",
 		function_and_status);
-	if (function_and_status != 0) {
-		status = readl(&h->pqireg->pqi_device_status);
-		dev_warn(&h->pdev->dev, "Device status = 0x%08x\n",
-				status);
-	}
+	if (function_and_status == 0)
+		return -1;
+	status = readl(&h->pqireg->pqi_device_status);
+	dev_warn(&h->pdev->dev, "Device status = 0x%08x\n",
+			status);
+
+	dev_warn(&h->pdev->dev, "Device status = 0x%08x\n", status);
 	return -1;
 }
 
@@ -920,7 +977,7 @@ static void sop_complete_bio(struct sop_device *h,
 
 		/* copy the sense data */
 		if (sense_data_len) {
-			/* Nowherre to transfer sense data in block */
+			/* Nowhere to transfer sense data in block */
 			/*
 			if (SCSI_SENSE_BUFFERSIZE < sense_data_len)
 				sense_data_len = SCSI_SENSE_BUFFERSIZE;
@@ -1021,7 +1078,7 @@ int sop_msix_handle_ioq(struct queue_info *q)
 				r = NULL;
 			} else {
 				if (likely(r->waiting)) {
-					dev_warn(&h->pdev->dev, "Unexpected, waiting != NULL\n");
+					dev_warn(&h->pdev->dev, "Sync completion ISR\n");
 					complete(r->waiting);
 					r = NULL;
 				} else {
@@ -1242,14 +1299,18 @@ static void fill_create_io_queue_request(struct sop_device *h,
 	struct pqi_device_queue *q, int to_device, u16 request_id,
 	u16 msix_vector)
 {
-	u8 function_code = to_device ? 0x10 : 0x11; /* FIXME magic */
+	u8 function_code;
+
+	if (to_device)
+		function_code = CREATE_QUEUE_TO_DEVICE;
+	else 
+		function_code = CREATE_QUEUE_FROM_DEVICE;
 
 	memset(r, 0, sizeof(*r));
-	r->iu_type = 0x60; /* FIXME, magic */
+	r->iu_type = OPERATIONAL_QUEUE_IU_TYPE;
 	r->iu_length = cpu_to_le16(0x003c);
 	r->response_oq = 0;
-	/* r->request_id = cpu_to_le16(alloc_request(h, q->queue_id)); */
-	r->request_id = cpu_to_le16(request_id);
+	r->request_id = request_id;
 	r->function_code = function_code;
 	r->queue_id = cpu_to_le16(q->queue_id);
 	r->element_array_addr = cpu_to_le64(q->dhandle);
@@ -1273,12 +1334,17 @@ static void fill_delete_io_queue_request(struct sop_device *h,
 	struct pqi_delete_operational_queue_request *r, u16 queue_id,
 	int to_device, u16 request_id)
 {
-	u8 function_code = to_device ? 0x12 : 0x13; /* FIXME magic */
+	u8 function_code;
+
+	if (to_device)
+		function_code = DELETE_QUEUE_TO_DEVICE;
+	else 
+		function_code = DELETE_QUEUE_FROM_DEVICE;
 
 	memset(r, 0, sizeof(*r));
-	r->iu_type = 0x60; /* FIXME, magic */
+	r->iu_type = OPERATIONAL_QUEUE_IU_TYPE;
 	r->iu_length = cpu_to_le16(0x003c);
-	r->request_id = cpu_to_le16(request_id);
+	r->request_id = request_id;
 	r->function_code = function_code;
 	r->queue_id = cpu_to_le16(queue_id);
 }
@@ -1294,8 +1360,28 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	request->waiting = &wait;
 	request->response_accumulated = 0;
 	dev_warn(&h->pdev->dev, "sending request %hu\n", request_id);
-	pqi_notify_device_queue_written_admin(aq);
+	pqi_notify_device_queue_written(aq);
 	dev_warn(&h->pdev->dev, "waiting for completion\n");
+	wait_for_completion(&wait);
+	dev_warn(&h->pdev->dev, "wait_for_completion returned\n");
+}
+
+static void send_sop_command(struct sop_device *h, struct queue_info *submitq,
+				u16 request_id)
+{
+	struct sop_request *sopr;
+	DECLARE_COMPLETION_ONSTACK(wait);
+
+	sopr = &submitq->request[request_id & 0x00ff];
+	memset(sopr, 0, sizeof(*sopr));
+	dev_warn(&h->pdev->dev, "Sending SOP IO request %p\n", sopr);
+	sopr->request_id = request_id;
+	dev_warn(&h->pdev->dev, "sending request ID %hu\n", request_id);
+	sopr->waiting = &wait;
+	sopr->response_accumulated = 0;
+	dev_warn(&h->pdev->dev, "waiting for completion\n");
+	pqi_notify_device_queue_written(submitq->pqiq);
+	put_cpu();
 	wait_for_completion(&wait);
 	dev_warn(&h->pdev->dev, "wait_for_completion returned\n");
 }
@@ -1358,6 +1444,7 @@ static int sop_setup_io_queues(struct sop_device *h)
 				&h->qinfo[aq->queue_id].request[request_id & 0x00ff]);
 		if (request_id < 0) { /* FIXME: now what? */
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
+			goto bail_out;
 		}
 		fill_create_io_queue_request(h, r, q, 0, request_id, q->queue_id - 2);
 		send_admin_command(h, request_id);
@@ -1365,8 +1452,10 @@ static int sop_setup_io_queues(struct sop_device *h)
 			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
 		dev_warn(&h->pdev->dev, "resp.status = %hhu, resp.index_offset = %llu\n",
 			resp->status, le64_to_cpu(resp->index_offset));
-		if (resp->status != 0)
+		if (resp->status != 0) {
 			dev_warn(&h->pdev->dev, "Failed to set up OQ... now what?\n");
+			goto bail_out;
+		}
 		/* h->io_q_from_dev[i].pi = h->io_q_from_dev[i].queue_vaddr +
 						le64_to_cpu(resp->index_offset); */
 		h->io_q_from_dev[i].ci = ((void *) h->pqireg) +
@@ -1391,6 +1480,7 @@ static int sop_setup_io_queues(struct sop_device *h)
 		request_id = alloc_request(h, aq->queue_id);
 		if (request_id < 0) { /* FIXME: now what? */
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted 2\n");
+			goto bail_out;
 		}
 		dev_warn(&h->pdev->dev, "Allocated request %hu, %p\n", request_id,
 				&h->qinfo[aq->queue_id].request[request_id & 0x00ff]);
@@ -1400,8 +1490,10 @@ static int sop_setup_io_queues(struct sop_device *h)
 			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
 		dev_warn(&h->pdev->dev, "resp.status = %hhu, resp.index_offset = %llu\n",
 			resp->status, le64_to_cpu(resp->index_offset));
-		if (resp->status != 0)
+		if (resp->status != 0) {
 			dev_warn(&h->pdev->dev, "Failed to set up IQ... now what?\n");
+			goto bail_out;
+		}
 		/* h->io_q_to_dev[i].ci = h->io_q_to_dev[i].queue_vaddr +
 						le64_to_cpu(resp->index_offset); */
 		h->io_q_to_dev[i].pi = ((void *) h->pqireg) +
@@ -1536,6 +1628,61 @@ static void sop_release_instance(struct sop_device *h)
 	spin_unlock(&dev_list_lock);
 }
 
+#define PQI_RESET_ACTION_SHIFT 5
+#define PQI_RESET_ACTION_MASK (0x07 << PQI_RESET_ACTION_SHIFT)
+#define PQI_START_RESET (1 << PQI_RESET_ACTION_SHIFT)
+#define PQI_SOFT_RESET (1)
+#define PQI_START_RESET_COMPLETED (2 << PQI_RESET_ACTION_SHIFT)
+static int sop_init_time_host_reset(struct sop_device *h)
+{
+	u64 paf;
+	unsigned char *x;
+	u32 status, reset_register, prev;
+	u8 function_and_status;
+	u8 pqi_device_state;
+	__iomem void *sig = &h->pqireg->signature;
+
+	prev = -1;
+	dev_warn(&h->pdev->dev, "Resetting host\n");
+	writel(PQI_START_RESET | PQI_SOFT_RESET, &h->pqireg->reset);
+	do {
+		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+				ADMIN_SLEEP_INTERVAL_MAX);
+		/* 
+		 * Not using safe_readl here because while in reset we can
+		 * get -1 and be unable to read the signature, and this
+		 * is normal (I think).
+		 */
+		reset_register = readl(&h->pqireg->reset);
+		if (reset_register != prev)
+			dev_warn(&h->pdev->dev, "Reset register is: 0x%08x\n",
+				reset_register);
+		prev = reset_register;
+	} while ((reset_register & PQI_RESET_ACTION_MASK) !=
+					PQI_START_RESET_COMPLETED);
+
+	dev_warn(&h->pdev->dev, "Host reset initiated.\n");
+	do {
+		if (safe_readq(sig, &paf, &h->pqireg->process_admin_function)) {
+			dev_warn(&h->pdev->dev,
+				"Unable to read process admin function register");
+			return -1;
+		}
+		if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
+			dev_warn(&h->pdev->dev, "Unable to read from device memory");
+			return -1;
+		}
+		x = (unsigned char *) &status;
+		function_and_status = paf & 0xff;
+		pqi_device_state = status & 0xff;
+		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+				ADMIN_SLEEP_INTERVAL_MAX);
+	} while (pqi_device_state != PQI_READY_FOR_ADMIN_FUNCTION ||
+			function_and_status != PQI_IDLE);
+	dev_warn(&h->pdev->dev, "Host reset completed.\n");
+	return 0;
+}
+
 static int __devinit sop_probe(struct pci_dev *pdev,
 			const struct pci_device_id *pci_id)
 {
@@ -1585,6 +1732,11 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		rc = -ENOMEM;
 		goto bail;
 	}
+	/*
+	rc = sop_init_time_host_reset(h);
+	if (rc)
+		return -1;
+	*/
 
 	if (sop_set_dma_mask(pdev)) {
 		dev_err(&pdev->dev, "failed to set DMA mask\n");
@@ -1627,6 +1779,12 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	/* TODO: Need to get capacity and LUN info before continuing */
 	h->capacity = 0x8B000;		/* TODO: For now hard-code it for FPGA */
 	h->max_hw_sectors = 2048;	/* TODO: For now hard code it */
+	h->block_size = 0x200;
+	rc = sop_get_disk_params(h);
+	dev_warn(&h->pdev->dev, "Finished getting disk params rc= %d\n", rc);
+	if (rc)
+		goto bail;
+
 	rc = sop_add_disk(h);
 	dev_warn(&h->pdev->dev, "Finished adding disk, rc = %d\n", rc);
 	if (rc)
@@ -1638,10 +1796,6 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 
 	return 0;
 bail:
-	spin_lock(&dev_list_lock);
-	list_del(&h->node);
-	spin_unlock(&dev_list_lock);
-
 	/* FIXME: Do other cleanup in cascading order */
 
 	dev_warn(&h->pdev->dev, "Bailing out in probe - not freeing a lot\n");
@@ -2007,7 +2161,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 		dev_warn(&h->pdev->dev, "Failed to allocate request for bio %p!\n", bio);
 		dev_warn(&h->pdev->dev, "SUBQ[%d] PI %d, CI %d \n", submitq->pqiq->queue_id,
 			submitq->pqiq->unposted_index,  *(submitq->pqiq->ci));
-			*/
+		*/
 		return -EBUSY;
 	}
 
@@ -2025,7 +2179,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	r->work_area = 0;
 	r->request_id = request_id;
 	sgl = &submitq->sgl[(request_id & 0x0ff) * MAX_SGLS];
-	ser = &submitq->request[request_id & 0x0ff];
+	ser = &submitq->request[request_id & 0x00ff];
 	ser->xfer_size = 0;
 	ser->bio = bio;
 	ser->waiting = NULL;
@@ -2108,7 +2262,7 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 	if (!wq) {
 		dev_warn(&h->pdev->dev, "make_request: wq null for SubmitQ[%d], RQ[%d]!\n",
 					submitq->pqiq->queue_id, replyq->pqiq->queue_id);
-		return MRFN_RET;
+		goto make_request_fail;
 	}
 
 	spin_lock_irq(&submitq->qlock);
@@ -2125,9 +2279,185 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 	}
 
 	spin_unlock_irq(&submitq->qlock);
+
+make_request_fail:
 	put_cpu();
 
 	return MRFN_RET;
+}
+
+static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
+		struct queue_info *replyq, u16 request_id, char *cdb, 
+		dma_addr_t phy_addr, int data_len, u8 data_dir)
+{
+	int cdb_len;
+	u16 sgl_size;
+
+	memset(r, 0, sizeof(*r));
+
+	/* Prepare the entry for SOP */
+	r->iu_type = SOP_LIMITED_CMD_IU;
+	r->compatible_features = 0;
+	r->queue_id = cpu_to_le16(replyq->pqiq->queue_id);
+	r->work_area = 0;
+	r->request_id = request_id;
+	sgl_size = (u16) (sizeof(*r) - sizeof(r->sg[0]) * 2) - 4;
+	if (data_len)
+		/* We use only max one descriptor */
+		sgl_size += sizeof(struct pqi_sgl_descriptor);	
+	r->iu_length = cpu_to_le16(sgl_size);
+
+	/* Prepare the CDB */
+	cdb_len = COMMAND_SIZE(cdb[0]);
+	memcpy(r->cdb, cdb, cdb_len);
+
+	r->flags = data_dir;
+	r->xfer_size = data_len;
+
+	/* Prepare SG */
+	r->sg[0].address = cpu_to_le64(phy_addr);
+	r->sg[0].length = cpu_to_le32(data_len);
+	r->sg[0].descriptor_type = PQI_SGL_DATA_BLOCK;
+}
+
+static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
+			struct queue_info *submitq, u16 request_id)
+{
+	struct sop_request *sopr = &submitq->request[request_id & 0x00ff];
+	volatile struct sop_cmd_response *resp = 
+		(volatile struct sop_cmd_response *)sopr->response;
+	u16 status, sq;
+	u8 iu_type;
+
+	iu_type = resp->iu_type;
+	status = resp->status;
+	sq = resp->status_qualifier;
+	free_request(h, submitq->pqiq->queue_id, request_id);
+
+	if (iu_type == SOP_RESPONSE_CMD_SUCCESS_IU_TYPE)
+		return 0;
+
+	if (iu_type != SOP_RESPONSE_CMD_RESPONSE_IU_TYPE) {
+		dev_warn(&h->pdev->dev, "Unexpected IU type 0x%x in %s\n",
+				resp->iu_type, __func__);
+		return -1;
+	}
+
+	switch (status & STATUS_MASK) {
+	case SAM_STAT_GOOD:
+	case SAM_STAT_CONDITION_MET:
+	case SAM_STAT_INTERMEDIATE:
+	case SAM_STAT_INTERMEDIATE_CONDITION_MET:
+		return 0;
+
+	case SAM_STAT_BUSY:
+	case SAM_STAT_RESERVATION_CONFLICT:
+	case SAM_STAT_COMMAND_TERMINATED:
+	case SAM_STAT_TASK_SET_FULL:
+	case SAM_STAT_ACA_ACTIVE:
+	case SAM_STAT_TASK_ABORTED:
+		dev_warn(&h->pdev->dev, "Sync command cdb=0x%x failed with status 0x%x\n",
+			opcode, status);
+		return (status << 16);
+
+	case CHECK_CONDITION:
+		dev_warn(&h->pdev->dev, "Sync command cdb=0x%x Check Condition SQ 0x%x\n",
+			opcode, sq);
+		return ((status << 16) | sq);
+	}
+
+	dev_warn(&h->pdev->dev, "Sync command cdb=0x%x failed with unknown status 0x%x\n",
+		opcode, status);
+	return -1;
+}
+
+static int send_sync_cdb(struct sop_device *h, char *cdb, dma_addr_t phy_addr, 
+			 int data_len, u8 data_dir)
+{
+	struct queue_info *submitq, *replyq;
+
+	struct sop_limited_cmd_iu *r;
+	int request_id, cpu;
+	int retval = -EBUSY;
+
+	cpu = get_cpu();
+	submitq = find_submission_queue(h, cpu);
+	replyq = find_reply_queue(h, cpu);
+	request_id = alloc_request(h, submitq->pqiq->queue_id);
+	if (request_id < 0) {
+		dev_warn(&h->pdev->dev, "%s: Failed to allocate request\n",
+					__func__);
+		retval = -EBUSY;
+		goto sync_req_id_fail;
+	}
+	r = pqi_alloc_elements(submitq->pqiq, 1);
+	if (IS_ERR(r)) {
+		dev_warn(&h->pdev->dev, "SUBQ[%d] pqi_alloc_elements for CDB 0x%x returned %ld\n", 
+			submitq->pqiq->queue_id, cdb[0], PTR_ERR(r));
+		goto sync_alloc_elem_fail;
+	}
+
+	fill_send_cdb_request(r, replyq, request_id, cdb, phy_addr, 
+				data_len, data_dir);
+
+	send_sop_command(h, submitq, request_id);
+	return process_direct_cdb_response(h, cdb[0], submitq, request_id);
+
+sync_alloc_elem_fail:
+	free_request(h, submitq->pqiq->queue_id, request_id);
+
+sync_req_id_fail:
+	put_cpu();
+	return retval;
+}
+
+#define	MAX_CDB_SIZE	16
+static int sop_get_disk_params(struct sop_device *h)
+{
+	int ret;
+	u8 cdb[MAX_CDB_SIZE];
+	dma_addr_t phy_addr;
+	void *vaddr;
+	int size, total_size;
+	u32 *data;
+
+	/* 0. Allocate memory */
+	total_size = 1024;
+	vaddr = pci_alloc_consistent(h->pdev, total_size, &phy_addr);
+	if (!vaddr)
+		return -ENOMEM;
+
+	/* 1. send TUR */
+	memset(cdb, 0, MAX_CDB_SIZE);
+	cdb[0] = TEST_UNIT_READY;
+	dev_warn(&h->pdev->dev, "Sending TUR (CDB0=0x%x)\n", cdb[0]);
+	ret = send_sync_cdb(h, cdb, 0, 0, SOP_DATA_DIR_NONE);
+	if (ret < 0)
+		goto disk_param_err;
+	/* Ignore any error return - it could be POWER ON Check Condition */
+
+	/* 2. Send Read Capacity */
+	cdb[0] = READ_CAPACITY;		/* Rest all remains 0 */
+	size = 2 * sizeof(u32);
+	data = (u32 *)vaddr;
+	dev_warn(&h->pdev->dev, "Sending RDCAP (CDB0=0x%x)\n", cdb[0]);
+	ret = send_sync_cdb(h, cdb, phy_addr, size, SOP_DATA_DIR_FROM_DEVICE);
+	if (ret != 0)
+		goto disk_param_err;
+	/* Process the Read Cap data */
+	h->capacity = be32_to_cpu(data[0]);
+	h->block_size = be32_to_cpu(data[1]);
+	dev_warn(&h->pdev->dev, "Received RDCAP size = 0x%x, block size=0x%x\n", 
+		(u32)(h->capacity), h->block_size);
+
+	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
+	return 0;
+
+disk_param_err:
+	dev_warn(&h->pdev->dev, "Error Getting Disk param (CDB0=0x%x return status 0x%x\n",
+		cdb[0], ret);
+	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
+	return ret;
 }
 
 
@@ -2136,7 +2466,6 @@ static int sop_add_disk(struct sop_device *h)
 	struct gendisk *disk;
 	struct request_queue *rq;
 
-	dev_warn(&h->pdev->dev, "sop_add_disk 1\n");
 	rq = blk_alloc_queue(GFP_KERNEL);
 	if (IS_ERR(rq))
 		return -ENOMEM;
@@ -2152,18 +2481,17 @@ static int sop_add_disk(struct sop_device *h)
 	blk_queue_make_request(rq, sop_make_request);
 	rq->queuedata = h;
 
-	dev_warn(&h->pdev->dev, "sop_add_disk 2\n");
 	disk = alloc_disk(SOP_MINORS);
 	if (!disk)
 		goto out_free_queue;
 
 	h->disk = disk;
-	dev_warn(&h->pdev->dev, "sop_add_disk 3\n");
-	blk_queue_logical_block_size(rq, 512);	/* TODO: change hardcode */
+
+	blk_queue_logical_block_size(rq, h->block_size);
 	if (h->max_hw_sectors)
 		blk_queue_max_hw_sectors(rq, h->max_hw_sectors);
 	blk_queue_max_segments(rq, MAX_SGLS);
-	/* TODO: Setup other blk queue parameters too - e.g for segment limit */
+
 	disk->major = sop_major;
 	disk->minors = SOP_MINORS;
 	disk->first_minor = SOP_MINORS * h->instance;
@@ -2383,7 +2711,8 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(ui_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
 	VERIFY_OFFSET(ui_length, 2);
-	VERIFY_OFFSET(reserved, 4);
+	VERIFY_OFFSET(response_oq, 4);
+	VERIFY_OFFSET(work_area, 6);
 	VERIFY_OFFSET(request_id, 8);
 	VERIFY_OFFSET(function_code, 10);
 	VERIFY_OFFSET(status, 11);
@@ -2424,7 +2753,8 @@ static void __attribute__((unused)) verify_structure_defs(void)
         VERIFY_OFFSET(iu_type, 0);
         VERIFY_OFFSET(compatible_features, 1);
         VERIFY_OFFSET(iu_length, 2);
-        VERIFY_OFFSET(reserved, 4);
+        VERIFY_OFFSET(response_oq, 4);
+        VERIFY_OFFSET(work_area, 6);
         VERIFY_OFFSET(request_id, 8);
         VERIFY_OFFSET(function_code, 10);
         VERIFY_OFFSET(reserved2, 11);
@@ -2438,7 +2768,8 @@ static void __attribute__((unused)) verify_structure_defs(void)
  	VERIFY_OFFSET(ui_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
 	VERIFY_OFFSET(ui_length, 2);
-	VERIFY_OFFSET(reserved, 4);
+	VERIFY_OFFSET(response_oq, 4);
+	VERIFY_OFFSET(work_area, 6);
 	VERIFY_OFFSET(request_id, 8);
 	VERIFY_OFFSET(function_code, 10);
 	VERIFY_OFFSET(status, 11);
@@ -2489,6 +2820,124 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(data_out_xferred, 28);
 	VERIFY_OFFSET(response, 32);
 	VERIFY_OFFSET(sense, 32);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct report_pqi_device_capability_iu, field) != offset)
+
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(response_oq, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(function_code, 10);
+	VERIFY_OFFSET(reserved, 11);
+	VERIFY_OFFSET(buffer_size, 44);
+	VERIFY_OFFSET(sg, 48);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct report_pqi_device_capability_response, field) != offset)
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(function_code, 10);
+	VERIFY_OFFSET(status, 11);
+	VERIFY_OFFSET(additional_status, 12);
+	VERIFY_OFFSET(reserved, 16);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct pqi_device_capabilities, field) != offset)
+	VERIFY_OFFSET(length, 0);
+	VERIFY_OFFSET(reserved, 2);
+	VERIFY_OFFSET(max_iqs, 16);
+	VERIFY_OFFSET(max_iq_elements, 18);
+	VERIFY_OFFSET(reserved2, 20);
+	VERIFY_OFFSET(max_iq_element_length, 24);
+	VERIFY_OFFSET(min_iq_element_length, 26);
+	VERIFY_OFFSET(max_oqs, 28);
+	VERIFY_OFFSET(max_oq_elements, 30);
+	VERIFY_OFFSET(reserved3, 32);
+	VERIFY_OFFSET(intr_coalescing_time_granularity, 34);
+	VERIFY_OFFSET(max_oq_element_length, 36);
+	VERIFY_OFFSET(min_oq_element_length, 38);
+	VERIFY_OFFSET(iq_alignment_exponent, 40);
+	VERIFY_OFFSET(oq_alignment_exponent, 41);
+	VERIFY_OFFSET(iq_ci_alignment_exponent, 42);
+	VERIFY_OFFSET(oq_pi_alignment_exponent, 43);
+	VERIFY_OFFSET(protocol_support_bitmask, 44);
+	VERIFY_OFFSET(admin_sgl_support_bitmask, 48);
+	VERIFY_OFFSET(reserved4, 50);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct sop_task_mgmt_iu, field) != offset)
+
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(nexus_id, 10);
+	VERIFY_OFFSET(reserved, 12);
+	VERIFY_OFFSET(lun, 16);
+	VERIFY_OFFSET(protocol_specific, 24);
+	VERIFY_OFFSET(reserved2, 26);
+	VERIFY_OFFSET(request_id_to_manage, 28);
+	VERIFY_OFFSET(task_mgmt_function, 30);
+	VERIFY_OFFSET(reserved3, 31);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct sop_task_mgmt_response, field) != offset)
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(nexus_id, 10);
+	VERIFY_OFFSET(additional_response_info, 12);
+	VERIFY_OFFSET(response_code, 15);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct report_general_iu, field) != offset)
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(reserved, 10);
+	VERIFY_OFFSET(allocation_length, 12);
+	VERIFY_OFFSET(reserved2, 16);
+	VERIFY_OFFSET(data_in, 32);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct report_general_response_iu, field) != offset)
+		VERIFY_OFFSET(reserved, 0);
+		VERIFY_OFFSET(lun_bridge_present_flags, 4);
+		VERIFY_OFFSET(reserved2, 5);
+		VERIFY_OFFSET(app_clients_present_flags, 8);
+		VERIFY_OFFSET(reserved3, 9);
+		VERIFY_OFFSET(max_incoming_iu_size, 18);
+		VERIFY_OFFSET(max_incoming_embedded_data_buffers, 20);
+		VERIFY_OFFSET(max_data_buffers, 22);
+		VERIFY_OFFSET(reserved4, 24);
+		VERIFY_OFFSET(incoming_iu_type_support_bitmask, 32);
+		VERIFY_OFFSET(vendor_specific, 64);
+		VERIFY_OFFSET(reserved5, 72);
+		VERIFY_OFFSET(queuing_layer_specific_data_len, 74);
+		VERIFY_OFFSET(incoming_sgl_support_bitmask, 76);
+		VERIFY_OFFSET(reserved6, 78);
 #undef VERIFY_OFFSET
 
 }
