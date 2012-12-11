@@ -1065,7 +1065,7 @@ static int sop_request_irqs(struct sop_device *h,
 					irq_handler_t msix_adminq_handler,
 					irq_handler_t msix_ioq_handler)
 {
-	u8 i;
+	u8 i, j;
 	int rc;
 
 	rc = request_irq(h->qinfo[0].msix_vector, msix_adminq_handler, 0,
@@ -1082,14 +1082,16 @@ static int sop_request_irqs(struct sop_device *h,
 		if (rc != 0) {
 			dev_warn(&h->pdev->dev,
 					"request_irq failed, i = %d\n", i);
-			/* FIXME release irq's 0 through i - 1 */
-			goto default_int_mode;
+			goto freeirqs;
 		}
 	}
 	sop_irq_affinity_hints(h);
 	return 0;
 
-default_int_mode:
+freeirqs:
+	free_irq(h->qinfo[0].msix_vector, &h->qinfo[0]);
+	for (j = 2; j < i; j++)
+		free_irq(h->qinfo[i].msix_vector, &h->qinfo[i]);
 	dev_warn(&h->pdev->dev, "intx mode not implemented.\n");
 	return -1;
 }
