@@ -1,5 +1,25 @@
 #ifndef _SCSI_EXPRESS_H
 #define _SCSI_EXPRESS_H
+/*
+ *    SCSI Express driver
+ *    Copyright 2012 Hewlett-Packard Development Company, L.P.
+ *
+ *    This program is free software; you can redistribute it and/or modify
+ *    it under the terms of the GNU General Public License as published by
+ *    the Free Software Foundation; version 2 of the License.
+ *
+ *    This program is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, GOOD TITLE or
+ *    NON INFRINGEMENT.  See the GNU General Public License for more details.
+ *
+ *    You should have received a copy of the GNU General Public License
+ *    along with this program; if not, write to the Free Software
+ *    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
+ *    Questions/Comments/Bugfixes to iss_storagedev@hp.com
+ *
+ */
 
 #define MAX_SGLS (1024)
 #define MAX_CMDS (256)
