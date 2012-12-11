@@ -906,7 +906,6 @@ static void complete_scsi_cmd(struct sop_device *h,
 	struct sop_cmd_response *scr;
 	u16 sense_data_len;
 	u16 response_data_len;
-	u8 xfer_result;
 	u32 data_xferred;
 
         scmd = r->scmd;
@@ -944,13 +943,13 @@ static void complete_scsi_cmd(struct sop_device *h,
 				"Unexpected bidirectional cmd with status in and out\n");
 
 		/* Calculate residual count */
-		if (scr->data_in_xfer_result) {
-			xfer_result = scr->data_in_xfer_result;
+		if (scr->data_in_xfer_result)
 			data_xferred = le32_to_cpu(scr->data_in_xferred);
-		} else {
-			xfer_result = scr->data_out_xfer_result;
-			data_xferred = le32_to_cpu(scr->data_out_xferred);
-		}
+		else
+			if (scr->data_out_xfer_result)
+				data_xferred = le32_to_cpu(scr->data_out_xferred);
+			else
+				data_xferred = r->xfer_size;
 		scsi_set_resid(scmd, r->xfer_size - data_xferred);
 
 		if (response_data_len) {
