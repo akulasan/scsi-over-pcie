@@ -1223,7 +1223,7 @@ static int sop_request_irqs(struct sop_device *h,
 freeirqs:
 	free_irq(h->qinfo[0].msix_vector, &h->qinfo[0]);
 	for (j = 2; j < i; j++)
-		free_irq(h->qinfo[i].msix_vector, &h->qinfo[i]);
+		free_irq(h->qinfo[j].msix_vector, &h->qinfo[j]);
 	dev_warn(&h->pdev->dev, "intx mode not implemented.\n");
 	return -1;
 }
