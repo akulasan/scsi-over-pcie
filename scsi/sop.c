@@ -1206,6 +1206,21 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	dev_warn(&h->pdev->dev, "wait_for_completion returned\n");
 }
 
+static void send_sop_command(struct sop_device *h, struct queue_info *submitq,
+				u16 request_id)
+{
+	struct sop_request *sopr;
+	DECLARE_COMPLETION_ONSTACK(wait);
+
+	sopr = &submitq->request[request_id & h->qid_mask];
+	memset(sopr, 0, sizeof(*sopr));
+	sopr->request_id = request_id;
+	sopr->waiting = &wait;
+	sopr->response_accumulated = 0;
+	pqi_notify_device_queue_written(submitq->pqiq);
+	wait_for_completion(&wait);
+}
+
 static void fill_get_pqi_device_capabilities(struct sop_device *h,
 			struct report_pqi_device_capability_iu *r,
 			u16 request_id, void *buffer, u32 buffersize)
@@ -1912,6 +1927,7 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 		sopr, request_id);
 #endif
 	sopr->scmd = sc;
+	sc->host_scribble = (unsigned char *) sopr;
 	sopr->waiting = NULL;
 
 	switch (sc->sc_data_direction) {
@@ -1955,22 +1971,107 @@ static int sop_change_queue_depth(struct scsi_device *sdev,
 	return 0;
 }
 
+static void fill_task_mgmt_request(struct sop_task_mgmt_iu *tm,
+		struct queue_info *replyq, u16 request_id,
+		u16 request_id_to_manage, u8 task_mgmt_function)
+{
+	memset(tm, 0, sizeof(*tm));
+	tm->iu_type = SOP_TASK_MGMT_IU;
+	tm->iu_length = cpu_to_le16(0x001C);
+	tm->queue_id = cpu_to_le16(replyq->pqiq->queue_id);
+	tm->request_id = request_id;
+	tm->nexus_id = 0;
+	tm->lun = 0;
+	tm->request_id_to_manage = request_id_to_manage;
+	tm->task_mgmt_function = task_mgmt_function;
+}
+
+static int process_task_mgmt_response(struct sop_device *h,
+			struct queue_info *submitq, u16 request_id)
+{
+	struct sop_request *sopr = &submitq->request[request_id & h->qid_mask];
+	struct sop_task_mgmt_response *tmr =
+		(struct sop_task_mgmt_response *) sopr->response;
+	u8 response_code;
+
+	if (tmr->iu_type != SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE)
+		dev_warn(&h->pdev->dev, "Unexpected IU type %hhu in %s\n",
+				tmr->iu_type, __func__);
+	response_code = tmr->response_code;
+	free_request(h, submitq->pqiq->queue_id, request_id);
+	switch (response_code) {
+	case SOP_TMF_COMPLETE:
+	case SOP_TMF_SUCCEEDED:
+	case SOP_TMF_REJECTED:
+		return SUCCESS;
+	}
+	return FAILED;
+}
+
 static int sop_abort_handler(struct scsi_cmnd *sc)
 {
 	struct sop_device *h;
+	struct sop_request *sopr_to_abort =
+			(struct sop_request *) sc->host_scribble;
+	struct queue_info *submitq, *replyq;
+	struct sop_task_mgmt_iu *abort_cmd;
+	int request_id;
 
 	h = sdev_to_hba(sc->device);
-	dev_warn(&h->pdev->dev, "sop_abort_handler called but not implemented\n");
-	return 0;
+
+	dev_warn(&h->pdev->dev, "sop_abort_handler: this code is UNTESTED.\n");
+	submitq = find_submission_queue(h);
+	replyq = find_reply_queue(h);
+	abort_cmd = pqi_alloc_elements(submitq->pqiq, 1);
+	if (IS_ERR(abort_cmd)) {
+		dev_warn(&h->pdev->dev, "%s: pqi_alloc_elements returned %ld\n",
+				__func__, PTR_ERR(abort_cmd));
+		return FAILED;
+	}
+	request_id = alloc_request(h, submitq->pqiq->queue_id);
+	if (request_id < 0) {
+		dev_warn(&h->pdev->dev, "%s: Failed to allocate request\n",
+					__func__);
+		/* don't free it, just let it be a NULL IU */
+		return FAILED;
+	}
+	fill_task_mgmt_request(abort_cmd, replyq, request_id,
+				sopr_to_abort->request_id, SOP_ABORT_TASK);
+	send_sop_command(h, submitq, request_id);
+	return process_task_mgmt_response(h, submitq, request_id);
 }
 
 static int sop_device_reset_handler(struct scsi_cmnd *sc)
 {
 	struct sop_device *h;
+	struct sop_request *sopr_to_reset =
+			(struct sop_request *) sc->host_scribble;
+	struct queue_info *submitq, *replyq;
+	struct sop_task_mgmt_iu *reset_cmd;
+	int request_id;
 
 	h = sdev_to_hba(sc->device);
-	dev_warn(&h->pdev->dev, "sop_device_reset_handler called but not implemented\n");
-	return 0;
+
+	dev_warn(&h->pdev->dev, "sop_device_reset_handler: this code is UNTESTED.\n");
+	submitq = find_submission_queue(h);
+	replyq = find_reply_queue(h);
+	reset_cmd = pqi_alloc_elements(submitq->pqiq, 1);
+	if (IS_ERR(reset_cmd)) {
+		dev_warn(&h->pdev->dev, "%s: pqi_alloc_elements returned %ld\n",
+				__func__, PTR_ERR(reset_cmd));
+		return FAILED;
+	}
+	request_id = alloc_request(h, submitq->pqiq->queue_id);
+	if (request_id < 0) {
+		dev_warn(&h->pdev->dev, "%s: Failed to allocate request\n",
+					__func__);
+		/* don't free it, just let it be a NULL IU */
+		return FAILED;
+	}
+	fill_task_mgmt_request(reset_cmd, replyq, request_id,
+				sopr_to_reset->request_id, SOP_LUN_RESET);
+	send_sop_command(h, submitq, request_id);
+	return process_task_mgmt_response(h, submitq, request_id);
 }
 
 static int sop_slave_alloc(struct scsi_device *sdev)
@@ -2245,6 +2346,38 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(protocol_support_bitmask, 44);
 	VERIFY_OFFSET(admin_sgl_support_bitmask, 48);
 	VERIFY_OFFSET(reserved4, 50);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct sop_task_mgmt_iu, field) != offset)
+
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(nexus_id, 10);
+	VERIFY_OFFSET(reserved, 12);
+	VERIFY_OFFSET(lun, 16);
+	VERIFY_OFFSET(protocol_specific, 24);
+	VERIFY_OFFSET(reserved2, 26);
+	VERIFY_OFFSET(request_id_to_manage, 28);
+	VERIFY_OFFSET(task_mgmt_function, 30);
+	VERIFY_OFFSET(reserved3, 31);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct sop_task_mgmt_response, field) != offset)
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(nexus_id, 10);
+	VERIFY_OFFSET(additional_response_info, 12);
+	VERIFY_OFFSET(response_code, 15);
 #undef VERIFY_OFFSET
 
 }

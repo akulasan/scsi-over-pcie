@@ -348,7 +348,6 @@ struct sop_limited_cmd_iu {
 #define SOP_RESPONSE_CMD_SUCCESS_IU_TYPE 0x90
 #define SOP_RESPONSE_CMD_RESPONSE_IU_TYPE 0x91
 #define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
-#define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
 
 #pragma pack(1)
 struct sop_cmd_response {
@@ -408,6 +407,62 @@ struct sop_cmd_ui {
 	u8 additional_cdb_bytes;
 	u8 cdb[16];
 	/* total size is 64 bytes, sgl follows in next IU. */
+};
+#pragma pack()
+
+#pragma pack(1)
+struct sop_task_mgmt_iu {
+	u8 iu_type;
+#define SOP_TASK_MGMT_IU	0x13
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u16 nexus_id;
+	u32 reserved;
+	u64 lun;
+	u16 protocol_specific;
+	u16 reserved2;
+	u16 request_id_to_manage;
+	u8 task_mgmt_function;
+#define SOP_ABORT_TASK 0x01
+#define SOP_ABORT_TASK_SET 0x02
+#define SOP_CLEAR_TASK_SET 0x04
+#define SOP_LUN_RESET 0x08
+#define SOP_I_T_NEXUS_RESET 0x10
+#define SOP_CLEAR_ACA 0x40
+#define SOP_QUERY_TASK 0x80
+#define SOP_QUERY_TASK_SET 0x81
+#define SOP_QUERY_ASYNC_EVENT 0x82
+	u8 reserved3;
+};
+#pragma pack()
+
+#pragma pack(1)
+struct sop_task_mgmt_response {
+	u8 iu_type;
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u16 nexus_id;
+	u8 additional_response_info[3];
+	u8 response_code;
+#define SOP_TMF_COMPLETE 0x00
+#define SOP_TMF_REJECTED 0x04
+#define SOP_TMF_FAILED 0x05
+#define SOP_TMF_SUCCEEDED 0x08
+#define SOP_INCORRECT_LUN 0x09
+#define SOP_OVERLAPPED_REQUEST_ID_ATTEMPTED 0x0A
+#define SOP_INVALID_IU_TYPE 0x20
+#define SOP_INVALID_IU_LENGTH 0x21
+#define SOP_INVALID_LENGTH_IN_IU 0x22
+#define SOP_MISALIGNED_LENGTH_IN_IU 0x23
+#define SOP_INVALID_FIELD_IN_IU 0x24
+#define SOP_IU_TOO_LONG 0x25
+
 };
 #pragma pack()
 
