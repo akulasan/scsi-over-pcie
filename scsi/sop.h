@@ -71,12 +71,17 @@ struct pqi_iq_extra_params {
 
 struct pqi_create_operational_queue_request {
 	u8 iu_type;
+#define OPERATIONAL_QUEUE_IU_TYPE 0x60
 	u8 compatible_features;
 	u16 iu_length;
 	u16 response_oq;
 	u16 work_area;
 	u16 request_id;
 	u8 function_code;
+#define CREATE_QUEUE_TO_DEVICE 0x10
+#define CREATE_QUEUE_FROM_DEVICE 0x11
+#define DELETE_QUEUE_TO_DEVICE 0x12
+#define DELETE_QUEUE_FROM_DEVICE 0x13
 	u8 reserved2;
 	u16 queue_id;
 	u8 reserved3[2];

@@ -92,7 +92,7 @@ static struct scsi_host_template sop_template = {
 	.sdev_attrs			= sop_sdev_attrs,
 	.host_attrs			= sop_host_attrs,
 #endif
-	.max_sectors			= (MAX_SGLS * 8), /* FIXME: is this correct? */
+	.max_sectors			= (MAX_SGLS * 8),
 };
 
 static pci_ers_result_t sop_pci_error_detected(struct pci_dev *dev,
@@ -1127,11 +1127,6 @@ static int alloc_request(struct sop_device *h, u8 q)
 	BUG_ON(h->qinfo[q].qdepth > MAX_CMDS);
 	BUG_ON(q > 127); /* high bit reserved for error reporting */
 
-	/* FIXME: spinlock_irqsave is too strong. access to this data
-	 * occurs only here, and in the interrupt handler, and only ever
-	 * on the same cpu, so locally disabling interrupts should be
-	 * sufficient.
-	 */
 	spin_lock_irqsave(&h->qinfo[q].qlock, flags);
         do {
                 rc = (u16) find_first_zero_bit(h->qinfo[q].request_bits,
@@ -1161,10 +1156,15 @@ static void fill_create_io_queue_request(struct sop_device *h,
 	struct pqi_device_queue *q, int to_device, u16 request_id,
 	u16 msix_vector)
 {
-	u8 function_code = to_device ? 0x10 : 0x11; /* FIXME magic */
+	u8 function_code;
+
+	if (to_device)
+		function_code = CREATE_QUEUE_TO_DEVICE;
+	else 
+		function_code = CREATE_QUEUE_FROM_DEVICE;
 
 	memset(r, 0, sizeof(*r));
-	r->iu_type = 0x60; /* FIXME, magic */
+	r->iu_type = OPERATIONAL_QUEUE_IU_TYPE;
 	r->iu_length = cpu_to_le16(0x003c);
 	r->response_oq = 0;
 	r->request_id = request_id;
@@ -1188,10 +1188,15 @@ static void fill_delete_io_queue_request(struct sop_device *h,
 	struct pqi_delete_operational_queue_request *r, u16 queue_id,
 	int to_device, u16 request_id)
 {
-	u8 function_code = to_device ? 0x12 : 0x13; /* FIXME magic */
+	u8 function_code;
+
+	if (to_device)
+		function_code = DELETE_QUEUE_TO_DEVICE;
+	else 
+		function_code = DELETE_QUEUE_FROM_DEVICE;
 
 	memset(r, 0, sizeof(*r));
-	r->iu_type = 0x60; /* FIXME, magic */
+	r->iu_type = OPERATIONAL_QUEUE_IU_TYPE;
 	r->iu_length = cpu_to_le16(0x003c);
 	r->request_id = request_id;
 	r->function_code = function_code;
