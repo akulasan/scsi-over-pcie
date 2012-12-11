@@ -403,7 +403,7 @@ static u16 pqi_peek_request_id_from_device(struct pqi_device_queue *q)
 	u8 *p;
 
 	p = q->queue_vaddr + q->unposted_index * q->element_size + 8;
-	return le16_to_cpu(*(u16 *) p);
+	return *(u16 *) p;
 }
 
 static int xmargin=8;
@@ -1139,8 +1139,7 @@ static void fill_create_io_queue_request(struct sop_device *h,
 	r->iu_type = 0x60; /* FIXME, magic */
 	r->iu_length = cpu_to_le16(0x003c);
 	r->response_oq = 0;
-	/* r->request_id = cpu_to_le16(alloc_request(h, q->queue_id)); */
-	r->request_id = cpu_to_le16(request_id);
+	r->request_id = request_id;
 	r->function_code = function_code;
 	r->queue_id = cpu_to_le16(q->queue_id);
 	r->element_array_addr = cpu_to_le64(q->dhandle);
@@ -1169,7 +1168,7 @@ static void fill_delete_io_queue_request(struct sop_device *h,
 	memset(r, 0, sizeof(*r));
 	r->iu_type = 0x60; /* FIXME, magic */
 	r->iu_length = cpu_to_le16(0x003c);
-	r->request_id = cpu_to_le16(request_id);
+	r->request_id = request_id;
 	r->function_code = function_code;
 	r->queue_id = cpu_to_le16(queue_id);
 }
@@ -1205,7 +1204,7 @@ static void fill_get_pqi_device_capabilities(struct sop_device *h,
 	r->iu_length = cpu_to_le16(0x003C);
 	r->response_oq = cpu_to_le16(response_queue->queue_id);
 	r->work_area = 0;
-	r->request_id = cpu_to_le16(request_id);
+	r->request_id = request_id;
 	r->function_code = 0;
 	r->buffer_size = cpu_to_le32(buffersize);
 
@@ -1883,7 +1882,7 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	r->compatible_features = 0;
 	r->queue_id = cpu_to_le16(replyq->pqiq->queue_id);
 	r->work_area = 0;
-	r->request_id = cpu_to_le16(request_id);
+	r->request_id = request_id;
 	ser = &submitq->request[request_id & h->qid_mask];
 	ser->xfer_size = 0;
 #if 0
