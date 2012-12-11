@@ -527,7 +527,7 @@ static int wait_for_admin_command_ack(struct sop_device *h)
 	return -1;
 }
 
-static int __devinit scsi_express_create_admin_queues(struct sop_device *h)
+static int __devinit sop_create_admin_queues(struct sop_device *h)
 {
 	u64 paf, pqicap, admin_iq_pi_offset, admin_oq_ci_offset;
 	u32 status, admin_queue_param;
@@ -726,7 +726,7 @@ bailout:
 	return -1;	
 }
 
-static int scsi_express_delete_admin_queues(struct sop_device *h)
+static int sop_delete_admin_queues(struct sop_device *h)
 {
 	u64 paf;
 	u32 status;
@@ -766,7 +766,7 @@ static int scsi_express_delete_admin_queues(struct sop_device *h)
 	return -1;
 }
 
-static int scsi_express_setup_msix(struct sop_device *h)
+static int sop_setup_msix(struct sop_device *h)
 {
 	int i, err;
 
@@ -811,7 +811,7 @@ default_int_mode:
 }
 
 /* function to determine whether a complete response has been accumulated */
-static int scsi_express_response_accumulated(struct sop_request *r)
+static int sop_response_accumulated(struct sop_request *r)
 {
 	u16 iu_length;
 
@@ -898,7 +898,7 @@ static void complete_scsi_cmd(struct sop_device *h,
 	}
 }
 
-irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
+irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 {
 	u16 request_id;
 	u8 iu_type;
@@ -936,7 +936,7 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 		}
 		r->response_accumulated += q->pqiq->element_size;
 		/* dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated); */
-		if (scsi_express_response_accumulated(r)) {
+		if (sop_response_accumulated(r)) {
 			/* dev_warn(&h->pdev->dev, "accumlated response\n"); */
 			q->pqiq->request = NULL;
 			wmb();
@@ -960,7 +960,7 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 	return IRQ_HANDLED;
 }
 
-irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
+irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 {
 	struct queue_info *q = devid;
 	u8 iu_type;
@@ -1002,7 +1002,7 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 		}
 		r->response_accumulated += h->admin_q_from_dev.element_size;
 		dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated);
-		if (scsi_express_response_accumulated(r)) {
+		if (sop_response_accumulated(r)) {
 			dev_warn(&h->pdev->dev, "accumlated response\n");
 			h->admin_q_from_dev.request = NULL;
 			wmb();
@@ -1014,7 +1014,7 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 	return IRQ_HANDLED;
 }
 
-static void scsi_express_irq_affinity_hints(struct sop_device *h)
+static void sop_irq_affinity_hints(struct sop_device *h)
 {
 	int i, cpu;
 
@@ -1056,7 +1056,7 @@ static int sop_request_irqs(struct sop_device *h,
 			goto default_int_mode;
 		}
 	}
-	scsi_express_irq_affinity_hints(h);
+	sop_irq_affinity_hints(h);
 	return 0;
 
 default_int_mode:
@@ -1064,7 +1064,7 @@ default_int_mode:
 	return -1;
 }
 
-static void scsi_express_free_irqs(struct sop_device *h)
+static void sop_free_irqs(struct sop_device *h)
 {
 	int i;
 
@@ -1078,10 +1078,10 @@ static void scsi_express_free_irqs(struct sop_device *h)
 	}
 }
 
-static void scsi_express_free_irqs_and_disable_msix(
+static void sop_free_irqs_and_disable_msix(
 		struct sop_device *h)
 {
-	scsi_express_free_irqs(h);
+	sop_free_irqs(h);
 #ifdef CONFIG_PCI_MSI
 	if (h->intr_mode == INTR_MODE_MSIX && h->pdev->msix_enabled)
 		pci_disable_msix(h->pdev);
@@ -1182,7 +1182,7 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	dev_warn(&h->pdev->dev, "wait_for_completion returned\n");
 }
 
-static int scsi_express_setup_io_queues(struct sop_device *h)
+static int sop_setup_io_queues(struct sop_device *h)
 {
 
 	int i, niqs, noqs;
@@ -1301,7 +1301,7 @@ bail_out:
 	return -1;
 }
 
-static void scsi_express_free_io_queues(struct sop_device *h)
+static void sop_free_io_queues(struct sop_device *h)
 {
 	size_t total_size, n_q_elements, element_size;
 	int remainder;
@@ -1329,7 +1329,7 @@ static void scsi_express_free_io_queues(struct sop_device *h)
 	}
 }
 
-static int scsi_express_delete_io_queues(struct sop_device *h)
+static int sop_delete_io_queues(struct sop_device *h)
 {
 	int i;
 	struct pqi_delete_operational_queue_request *r;
@@ -1372,11 +1372,11 @@ static int scsi_express_delete_io_queues(struct sop_device *h)
 			dev_warn(&h->pdev->dev, "Failed to tear down IQ... now what?\n");
 		free_request(h, aq->queue_id, request_id);
 	}
-	scsi_express_free_io_queues(h);
+	sop_free_io_queues(h);
 	return 0;
 }
 
-static int scsi_express_set_dma_mask(struct pci_dev * pdev)
+static int sop_set_dma_mask(struct pci_dev * pdev)
 {
 	int rc;
 
@@ -1389,12 +1389,12 @@ static int scsi_express_set_dma_mask(struct pci_dev * pdev)
 	return rc;
 }
 
-static int scsi_express_register_host(struct sop_device *h)
+static int sop_register_host(struct sop_device *h)
 {
 	struct Scsi_Host *sh;
 	int rc;
 
-	dev_warn(&h->pdev->dev, "zzz scsi_express_register_host 1\n");
+	dev_warn(&h->pdev->dev, "zzz sop_register_host 1\n");
 
 	sh = scsi_host_alloc(&sop_template, sizeof(h));
 	if (!sh)
@@ -1412,13 +1412,13 @@ static int scsi_express_register_host(struct sop_device *h)
 	sh->hostdata[0] = (unsigned long) h;
 	sh->irq = h->qinfo[0].msix_vector;
 	sh->unique_id = sh->irq; /* really? */
-	dev_warn(&h->pdev->dev, "zzz scsi_express_register_host 2\n");
+	dev_warn(&h->pdev->dev, "zzz sop_register_host 2\n");
 	rc = scsi_add_host(sh, &h->pdev->dev);
 	if (rc)
 		goto add_host_failed;
-	dev_warn(&h->pdev->dev, "zzz scsi_express_register_host 3\n");
+	dev_warn(&h->pdev->dev, "zzz sop_register_host 3\n");
 	scsi_scan_host(sh);
-	dev_warn(&h->pdev->dev, "zzz scsi_express_register_host 4\n");
+	dev_warn(&h->pdev->dev, "zzz sop_register_host 4\n");
 	return 0;
 
 add_host_failed:
@@ -1430,7 +1430,7 @@ bail:
 	return -ENOMEM;
 }
 
-static int __devinit scsi_express_probe(struct pci_dev *pdev,
+static int __devinit sop_probe(struct pci_dev *pdev,
 			const struct pci_device_id *pci_id)
 {
 	struct sop_device *h;
@@ -1451,7 +1451,7 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 		h->qinfo[i].h = h;
 	}
 	controller_num++;
-	sprintf(h->devname, "scsi_express-%d\n", h->ctlr);
+	sprintf(h->devname, "sop-%d\n", h->ctlr);
 
 	h->pdev = pdev;
 	pci_set_drvdata(pdev, h);
@@ -1480,7 +1480,7 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 		goto bail;
 	}
 
-	if (scsi_express_set_dma_mask(pdev)) {
+	if (sop_set_dma_mask(pdev)) {
 		dev_err(&pdev->dev, "failed to set DMA mask\n");
 		goto bail;
 	}
@@ -1492,25 +1492,25 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 	}
 	dev_warn(&pdev->dev, "device does appear to be a PQI device\n");
 
-	rc = scsi_express_setup_msix(h);
+	rc = sop_setup_msix(h);
 	if (rc != 0)
 		goto bail;
 
-	rc = scsi_express_create_admin_queues(h);
+	rc = sop_create_admin_queues(h);
 	if (rc)
 		goto bail;
 
-	rc = sop_request_irqs(h, scsi_express_adminq_msix_handler,
-					scsi_express_ioq_msix_handler);
+	rc = sop_request_irqs(h, sop_adminq_msix_handler,
+					sop_ioq_msix_handler);
 	if (rc != 0)
 		goto bail;
 
 	dev_warn(&h->pdev->dev, "Setting up i/o queues\n");
-	rc = scsi_express_setup_io_queues(h);
+	rc = sop_setup_io_queues(h);
 	if (rc)
 		goto bail;
 	dev_warn(&h->pdev->dev, "Finished Setting up i/o queues, rc = %d\n", rc);
-	rc = scsi_express_register_host(h);
+	rc = sop_register_host(h);
 	if (rc)
 		goto bail;
 
@@ -1522,27 +1522,27 @@ bail:
 	return -1;
 }
 
-static int scsi_express_suspend(__attribute__((unused)) struct pci_dev *pdev,
+static int sop_suspend(__attribute__((unused)) struct pci_dev *pdev,
 				__attribute__((unused)) pm_message_t state)
 {
 	return -ENOSYS;
 }
 
-static int scsi_express_resume(__attribute__((unused)) struct pci_dev *pdev)
+static int sop_resume(__attribute__((unused)) struct pci_dev *pdev)
 {
 	return -ENOSYS;
 }
 
-static void __devexit scsi_express_remove(struct pci_dev *pdev)
+static void __devexit sop_remove(struct pci_dev *pdev)
 {
 	struct sop_device *h;
 
 	h = pci_get_drvdata(pdev);
 	dev_warn(&pdev->dev, "remove called.\n");
-	scsi_express_delete_io_queues(h);
-	scsi_express_free_irqs_and_disable_msix(h);
+	sop_delete_io_queues(h);
+	sop_free_irqs_and_disable_msix(h);
 	dev_warn(&pdev->dev, "irqs freed, msix disabled\n");
-	scsi_express_delete_admin_queues(h);
+	sop_delete_admin_queues(h);
 	if (h && h->pqireg)
 		iounmap(h->pqireg);
 	pci_disable_device(pdev);
@@ -1551,29 +1551,29 @@ static void __devexit scsi_express_remove(struct pci_dev *pdev)
 	kfree(h);
 }
 
-static void scsi_express_shutdown(struct pci_dev *pdev)
+static void sop_shutdown(struct pci_dev *pdev)
 {
 	dev_warn(&pdev->dev, "shutdown called.\n");
 }
 
-static struct pci_driver scsi_express_pci_driver = {
+static struct pci_driver sop_pci_driver = {
 	.name = SCSI_EXPRESS,
-	.probe = scsi_express_probe,
-	.remove = __devexit_p(scsi_express_remove),
+	.probe = sop_probe,
+	.remove = __devexit_p(sop_remove),
 	.id_table = sop_id_table,
-	.shutdown = scsi_express_shutdown,
-	.suspend = scsi_express_suspend,
-	.resume = scsi_express_resume,
+	.shutdown = sop_shutdown,
+	.suspend = sop_suspend,
+	.resume = sop_resume,
 };
 
-static int __init scsi_express_init(void)
+static int __init sop_init(void)
 {
-	return pci_register_driver(&scsi_express_pci_driver);
+	return pci_register_driver(&sop_pci_driver);
 }
 
-static void __exit scsi_express_exit(void)
+static void __exit sop_exit(void)
 {
-	pci_unregister_driver(&scsi_express_pci_driver);
+	pci_unregister_driver(&sop_pci_driver);
 }
 
 static inline struct sop_device *sdev_to_hba(struct scsi_device *sdev)
@@ -1641,7 +1641,7 @@ static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
 	}
 }
 
-static int scsi_express_scatter_gather(struct sop_device *h,
+static int sop_scatter_gather(struct sop_device *h,
 			struct queue_info *q, 
 			struct sop_limited_cmd_iu *r,
 			struct scsi_cmnd *sc, u32 *xfer_size)
@@ -1754,7 +1754,7 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	}
 	memset(r->cdb, 0, 16);
 	memcpy(r->cdb, sc->cmnd, sc->cmd_len);
-	if (scsi_express_scatter_gather(h, submitq, r, sc, &ser->xfer_size)) {
+	if (sop_scatter_gather(h, submitq, r, sc, &ser->xfer_size)) {
 		/* FIXME:  What to do here?  We already allocated a
 		 * slot in the submission ring buffer.  Either make
 		 * it a NULL IU, or unallocate it somehow while avoiding races.
@@ -1977,6 +1977,6 @@ static void __attribute__((unused)) verify_structure_defs(void)
 
 }
 
-module_init(scsi_express_init);
-module_exit(scsi_express_exit);
+module_init(sop_init);
+module_exit(sop_exit);
 
