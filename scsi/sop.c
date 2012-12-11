@@ -1638,10 +1638,12 @@ static int sop_init_time_host_reset(struct sop_device *h)
 	do {
 		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
 				ADMIN_SLEEP_INTERVAL_MAX);
-		if (safe_readl(sig, &reset_register, &h->pqireg->reset)) {
-			dev_warn(&h->pdev->dev, "Failed to read reset register.\n");
-			return -1;
-		}
+		/* 
+		 * Not using safe_readl here because while in reset we can
+		 * get -1 and be unable to read the signature, and this
+		 * is normal (I think).
+		 */
+		reset_register = readl(&h->pqireg->reset);
 		if (reset_register != prev)
 			dev_warn(&h->pdev->dev, "Reset register is: 0x%08x\n",
 				reset_register);
