@@ -1413,6 +1413,7 @@ static int sop_register_host(struct sop_device *h)
 	sh->irq = h->qinfo[0].msix_vector;
 	sh->unique_id = sh->irq; /* really? */
 	dev_warn(&h->pdev->dev, "zzz sop_register_host 2\n");
+	h->scsi_host = sh;
 	rc = scsi_add_host(sh, &h->pdev->dev);
 	if (rc)
 		goto add_host_failed;
@@ -1538,6 +1539,9 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	struct sop_device *h;
 
 	h = pci_get_drvdata(pdev);
+        scsi_remove_host(h->scsi_host);
+        scsi_host_put(h->scsi_host);
+        h->scsi_host = NULL;
 	dev_warn(&pdev->dev, "remove called.\n");
 	sop_delete_io_queues(h);
 	sop_free_irqs_and_disable_msix(h);

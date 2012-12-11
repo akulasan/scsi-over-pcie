@@ -223,6 +223,7 @@ struct sop_device {
 	struct Scsi_Host *sh;
 	dma_addr_t iq_dhandle, oq_dhandle;
 	void *iq_vaddr, *oq_vaddr;
+	struct Scsi_Host *scsi_host;
 };
 
 #pragma pack()
