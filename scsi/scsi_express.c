@@ -292,17 +292,22 @@ static void pqi_device_queue_init(struct pqi_device_queue *q,
 static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
 				int nelements)
 {
+	u32 qciw;
 	u16 qci;
 	u32 nfree;
 
-	/* FIXME: shouldn't have to read this every time
-	 * should be able to cache it */
-	qci = readw(q->ci);
+	qciw = readw(q->ci);
+	qci = le16_to_cpu(*(u16 *) &qciw);
 
 	if (q->unposted_index > qci)
-		nfree = q->nelements - q->unposted_index + qci;
-	else
+		nfree = q->nelements - q->unposted_index + qci - 1;
+	else if (q->unposted_index < qci)
 		nfree = qci - q->unposted_index - 1;
+	else
+		nfree = q->nelements;
+	printk(KERN_WARNING "Qid %d: upi = %u, qci = %u, nfree = %u, %s\n",
+		q->queue_id, q->unposted_index, qci, nfree,
+		nfree < nelements ? "full" : "not full");
 	return (nfree < nelements);
 }
 
@@ -320,8 +325,10 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 {
 	void *p;
 
-	if (pqi_to_device_queue_is_full(q, nelements))
+	if (pqi_to_device_queue_is_full(q, nelements)) {
+		printk(KERN_WARNING "pqi device queue %d is full!\n", q->queue_id);
 		return ERR_PTR(-ENOMEM);
+	}
 
 	/* If the requested number of elements would wrap around the
 	 * end of the ring buffer, insert NULL IUs to the end of the
@@ -481,6 +488,8 @@ static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 	spin_lock_irqsave(&q->index_lock, flags);
 	q->local_pi = q->unposted_index;
 	writew(q->unposted_index, q->pi);
+	printk(KERN_WARNING "notifying write to qid %d to %u, pi = %p\n",
+			q->queue_id, q->unposted_index, q->pi);
 	spin_unlock_irqrestore(&q->index_lock, flags);
 }
 
@@ -1538,6 +1547,8 @@ static inline struct scsi_express_device *sdev_to_hba(struct scsi_device *sdev)
 static struct queue_info *find_submission_queue(struct scsi_express_device *h)
 {
 	int q = h->noqs + 1 + (smp_processor_id() % (h->niqs - 1));
+	dev_warn(&h->pdev->dev, "find_submission_queue: returns %d %p\n",
+			q, &h->qinfo[q]);
 
 	return &h->qinfo[q];
 }
