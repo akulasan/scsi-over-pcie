@@ -475,9 +475,6 @@ static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 	/*
 	 * Notify the device that the host has produced data for the device
 	 */
-	printk(KERN_WARNING "pqi_notify_device_queue_written, q->unposted index = %hu, q->pi = %p\n",
-				q->unposted_index, q->pi);
-	/* print_unsubmitted_commands(q); */
 	spin_lock_irqsave(&q->index_lock, flags);
 	q->local_pi = q->unposted_index;
 	writew(q->unposted_index, q->pi);
@@ -807,8 +804,6 @@ static int scsi_express_response_accumulated(struct scsi_express_request *r)
 	if (r->response_accumulated == 0)
 		return 0;
 	iu_length = le16_to_cpu(*(u16 *) &r->response[2]);
-	printk(KERN_WARNING "r->response_accumulated = %hu, iu_length = %hu\n", 
-			r->response_accumulated, iu_length);
 	return (r->response_accumulated >= iu_length);
 }
 
@@ -877,8 +872,6 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 			request_id = pqi_peek_request_id_from_device(q->pqiq);
 			sq = request_id >> 8; /* queue that request was submitted on */
 			r = q->pqiq->request = &h->qinfo[sq].request[request_id & 0x00ff];
-			dev_warn(&h->pdev->dev, "new completion, type=%hhu, id=%hu, cq=%hhu, sq=%hhu, r = %p\n",
-					iu_type, request_id, q->pqiq->queue_id, sq, r);
 			r->request_id = request_id;
 			r->response_accumulated = 0;
 		}
@@ -1505,8 +1498,6 @@ static inline struct scsi_express_device *sdev_to_hba(struct scsi_device *sdev)
 static struct queue_info *find_submission_queue(struct scsi_express_device *h)
 {
 	/* FIXME: should return iq for this numa node not just the first iq */
-	dev_warn(&h->pdev->dev, "h->noqs = %d, queue to device = %d\n",
-				h->noqs, h->noqs + 1);
 	if (h->noqs + 1 != 8)
 		return &h->qinfo[8];
 	return &h->qinfo[h->noqs + 1];
@@ -1603,7 +1594,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
         void (*done)(struct scsi_cmnd *))
 {
 	struct scsi_express_device *h;
-	struct scsi_device *sdev = sc->device;
+	/* struct scsi_device *sdev = sc->device; */
 	struct queue_info *q;
 	struct sop_limited_cmd_iu *r;
 	struct scsi_express_request *ser;
@@ -1643,6 +1634,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	r->request_id = request_id;
 	r->xfer_size = 0;
 	ser = &q->request[request_id & 0x0ff];
+#if 0
 	dev_warn(&h->pdev->dev, "h%db%dt%dl%d: "
 		"CDB = 0x%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x ser = %p, rid = %hu\n",
 		sdev->host->host_no, sdev_channel(sc->device), sdev_id(sc->device), sdev->lun,
@@ -1651,7 +1643,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 		sc->cmnd[8], sc->cmnd[9], sc->cmnd[10], sc->cmnd[11],
 		sc->cmnd[12], sc->cmnd[13], sc->cmnd[14], sc->cmnd[15],
 		ser, request_id);
-
+#endif
 	ser->scmd = sc;
 	ser->waiting = NULL;
 
