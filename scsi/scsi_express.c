@@ -1589,6 +1589,16 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 		sc->cmnd[4], sc->cmnd[5], sc->cmnd[6], sc->cmnd[7],
 		sc->cmnd[8], sc->cmnd[9], sc->cmnd[10], sc->cmnd[11],
 		sc->cmnd[12], sc->cmnd[13], sc->cmnd[14], sc->cmnd[15]);
+	dev_warn(&h->pdev->dev, "device = bus %d, target %d, lun %d\n",
+		sc->device->channel, sc->device->id, sc->device->lun);
+
+	/* reject io to devices other than b0t0l0 */
+	if (sc->device->channel != 0 || sc->device->id != 0 || 
+		sc->device->lun != 0) {
+                sc->result = DID_NO_CONNECT << 16;
+                done(sc);
+                return 0;
+	}
 
 	q = find_submission_queue(h);
 	if (!q)
