@@ -3,19 +3,20 @@
 /*
  *    SCSI Express driver
  *    Copyright 2012 Hewlett-Packard Development Company, L.P.
+ *    Copyright 2012 SanDisk Inc.
  *
- *    This program is free software; you can redistribute it and/or modify
- *    it under the terms of the GNU General Public License as published by
- *    the Free Software Foundation; version 2 of the License.
+ *    This program is licensed under the GNU General Public License
+ *    version 2
  *
- *    This program is distributed in the hope that it will be useful,
- *    but WITHOUT ANY WARRANTY; without even the implied warranty of
- *    MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, GOOD TITLE or
- *    NON INFRINGEMENT.  See the GNU General Public License for more details.
+ *    This program is distributed "as is" and WITHOUT ANY WARRANTY
+ *    of any kind whatsoever, including without limitation the implied
+ *    warranty of MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+ *    Please see the GNU General Public License v.2 at
+ *    http://www.gnu.org/licenses/licenses.en.html for more details.
  *
  *    You should have received a copy of the GNU General Public License
  *    along with this program; if not, write to the Free Software
- *    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307, USA.
  *
  *    Questions/Comments/Bugfixes to iss_storagedev@hp.com
  *
