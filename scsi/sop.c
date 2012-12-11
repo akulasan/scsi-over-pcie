@@ -415,30 +415,32 @@ static void print_bytes(unsigned char *c, int len, int hex, int ascii)
 	int i;
 	unsigned char *x;
 
-	if (hex)
-	{
+	if (hex) {
 		x = c;
-		for (i=0;i<len;i++)
-		{
-			if ((i % xmargin) == 0 && i>0) printk("\n");
-			if ((i % xmargin) == 0) printk("0x%04x:", i);
-			printk(" %02x", *x);
+		for (i = 0; i < len; i++) {
+			if ((i % xmargin) == 0 && i > 0)
+				pr_warn("\n");
+			if ((i % xmargin) == 0)
+				pr_warn("0x%04x:", i);
+			pr_warn(" %02x", *x);
 			x++;
 		}
-		printk("\n");
+		pr_warn("\n");
 	}
-	if (ascii)
-	{
+	if (ascii) {
 		x = c;
-		for (i=0;i<len;i++)
-		{
-			if ((i % amargin) == 0 && i>0) printk("\n");
-			if ((i % amargin) == 0) printk("0x%04x:", i);
-			if (*x > 26 && *x < 128) printk("%c", *x);
-			else printk(".");
+		for (i = 0; i < len; i++) {
+			if ((i % amargin) == 0 && i > 0)
+				pr_warn("\n");
+			if ((i % amargin) == 0)
+				pr_warn("0x%04x:", i);
+			if (*x > 26 && *x < 128)
+				pr_warn("%c", *x);
+			else
+				pr_warn(".");
 			x++;
 		}
-		printk("\n");
+		pr_warn("\n");
 	}
 }
 
