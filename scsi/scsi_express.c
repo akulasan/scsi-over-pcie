@@ -840,10 +840,14 @@ static void complete_scsi_cmd(struct scsi_express_device *h,
 		break;
 	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
+		scmd->result |= (DID_ERROR << 16);
 		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
+                scmd->scsi_done(scmd);
 		break;
 	default:
+		scmd->result |= (DID_ERROR << 16);
 		dev_warn(&h->pdev->dev, "got UNKNOWN response type...\n");
+                scmd->scsi_done(scmd);
 		break;
 	}
 }
