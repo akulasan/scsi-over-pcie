@@ -318,10 +318,8 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 {
 	void *p;
 
-	printk(KERN_WARNING "pqi_alloc_elements 1\n");
 	if (pqi_to_device_queue_is_full(q, nelements))
 		return ERR_PTR(-ENOMEM);
-	printk(KERN_WARNING "pqi_alloc_elements 2\n");
 
 	/* If the requested number of elements would wrap around the
 	 * end of the ring buffer, insert NULL IUs to the end of the
@@ -330,20 +328,19 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 	 */
 	if (q->nelements - q->unposted_index < nelements) {
 		int extra_elements = q->nelements - q->unposted_index;
-		printk(KERN_WARNING "pqi_alloc_elements 3\n");
-		if (pqi_to_device_queue_is_full(q, nelements + extra_elements))
+		if (pqi_to_device_queue_is_full(q, nelements + extra_elements)) {
+			printk(KERN_WARNING "pqi_alloc_elements, device queue is full!\n");
+			printk(KERN_WARNING "q->nelements = %d, q->unposted_index = %hu, extra_elements = %d\n",
+					q->nelements, q->unposted_index, extra_elements);
 			return ERR_PTR(-ENOMEM);
+		}
 		p = q->queue_vaddr + q->unposted_index * q->element_size;
 		memset(p, 0, (q->nelements - q->unposted_index) *
 						q->element_size);
 		q->unposted_index = 0;
 	}
-	printk(KERN_WARNING "pqi_alloc_elements 4, vaddr = %p, ui=%hu\n",
-			q->queue_vaddr, q->unposted_index);
 	p = q->queue_vaddr + q->unposted_index * q->element_size;
 	q->unposted_index = (q->unposted_index + nelements) % q->nelements;
-	printk(KERN_WARNING "pqi_alloc_elements 5, returning %p, ui = %hu\n",
-					p, q->unposted_index);
 	return p;
 }
 
@@ -833,21 +830,22 @@ static void complete_scsi_cmd(struct scsi_express_device *h,
 
 	free_request(h, r->request_id >> 8, r->request_id);
 
-	dev_warn(&h->pdev->dev, "Response IU type is 0x%02x\n", r->response[0]);
+	/* dev_warn(&h->pdev->dev, "Response IU type is 0x%02x\n", r->response[0]); */
 	switch (r->response[0]) {
 	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
+		dev_warn(&h->pdev->dev, "Completing request id %hu\n", r->request_id);
                 scmd->scsi_done(scmd);
 		break;
 	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 		scmd->result |= (DID_ERROR << 16);
 		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
-                scmd->scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		break;
 	default:
 		scmd->result |= (DID_ERROR << 16);
 		dev_warn(&h->pdev->dev, "got UNKNOWN response type...\n");
-                scmd->scsi_done(scmd);
+		scmd->scsi_done(scmd);
 		break;
 	}
 }
@@ -861,14 +859,14 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 	struct queue_info *q = devid;
 	struct scsi_express_device *h = q->h;
 
-	printk(KERN_WARNING "Got ioq interrupt, q = %p (%d) vector = %d\n",
+	printk(KERN_WARNING "=========> Got ioq interrupt, q = %p (%d) vector = %d\n",
 			q, q->pqiq->queue_id, q->msix_vector);
 
 	do {
 		struct scsi_express_request *r = q->pqiq->request;
 
 		if (pqi_from_device_queue_is_empty(q->pqiq)) {
-			dev_warn(&h->pdev->dev, "interrupt, ioq %d is empty\n",
+			dev_warn(&h->pdev->dev, "==== interrupt, ioq %d is empty ====\n",
 					q->pqiq->queue_id);
 			break;
 		}
@@ -878,19 +876,16 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 			iu_type = pqi_peek_ui_type_from_device(q->pqiq);
 			request_id = pqi_peek_request_id_from_device(q->pqiq);
 			sq = request_id >> 8; /* queue that request was submitted on */
-			dev_warn(&h->pdev->dev, "new io completion, iu type=%hhu, id=%hu, cq=%hhu, sq=%hhu\n",
-					iu_type, request_id, q->pqiq->queue_id, sq);
 			r = q->pqiq->request = &h->qinfo[sq].request[request_id & 0x00ff];
-			dev_warn(&h->pdev->dev, "completion request is %p\n", r);
+			dev_warn(&h->pdev->dev, "new completion, type=%hhu, id=%hu, cq=%hhu, sq=%hhu, r = %p\n",
+					iu_type, request_id, q->pqiq->queue_id, sq, r);
 			r->request_id = request_id;
-			dev_warn(&h->pdev->dev, "io intr: r = %p\n", r);
 			r->response_accumulated = 0;
 		}
 		rc = pqi_dequeue_from_device(q->pqiq,
 				&r->response[r->response_accumulated]); 
-		dev_warn(&h->pdev->dev, "dequeued from q %p\n", q);
 		if (rc) { /* queue is empty */
-			dev_warn(&h->pdev->dev, "io OQ %hhu is empty\n", q->pqiq->queue_id);
+			dev_warn(&h->pdev->dev, "=-=-=- io OQ %hhu is empty\n", q->pqiq->queue_id);
 			return IRQ_HANDLED;
 		}
 		r->response_accumulated += q->pqiq->element_size;
@@ -1622,14 +1617,6 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
                 return 0;
 	}
 
-	dev_warn(&h->pdev->dev, "h%db%dt%dl%d: "
-		"CDB = 0x%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-		sdev->host->host_no, sdev_channel(sc->device), sdev_id(sc->device), sdev->lun,
-		sc->cmnd[0], sc->cmnd[1], sc->cmnd[2], sc->cmnd[3],
-		sc->cmnd[4], sc->cmnd[5], sc->cmnd[6], sc->cmnd[7],
-		sc->cmnd[8], sc->cmnd[9], sc->cmnd[10], sc->cmnd[11],
-		sc->cmnd[12], sc->cmnd[13], sc->cmnd[14], sc->cmnd[15]);
-
 	q = find_submission_queue(h);
 	if (!q)
 		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
@@ -1651,7 +1638,15 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	r->request_id = request_id;
 	r->xfer_size = 0;
 	ser = &q->request[request_id & 0x0ff];
-	dev_warn(&h->pdev->dev, "Submission request is %p, request_id = %hu\n", ser, request_id);
+	dev_warn(&h->pdev->dev, "h%db%dt%dl%d: "
+		"CDB = 0x%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x ser = %p, rid = %hu\n",
+		sdev->host->host_no, sdev_channel(sc->device), sdev_id(sc->device), sdev->lun,
+		sc->cmnd[0], sc->cmnd[1], sc->cmnd[2], sc->cmnd[3],
+		sc->cmnd[4], sc->cmnd[5], sc->cmnd[6], sc->cmnd[7],
+		sc->cmnd[8], sc->cmnd[9], sc->cmnd[10], sc->cmnd[11],
+		sc->cmnd[12], sc->cmnd[13], sc->cmnd[14], sc->cmnd[15],
+		ser, request_id);
+
 	ser->scmd = sc;
 	ser->waiting = NULL;
 
@@ -1715,17 +1710,17 @@ static int scsi_express_device_reset_handler(struct scsi_cmnd *sc)
 
 static int scsi_express_slave_alloc(struct scsi_device *sdev)
 {
-	struct scsi_express_device *h = sdev_to_hba(sdev);
+	/* struct scsi_express_device *h = sdev_to_hba(sdev); */
 
-	dev_warn(&h->pdev->dev, "scsi_express_slave_alloc called but not implemented\n");
+	/* dev_warn(&h->pdev->dev, "scsi_express_slave_alloc called but not implemented\n"); */
 	return 0;
 }
 
 static void scsi_express_slave_destroy(struct scsi_device *sdev)
 {
-	struct scsi_express_device *h = sdev_to_hba(sdev);
+	/* struct scsi_express_device *h = sdev_to_hba(sdev); */
 
-	dev_warn(&h->pdev->dev, "scsi_express_slave_destroy called but not implemented\n");
+	/* dev_warn(&h->pdev->dev, "scsi_express_slave_destroy called but not implemented\n"); */
 	return;
 }
 
