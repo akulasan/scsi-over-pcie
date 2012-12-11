@@ -774,28 +774,23 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 	h = kzalloc(sizeof(*h), GFP_KERNEL);
 	if (!h)
 		return -ENOMEM;
-	dev_warn(&pdev->dev, SCSI_EXPRESS " checkpoint 1\n");
 
 	h->ctlr = controller_num;
 	spin_lock_init(&h->id_lock);
 	controller_num++;
 	sprintf(h->devname, "scsi_express-%d\n", h->ctlr);
 
-	dev_warn(&pdev->dev, SCSI_EXPRESS " checkpoint 2\n");
 	h->pdev = pdev;
 	pci_set_drvdata(pdev, h);
 
-	dev_warn(&pdev->dev, SCSI_EXPRESS " checkpoint 3\n");
 	rc = pci_enable_device(pdev);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "unable to enable PCI device\n");
 		return rc;
 	}
-	dev_warn(&pdev->dev, SCSI_EXPRESS " checkpoint 4\n");
 
 	/* Enable bus mastering (pci_disable_device may disable this) */
 	pci_set_master(h->pdev);
-	dev_warn(&pdev->dev, SCSI_EXPRESS " checkpoint 5\n");
 
 	rc = pci_request_regions(h->pdev, SCSI_EXPRESS);
 	if (rc) {
@@ -803,23 +798,19 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 			"cannot obtain PCI resources, aborting\n");
 		return rc;
 	}
-	dev_warn(&pdev->dev, SCSI_EXPRESS " checkpoint 6\n");
 
 	h->pqireg = pci_ioremap_bar(pdev, 0);
 	if (!h->pqireg) {
 		rc = -ENOMEM;
 		goto bail;
 	}
-	dev_warn(&pdev->dev, SCSI_EXPRESS " checkpoint 7\n");
 
 	if (scsi_express_set_dma_mask(pdev)) {
 		dev_err(&pdev->dev, "failed to set DMA mask\n");
 		goto bail;
 	}
-	dev_warn(&pdev->dev, SCSI_EXPRESS " checkpoint 8\n");
 
 	signature = readq(&h->pqireg->signature);
-	dev_warn(&pdev->dev, SCSI_EXPRESS " checkpoint 9\n");
 	if (memcmp("PQI DREG", &signature, sizeof(signature)) != 0) {
 		dev_warn(&pdev->dev, "device does not appear to be a PQI device\n");
 		goto bail;
