@@ -618,6 +618,17 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 	return IRQ_HANDLED;
 }
 
+static void scsi_express_irq_affinity_hints(struct scsi_express_device *h)
+{
+	int i, cpu;
+
+	cpu = cpumask_first(cpu_online_mask);
+	for (i = 0; i < h->nr_queues; i++) {
+		irq_set_affinity_hint(h->msix_vector[i], get_cpu_mask(cpu));
+		cpu = cpumask_next(cpu, cpu_online_mask);
+	}
+}
+
 static int scsi_express_request_irqs(struct scsi_express_device *h,
 					irq_handler_t msix_ioq_handler,
 					irq_handler_t msix_adminq_handler)
@@ -641,6 +652,7 @@ static int scsi_express_request_irqs(struct scsi_express_device *h,
 			goto default_int_mode;
 		}
 	}
+	scsi_express_irq_affinity_hints(h);
 	return 0;
 
 default_int_mode:
