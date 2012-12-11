@@ -238,7 +238,7 @@ struct sop_limited_cmd_iu {
 	u8 reserved;
 	u32 xfer_size;
 	u8 cdb[16];
-	struct pqi_sgl_descriptor sg;
+	struct pqi_sgl_descriptor sg[2];
 };
 #pragma pack()
 

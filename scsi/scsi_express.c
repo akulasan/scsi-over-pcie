@@ -1335,6 +1335,49 @@ static struct queue_info *find_submission_queue(struct scsi_express_device *h)
 	return &h->qinfo[h->noqs + 1];
 }
 
+static void fill_sg_data_element(struct pqi_sgl_descriptor *sgld,
+				struct scatterlist *sg)
+{
+	sgld->address = cpu_to_le64(sg_dma_address(sg));
+	sgld->length = cpu_to_le32(sg_dma_len(sg));
+	sgld->descriptor_type = PQI_SGL_DATA_BLOCK;
+}
+
+static void fill_sg_chain_element(struct pqi_sgl_descriptor *sgld,
+				struct queue_info *q,
+				int sg_block_number, int sg_count)
+{
+	sgld->address = cpu_to_le64(q->sg_bus_addr + sg_block_number *
+				sizeof(*sgld));
+	sgld->length = cpu_to_le32(sg_count * sizeof(*sgld));
+	sgld->descriptor_type = PQI_SGL_STANDARD_LAST_SEG;
+}
+
+static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
+				struct scsi_cmnd *sc, int use_sg)
+{
+	struct pqi_sgl_descriptor *datasg;
+	struct scatterlist *sg;
+	int i;
+	static const u16 no_sgl_size =
+			(u16) (sizeof(*r) - sizeof(r->sg[0]) * 2) - 4;
+	BUILD_BUG_ON(sizeof(*r) != 64);
+	BUILD_BUG_ON((sizeof(r->sg[0]) != (16)));
+	BUILD_BUG_ON((sizeof(*r) - sizeof(r->sg[0]) * 2) != 32);
+
+	BUG_ON(use_sg > 2);
+	if (!use_sg) {
+		r->iu_length = cpu_to_le16(no_sgl_size);
+		return;
+	}
+	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * use_sg);
+	datasg = &r->sg[0];
+	scsi_for_each_sg(sc, sg, use_sg, i) {
+		fill_sg_data_element(datasg, sg);
+		datasg++;
+	}
+}
+
 static int scsi_express_scatter_gather(struct scsi_express_device *h,
 			struct sop_limited_cmd_iu *r,
 			struct scsi_cmnd *sc)
@@ -1342,33 +1385,37 @@ static int scsi_express_scatter_gather(struct scsi_express_device *h,
 	struct scatterlist *sg;
 	int sg_block_number;
 	struct queue_info *q = &h->qinfo[r->queue_id];
-	int i, use_sg;
+	int i, j, use_sg;
 	struct pqi_sgl_descriptor *datasg;
+	static const u16 no_sgl_size =
+			(u16) (sizeof(*r) - sizeof(r->sg[0]) * 2) - 4;
 
 	BUG_ON(scsi_sg_count(sc) > MAX_SGLS);
 	sg_block_number = r->queue_id * MAX_CMDS * MAX_SGLS;
-	datasg = &q->sg[sg_block_number];
-
-	r->sg.address = cpu_to_le64(q->sg_bus_addr + sg_block_number *
-					sizeof(struct pqi_sgl_descriptor));
-	r->sg.length = cpu_to_le32(scsi_sg_count(sc) *
-					sizeof(struct pqi_sgl_descriptor));
-	r->sg.descriptor_type = PQI_SGL_STANDARD_LAST_SEG;
 
 	use_sg = scsi_dma_map(sc);
 	if (use_sg < 0)
 		return use_sg;
-	if (!use_sg)
-		goto sg_list_finished;
 
-	scsi_for_each_sg(sc, sg, use_sg, i) {
-		datasg->address = cpu_to_le64(sg_dma_address(sg));
-		datasg->length = cpu_to_le32(sg_dma_len(sg));
-		datasg->descriptor_type = PQI_SGL_DATA_BLOCK;
-		datasg++;
+	if (use_sg < 3) {
+		fill_inline_sg_list(r, sc, use_sg);
+		return 0;
 	}
 
-sg_list_finished:
+	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * 2);
+	datasg = &r->sg[0];
+	j = 0;
+	scsi_for_each_sg(sc, sg, use_sg, i) {
+		if (j == 1) {
+			fill_sg_chain_element(datasg, q,
+					sg_block_number, scsi_sg_count(sc) - 1);
+			datasg = &q->sg[sg_block_number];
+			j++;
+		}
+		fill_sg_data_element(datasg, sg);
+		datasg++;
+		j++;
+	}
 	return 0;
 }
 
@@ -1412,7 +1459,6 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
 	r->compatible_features = 0;
-	r->iu_length = cpu_to_le16(64);
 	r->queue_id = cpu_to_le16(q->pqiq->queue_id);
 	r->work_area = 0;
 	r->request_id = request_id;
