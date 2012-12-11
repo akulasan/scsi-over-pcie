@@ -640,8 +640,8 @@ static int scsi_express_setup_msix(struct scsi_express_device *h)
 		for (i = 0; i < h->noqs; i++) {
 			int idx = i ? i + 1 : i;
 			h->qinfo[idx].msix_vector = msix_entry[i].vector;
-			dev_warn(&h->pdev->dev, "msix_entry[%d] = %d\n",
-				i, msix_entry[i].vector);
+			dev_warn(&h->pdev->dev, "q[%d] msix_entry[%d] = %d\n",
+				idx, i, msix_entry[i].vector);
 		}
 		h->intr_mode = INTR_MODE_MSIX;
 		return 0;
@@ -660,7 +660,9 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 	struct queue_info *q = devid;
 	/* struct scsi_express_device __attribute__((unused)) *h = queue_to_hba(q); */
 
-	printk(KERN_WARNING "Got ioq interrupt, q = %p\n", q);
+	printk(KERN_WARNING "Got ioq interrupt, q = %p (%d) vector = %d\n",
+			q, q->pqiq->queue_id, q->msix_vector);
+
 	return IRQ_HANDLED;
 }
 
@@ -684,9 +686,12 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 	struct scsi_express_device *h = q->h;
 
 	printk(KERN_WARNING "Got admin oq interrupt, q = %p\n", q);
+	printk(KERN_WARNING "Got admin oq interrupt, q = %p (%d)\n", q, q->pqiq->queue_id);
 
 	do {
 		struct scsi_express_request *r = h->admin_q_from_dev.request;
+
+		dev_warn(&h->pdev->dev, "admin intr, r = %p\n", r);
 		if (r == NULL) {
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(&h->admin_q_from_dev);
@@ -728,8 +733,8 @@ static void scsi_express_irq_affinity_hints(struct scsi_express_device *h)
 }
 
 static int scsi_express_request_irqs(struct scsi_express_device *h,
-					irq_handler_t msix_ioq_handler,
-					irq_handler_t msix_adminq_handler)
+					irq_handler_t msix_adminq_handler,
+					irq_handler_t msix_ioq_handler)
 {
 	u8 i;
 	int rc;
@@ -738,6 +743,10 @@ static int scsi_express_request_irqs(struct scsi_express_device *h,
 			h->qinfo[0].msix_vector, 0);
 	rc = request_irq(h->qinfo[0].msix_vector, msix_adminq_handler, 0,
 					h->devname, &h->qinfo[0]);
+	if (rc != 0) {
+		dev_warn(&h->pdev->dev, "request_irq failed, i = %d\n", 0);
+	}
+		
 
 	/* for loop starts at 1 to skip over the admin iq */
 	for (i = 2; i < h->noqs + 1; i++) {
