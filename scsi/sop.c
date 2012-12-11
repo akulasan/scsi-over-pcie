@@ -1830,8 +1830,8 @@ static int sop_ioctl(struct scsi_device *sdev, int cmd, void *arg)
 {
 	struct sop_device *h = sdev_to_hba(sdev);
 
-	dev_warn(&h->pdev->dev, "sop_ioctl called but not implemented\n");
-	return 0;
+	dev_warn(&h->pdev->dev, "sop_ioctl called but not implemented, cmd = 0x%08x\n", cmd);
+	return -ENOTTY;
 }
 
 /* This gets optimized away, but will fail to compile if we mess up
