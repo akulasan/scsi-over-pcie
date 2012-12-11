@@ -13,6 +13,9 @@ struct pqi_device_queue {
 	u16 unposted_index;		/* temporary host copy of pi or ci,
 					 * depending on direction of queue.
 					 */
+	u16 local_pi;			/* local copy of what was last
+					 * written to *pi for inbound queues 
+					 */
 	u16 element_size;		/* must be multiple of 16 */
 	u8 nelements;
 	dma_addr_t dhandle;

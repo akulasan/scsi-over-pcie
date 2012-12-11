@@ -445,7 +445,7 @@ static void print_unsubmitted_commands(struct pqi_device_queue *q)
 	int i;
 	unsigned char *iu;
 
-	pi = readw(q->pi);
+	pi = q->local_pi;
 	if (pi == q->unposted_index) {
 		printk(KERN_WARNING "submit queue is empty.\n");
 		return;
@@ -476,6 +476,8 @@ static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 	printk(KERN_WARNING "pqi_notify_device_queue_written, q->unposted index = %hu, q->pi = %p\n",
 				q->unposted_index, q->pi);
 	print_unsubmitted_commands(q);
+	q->local_pi = q->unposted_index;
+	wmb();
 	writew(q->unposted_index, q->pi);
 }
 
