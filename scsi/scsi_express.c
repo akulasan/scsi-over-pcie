@@ -1397,10 +1397,11 @@ static struct queue_info *find_submission_queue(struct scsi_express_device *h)
 }
 
 static void fill_sg_data_element(struct pqi_sgl_descriptor *sgld,
-				struct scatterlist *sg)
+				struct scatterlist *sg, u32 *xfer_size)
 {
 	sgld->address = cpu_to_le64(sg_dma_address(sg));
 	sgld->length = cpu_to_le32(sg_dma_len(sg));
+	*xfer_size += sg_dma_len(sg);
 	sgld->descriptor_type = PQI_SGL_DATA_BLOCK;
 }
 
@@ -1432,9 +1433,10 @@ static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
 		return;
 	}
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * use_sg);
+	r->xfer_size = 0;
 	datasg = &r->sg[0];
 	scsi_for_each_sg(sc, sg, use_sg, i) {
-		fill_sg_data_element(datasg, sg);
+		fill_sg_data_element(datasg, sg, &r->xfer_size);
 		datasg++;
 	}
 }
@@ -1463,6 +1465,7 @@ static int scsi_express_scatter_gather(struct scsi_express_device *h,
 		return 0;
 	}
 
+	r->xfer_size = 0;
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * 2);
 	datasg = &r->sg[0];
 	j = 0;
@@ -1473,7 +1476,7 @@ static int scsi_express_scatter_gather(struct scsi_express_device *h,
 			datasg = &q->sg[sg_block_number];
 			j++;
 		}
-		fill_sg_data_element(datasg, sg);
+		fill_sg_data_element(datasg, sg, &r->xfer_size);
 		datasg++;
 		j++;
 	}
@@ -1523,6 +1526,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	r->queue_id = cpu_to_le16(q->pqiq->queue_id);
 	r->work_area = 0;
 	r->request_id = request_id;
+	r->xfer_size = 0;
 
 	dev_warn(&h->pdev->dev, "queuecommand C\n");
 	switch (sc->sc_data_direction) {
