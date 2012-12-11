@@ -621,7 +621,8 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	}
 	memcpy(&h->pqicap, &pqicap, sizeof(h->pqicap));
 
-#define ADMIN_QUEUE_ELEMENT_COUNT ((MAX_IO_QUEUES + 1) * 2)
+/* #define ADMIN_QUEUE_ELEMENT_COUNT ((MAX_IO_QUEUES + 1) * 2) */
+#define ADMIN_QUEUE_ELEMENT_COUNT 32
 
 	if (h->pqicap.max_admin_iq_elements < ADMIN_QUEUE_ELEMENT_COUNT ||
 		h->pqicap.max_admin_oq_elements < ADMIN_QUEUE_ELEMENT_COUNT) {
@@ -858,6 +859,9 @@ static int sop_setup_msix(struct sop_device *h)
 	h->niqs = h->noqs = h->nr_queues / 2;
 	h->niqs = h->noqs;
 
+	dev_warn(&h->pdev->dev, "zzz 1 h->noqs = %d, h->niqs = %d\n",
+				h->noqs, h->niqs);
+
 	for (i = 0; i < h->noqs; i++) {
 		msix_entry[i].vector = 0;
 		msix_entry[i].entry = i;
@@ -868,6 +872,10 @@ static int sop_setup_msix(struct sop_device *h)
 	err = pci_enable_msix(h->pdev, msix_entry, h->noqs);
 	if (err > 0)
 		h->noqs = err;
+
+	dev_warn(&h->pdev->dev,
+		"zzz 2 (after pci_enable_msix) h->noqs = %d, h->niqs = %d\n",
+		h->noqs, h->niqs);
 
 	if (err >= 0) {
 		for (i = 0; i < h->noqs; i++) {

@@ -274,8 +274,8 @@ struct sop_device {
 	struct pci_dev *pdev;
 	struct pqi_capability pqicap;
 	__iomem struct pqi_device_register_set *pqireg;
-#define MAX_TO_DEVICE_QUEUES 6
-#define MAX_FROM_DEVICE_QUEUES 6
+#define MAX_TO_DEVICE_QUEUES 32 
+#define MAX_FROM_DEVICE_QUEUES 32 
 #define MAX_IO_QUEUES (MAX_TO_DEVICE_QUEUES + MAX_FROM_DEVICE_QUEUES)
 #define MAX_TOTAL_QUEUES (MAX_IO_QUEUES + 2)
 	int nr_queues, niqs, noqs; /* total, inbound and outbound queues */
