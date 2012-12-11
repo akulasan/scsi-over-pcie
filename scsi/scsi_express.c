@@ -215,6 +215,13 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 	vaddr = pci_alloc_consistent(h->pdev, total_size * num_queues, &dhandle);
 	if (!vaddr)
 		goto bailout;
+	if (queue_direction == PQI_DIR_TO_DEVICE) {
+		h->iq_dhandle = dhandle;
+		h->iq_vaddr = vaddr;
+	} else {
+		h->oq_dhandle = dhandle;
+		h->oq_vaddr = vaddr;
+	}
 
 	if (queue_direction == PQI_DIR_TO_DEVICE) {
 		dev_warn(&h->pdev->dev, "4 allocating request buffers\n");
@@ -1293,6 +1300,29 @@ bail_out:
 	return -1;
 }
 
+static void scsi_express_free_io_queues(struct scsi_express_device *h)
+{
+	size_t total_size, n_q_elements, element_size;
+	if (h->iq_vaddr) {
+		n_q_elements = h->io_q_to_dev[0].nelements;
+		element_size = h->io_q_to_dev[0].element_size;
+		total_size = n_q_elements * element_size + sizeof(u64);
+		pci_free_consistent(h->pdev, total_size,
+				h->iq_vaddr, h->iq_dhandle);
+		h->iq_vaddr = NULL;
+		h->iq_dhandle = 0;
+	}
+	if (h->oq_vaddr) {
+		n_q_elements = h->io_q_from_dev[0].nelements;
+		element_size = h->io_q_from_dev[0].element_size;
+		total_size = n_q_elements * element_size + sizeof(u64);
+		pci_free_consistent(h->pdev, total_size,
+				h->oq_vaddr, h->oq_dhandle);
+		h->oq_vaddr = NULL;
+		h->oq_dhandle = 0;
+	}
+}
+
 static int scsi_express_delete_io_queues(struct scsi_express_device *h)
 {
 	int i;
@@ -1336,9 +1366,9 @@ static int scsi_express_delete_io_queues(struct scsi_express_device *h)
 			dev_warn(&h->pdev->dev, "Failed to tear down IQ... now what?\n");
 		free_request(h, aq->queue_id, request_id);
 	}
+	scsi_express_free_io_queues(h);
 	return 0;
 }
-
 
 static int scsi_express_set_dma_mask(struct pci_dev * pdev)
 {

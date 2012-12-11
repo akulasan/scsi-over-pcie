@@ -221,6 +221,8 @@ struct scsi_express_device {
 	u16 current_id;
 	struct queue_info qinfo[MAX_TOTAL_QUEUES];
 	struct Scsi_Host *sh;
+	dma_addr_t iq_dhandle, oq_dhandle;
+	void *iq_vaddr, *oq_vaddr;
 };
 
 #pragma pack()
