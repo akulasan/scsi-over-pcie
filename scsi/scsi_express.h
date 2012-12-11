@@ -129,6 +129,8 @@ struct pqi_capability {
 #define IQ_NELEMENTS 64
 #define OQ_NELEMENTS 64
 
+struct scsi_express_request;
+
 struct scsi_express_device {
 	struct pci_dev *pdev;
 	struct pqi_capability pqicap;
@@ -151,7 +153,10 @@ struct scsi_express_device {
 	struct pqi_device_queue *io_q_to_dev;
 	struct pqi_device_queue *io_q_from_dev;
 	u16 current_id;
-	spinlock_t id_lock;
+	spinlock_t qlock[MAX_TOTAL_QUEUES];
+	u16 qdepth[MAX_TOTAL_QUEUES];
+	struct scsi_express_request *request[MAX_TOTAL_QUEUES];
+	unsigned long *request_bits[MAX_TOTAL_QUEUES];
 };
 
 #define PQI_IQ_ID_FM_INDEX(_i)  (((_i) + 2) * 2)
@@ -161,5 +166,10 @@ struct scsi_express_device {
 #define PQI_VECTOR_FM_Q_ID(_q)  (((_q) / 2) - 1)
 
 #pragma pack()
+
+struct scsi_express_request {
+	u8 q;
+	struct completion *waiting;
+};
 
 #endif

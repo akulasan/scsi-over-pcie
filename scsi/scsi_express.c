@@ -80,7 +80,22 @@ static inline void writeq(__u64 val, volatile void __iomem *addr)
 }
 #endif
 
-static int pqi_device_queue_array_alloc(struct pci_dev *pdev,
+static void free_request_data(struct scsi_express_device *h, int start, int end)
+{
+	int i;
+	for (i = start; i <= end; i++) {
+		if (h->request_bits[i]) {
+			kfree(h->request_bits[i]);
+			h->request_bits[i] = NULL;
+		}
+		if (h->request[i]) {
+			kfree(h->request[i]);
+			h->request[i] = NULL;
+		}
+	}
+}
+
+static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 		struct pqi_device_queue **xq, int num_queues,
 		u16 n_q_elements, u8 q_element_size_over_16,
 		int queue_direction, int starting_queue_id)
@@ -91,7 +106,7 @@ static int pqi_device_queue_array_alloc(struct pci_dev *pdev,
 	int total_size = (n_q_elements * q_element_size_over_16 * 16) +
 				sizeof(u64);
 
-	dev_warn(&pdev->dev, "Allocating %d queues %s device...\n", 
+	dev_warn(&h->pdev->dev, "Allocating %d queues %s device...\n", 
 		num_queues,
 		queue_direction == PQI_DIR_TO_DEVICE ? "TO" : "FROM");
 
@@ -100,12 +115,27 @@ static int pqi_device_queue_array_alloc(struct pci_dev *pdev,
 		err = -ENOMEM;
 		goto bailout;
 	}
-	vaddr = pci_alloc_consistent(pdev, total_size * num_queues, &dhandle);
+	vaddr = pci_alloc_consistent(h->pdev, total_size * num_queues, &dhandle);
 	if (!vaddr) {
 		err = -ENOMEM;
 		goto bailout;
 	}
-	dev_warn(&pdev->dev, "Memory alloc'ed.\n");
+
+	for (i = 0; i < num_queues; i++) {
+		int q = i + starting_queue_id;
+		h->qdepth[q] = n_q_elements;
+		h->request_bits[q] =
+			kzalloc(BITS_TO_LONGS(n_q_elements) *
+					sizeof(unsigned long), GFP_KERNEL);
+		if (!h->request_bits[q])
+			goto bailout;
+		h->request[q] = kzalloc(sizeof(struct scsi_express_request) *
+						n_q_elements, GFP_KERNEL);
+		if (!h->request[q])
+			goto bailout;
+	}
+
+	dev_warn(&h->pdev->dev, "Memory alloc'ed.\n");
 
 	for (i = 0; i < num_queues; i++) {
 		(*xq)[i].queue_vaddr = vaddr;
@@ -124,14 +154,16 @@ static int pqi_device_queue_array_alloc(struct pci_dev *pdev,
 		(*xq)[i].nelements = n_q_elements;
 		(*xq)[i].queue_id = i + starting_queue_id;
 		nqs_alloced++;
-		dev_warn(&pdev->dev, "zzz bottom of loop, i = %d\n", i);
+		dev_warn(&h->pdev->dev, "zzz bottom of loop, i = %d\n", i);
 	}
 	return nqs_alloced;
 
 bailout:
 	kfree(*xq);
+	free_request_data(h, starting_queue_id,
+				starting_queue_id + num_queues - 1);
 	if (vaddr)
-		pci_free_consistent(pdev, total_size, vaddr, dhandle);
+		pci_free_consistent(h->pdev, total_size, vaddr, dhandle);
 	return err;
 }
 
@@ -283,6 +315,10 @@ static int __devinit scsi_express_create_admin_queues(struct scsi_express_device
 	int rc, count;
 	unsigned char *x = (unsigned char *) &paf;
 	dma_addr_t admin_q_dhandle;
+        DECLARE_COMPLETION_ONSTACK(wait);
+
+        /* c->waiting = &wait;
+        wait_for_completion(&wait); */
 
 	/* Check that device is ready to be set up */
 	for (count = 0; count < 10; count++) {
@@ -679,17 +715,21 @@ static void scsi_express_free_irqs_and_disable_msix(
 }
 
 /* FIXME: maybe there's a better way to do this */
-static u16 get_request_id(struct scsi_express_device *h)
+static u16 alloc_request(struct scsi_express_device *h, u8 q)
 {
 	u16 rc;
 	unsigned long flags;
 
-	spin_lock_irqsave(&h->id_lock, flags);
-	/* set high bit because we use an array index in other contexts */
-	rc = h->current_id | 0x8000;
-	h->current_id++;
-	spin_unlock_irqrestore(&h->id_lock, flags);
-	return rc;
+	/* FIXME, may be able to get rid of these spin locks */
+	spin_lock_irqsave(&h->qlock[q], flags);
+        do {
+                rc = (u16) find_first_zero_bit(h->request_bits[q],
+						h->qdepth[q]);
+                if (rc >= h->qdepth[q])
+                        return -EBUSY;
+        } while (test_and_set_bit((int) rc, h->request_bits[q]));
+	spin_unlock_irqrestore(&h->qlock[q], flags);
+	return (u16) rc;
 }
 
 static void fill_create_io_queue_request(struct scsi_express_device *h,
@@ -702,7 +742,7 @@ static void fill_create_io_queue_request(struct scsi_express_device *h,
 	r->iu_type = 0x60; /* FIXME, magic */
 	r->iu_length = cpu_to_le16(0x003c);
 	r->response_oq = 0;
-	r->request_id = cpu_to_le16(get_request_id(h));
+	r->request_id = cpu_to_le16(alloc_request(h, q->queue_id));
 	r->function_code = function_code;
 	r->queue_id = cpu_to_le16(q->queue_id);
 	r->element_array_addr = cpu_to_le64(q->dhandle);
@@ -732,12 +772,12 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 		"sizeof struct pqi_create_operational_queue_request is %lu\n",
 		(unsigned long) sizeof(struct pqi_create_operational_queue_request));
 
-	niqs = pqi_device_queue_array_alloc(h->pdev, &h->io_q_to_dev,
+	niqs = pqi_device_queue_array_alloc(h, &h->io_q_to_dev,
 			MAX_TO_DEVICE_QUEUES, IQ_NELEMENTS, IQ_IU_SIZE / 16,
 			PQI_DIR_TO_DEVICE, 2);
 	if (niqs < 0)
 		goto bail_out;
-	noqs = pqi_device_queue_array_alloc(h->pdev, &h->io_q_from_dev,
+	noqs = pqi_device_queue_array_alloc(h, &h->io_q_from_dev,
 			MAX_FROM_DEVICE_QUEUES, OQ_NELEMENTS, OQ_IU_SIZE / 16,
 			PQI_DIR_FROM_DEVICE, 2 + niqs);
 	if (noqs < 0)
@@ -801,7 +841,7 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 {
 	struct scsi_express_device *h;
 	u64 signature;
-	int rc;
+	int i, rc;
 
 	dev_warn(&pdev->dev, SCSI_EXPRESS "found device: %04x:%04x/%04x:%04x\n",
 			pdev->vendor, pdev->device,
@@ -812,7 +852,8 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 		return -ENOMEM;
 
 	h->ctlr = controller_num;
-	spin_lock_init(&h->id_lock);
+	for (i = 0; i < MAX_TOTAL_QUEUES; i++)
+		spin_lock_init(&h->qlock[i]);
 	controller_num++;
 	sprintf(h->devname, "scsi_express-%d\n", h->ctlr);
 
