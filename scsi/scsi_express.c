@@ -214,19 +214,18 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 	if (!vaddr)
 		goto bailout;
 
-	/* FIXME: I think we only need these on the submit side, not reply side. */
-	dev_warn(&h->pdev->dev, "4 allocating request buffers\n");
-	for (i = 0; i < num_queues; i++) {
-		int q = i + starting_queue_id;
-		if (allocate_q_request_buffers(&h->qinfo[q], n_q_elements,
-				sizeof(struct scsi_express_request)))
-			goto bailout;
-		dev_warn(&h->pdev->dev, "   5 Allocated #%d\n", i);
-	}
-
-	dev_warn(&h->pdev->dev, "6 Allocating SGL areas... #%d\n", i);
-	/* Allocate SGL area for each submission queue */
 	if (queue_direction == PQI_DIR_TO_DEVICE) {
+		dev_warn(&h->pdev->dev, "4 allocating request buffers\n");
+		for (i = 0; i < num_queues; i++) {
+			int q = i + starting_queue_id;
+			if (allocate_q_request_buffers(&h->qinfo[q],
+					n_q_elements,
+					sizeof(struct scsi_express_request)))
+				goto bailout;
+			dev_warn(&h->pdev->dev, "   5 Allocated #%d\n", i);
+		}
+
+		/* Allocate SGL area for each submission queue */
 		for (i = 0; i < num_queues; i++) {
 			int q = i + starting_queue_id;
 
