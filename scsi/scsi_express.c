@@ -29,6 +29,10 @@
 /* #include <asm/byteorder.h> */
 #include <linux/version.h>
 #include <linux/completion.h>
+#include <scsi/scsi.h>
+#include <scsi/scsi_cmnd.h>
+#include <scsi/scsi_device.h>
+#include <scsi/scsi_host.h>
 
 #include "scsi_express_kernel_compat.h"
 #include "scsi_express.h"
@@ -55,6 +59,39 @@ DEFINE_PCI_DEVICE_TABLE(scsi_express_id_table) = {
 MODULE_DEVICE_TABLE(pci, scsi_express_id_table);
 
 static int controller_num;
+
+static int scsi_express_queuecommand(struct Scsi_Host *h, struct scsi_cmnd *cmd);
+static int scsi_express_change_queue_depth(struct scsi_device *sdev,
+        int qdepth, int reason);
+static int scsi_express_abort_handler(struct scsi_cmnd *sc);
+static int scsi_express_device_reset_handler(struct scsi_cmnd *scsicmd);
+static int scsi_express_slave_alloc(struct scsi_device *sdev);
+static void scsi_express_slave_destroy(struct scsi_device *sdev);
+static int scsi_express_compat_ioctl(struct scsi_device *dev, int cmd, void *arg);
+static int scsi_express_ioctl(struct scsi_device *dev, int cmd, void *arg);
+
+static struct scsi_host_template scsi_express_template = {
+	.module				= THIS_MODULE,
+	.name				= DRIVER_NAME,
+	.proc_name			= DRIVER_NAME,
+	.queuecommand			= scsi_express_queuecommand,
+	.change_queue_depth		= scsi_express_change_queue_depth,
+	.this_id			= -1,
+	.use_clustering			= ENABLE_CLUSTERING,
+	.eh_abort_handler		= scsi_express_abort_handler,
+	.eh_device_reset_handler	= scsi_express_device_reset_handler,
+	.ioctl				= scsi_express_ioctl,
+	.slave_alloc			= scsi_express_slave_alloc,
+	.slave_destroy			= scsi_express_slave_destroy,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl			= scsi_express_compat_ioctl,
+#endif
+#if 0
+	.sdev_attrs			= scsi_express_sdev_attrs,
+	.host_attrs			= scsi_express_host_attrs,
+#endif
+	.max_sectors			= 8192, /* FIXME: is this correct? */
+};
 
 /* 
  * 32-bit readq and writeq implementations taken from old
@@ -1211,6 +1248,49 @@ static int __init scsi_express_init(void)
 static void __exit scsi_express_exit(void)
 {
 	pci_unregister_driver(&scsi_express_pci_driver);
+}
+
+static int scsi_express_queuecommand_lck(struct scsi_cmnd *cmd,
+        void (*done)(struct scsi_cmnd *))
+{
+	return 0;
+}
+static DEF_SCSI_QCMD(scsi_express_queuecommand);
+
+static int scsi_express_change_queue_depth(struct scsi_device *sdev,
+        int qdepth, int reason)
+{
+	return 0;
+}
+
+static int scsi_express_abort_handler(struct scsi_cmnd *sc)
+{
+	return 0;
+}
+
+static int scsi_express_device_reset_handler(struct scsi_cmnd *scsicmd)
+{
+	return 0;
+}
+
+static int scsi_express_slave_alloc(struct scsi_device *sdev)
+{
+	return 0;
+}
+
+static void scsi_express_slave_destroy(struct scsi_device *sdev)
+{
+	return;
+}
+
+static int scsi_express_compat_ioctl(struct scsi_device *dev, int cmd, void *arg)
+{
+	return 0;
+}
+
+static int scsi_express_ioctl(struct scsi_device *dev, int cmd, void *arg)
+{
+	return 0;
 }
 
 /* This gets optimized away, but will fail to compile if we mess up

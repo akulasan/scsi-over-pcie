@@ -187,6 +187,7 @@ struct scsi_express_device {
 	struct pqi_device_queue *io_q_from_dev;
 	u16 current_id;
 	struct queue_info qinfo[MAX_TOTAL_QUEUES];
+	struct Scsi_Host *sh;
 };
 
 #pragma pack()
