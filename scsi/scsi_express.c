@@ -130,6 +130,39 @@ static void free_q_request_buffers(struct queue_info *q)
 	}
 }
 
+static int allocate_sgl_area(struct scsi_express_device *h,
+		struct queue_info *q)
+{
+	size_t total_size = q->qdepth * MAX_SGLS *
+				sizeof(struct pqi_sgl_descriptor);
+
+	dev_warn(&h->pdev->dev, "Allocating %llu bytes for SGL area\n",
+				(unsigned long long) total_size);
+	q->sg = pci_alloc_consistent(h->pdev, total_size, &q->sg_bus_addr);
+	dev_warn(&h->pdev->dev, "Allocated ptr is %p, bus addr = %llu\n",
+			q->sg, (unsigned long long) q->sg_bus_addr);
+	return (q->sg) ? 0 : -ENOMEM;
+}
+
+static void free_sgl_area(struct scsi_express_device *h, struct queue_info *q)
+{
+	size_t total_size = q->qdepth * MAX_SGLS *
+				sizeof(struct pqi_sgl_descriptor);
+
+	if (!q->sg)
+		return;
+	pci_free_consistent(h->pdev, total_size, q->sg, q->sg_bus_addr);
+	q->sg = NULL;
+}
+
+static void free_all_q_sgl_areas(struct scsi_express_device *h)
+{
+	int i;
+
+	for (i = 0; i < h->nr_queues; i++)
+		free_sgl_area(h, &h->qinfo[i]);
+}
+
 static int allocate_q_request_buffers(struct queue_info *q,
 	int nbuffers, int buffersize)
 {
@@ -167,23 +200,39 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 	int total_size = (n_q_elements * q_element_size_over_16 * 16) +
 				sizeof(u64);
 
-	dev_warn(&h->pdev->dev, "Allocating %d queues %s device...\n", 
+	dev_warn(&h->pdev->dev, "1 Allocating %d queues %s device...\n", 
 		num_queues,
 		queue_direction == PQI_DIR_TO_DEVICE ? "TO" : "FROM");
 
 	err = -ENOMEM;
+	dev_warn(&h->pdev->dev, "2 kzallocing pqi device queues\n");
 	*xq = kzalloc(sizeof(**xq) * num_queues, GFP_KERNEL);
 	if (!*xq)
 		goto bailout;
+	dev_warn(&h->pdev->dev, "3 pci_alloc_consistent ring buffer\n");
 	vaddr = pci_alloc_consistent(h->pdev, total_size * num_queues, &dhandle);
 	if (!vaddr)
 		goto bailout;
 
+	dev_warn(&h->pdev->dev, "4 allocating request buffers\n");
 	for (i = 0; i < num_queues; i++) {
 		int q = i + starting_queue_id;
 		if (allocate_q_request_buffers(&h->qinfo[q], n_q_elements,
 				sizeof(struct scsi_express_request)))
 			goto bailout;
+		dev_warn(&h->pdev->dev, "   5 Allocated #%d\n", i);
+	}
+
+	dev_warn(&h->pdev->dev, "6 Allocating SGL areas... #%d\n", i);
+	/* Allocate SGL area for each submission queue */
+	if (queue_direction == PQI_DIR_TO_DEVICE) {
+		for (i = 0; i < num_queues; i++) {
+			int q = i + starting_queue_id;
+
+			dev_warn(&h->pdev->dev, "Allocating SGL area for submission queue %d q=%d\n", i, q);
+			if (allocate_sgl_area(h, &h->qinfo[q]))
+				goto bailout;
+		}
 	}
 
 	dev_warn(&h->pdev->dev, "Memory alloc'ed.\n");
@@ -208,10 +257,14 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 		nqs_alloced++;
 		dev_warn(&h->pdev->dev, "zzz bottom of loop, i = %d\n", i);
 	}
+
+	dev_warn(&h->pdev->dev, "Alloced %d/%d queues\n", nqs_alloced, num_queues);
 	return nqs_alloced;
 
 bailout:
+	dev_warn(&h->pdev->dev, "zzz problem allocing queues\n");
 	kfree(*xq);
+	free_all_q_sgl_areas(h);
 	free_all_q_request_buffers(h);
 	if (vaddr)
 		pci_free_consistent(h->pdev, total_size, vaddr, dhandle);
@@ -1439,6 +1492,31 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(status, 11);
 	VERIFY_OFFSET(reserved2, 12);
 #undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct pqi_sgl_descriptor, field) != offset)
+	VERIFY_OFFSET(address, 0);
+	VERIFY_OFFSET(length, 8);
+	VERIFY_OFFSET(reserved, 12);
+	VERIFY_OFFSET(descriptor_type, 15);
+#undef VERIFY_OFFSET
+	BUILD_BUG_ON(sizeof(struct pqi_sgl_descriptor) != 16);
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct sop_limited_cmd_iu, field) != offset)
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(flags, 10);
+	VERIFY_OFFSET(reserved, 11);
+	VERIFY_OFFSET(xfer_size, 12);
+	VERIFY_OFFSET(cdb, 16);
+	VERIFY_OFFSET(sg, 32);
+#undef VERIFY_OFFSET
+
 }
 
 module_init(scsi_express_init);

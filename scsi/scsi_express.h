@@ -1,6 +1,8 @@
 #ifndef _SCSI_EXPRESS_H
 #define _SCSI_EXPRESS_H
 
+#define MAX_SGLS (1024)
+
 struct scsi_express_request;
 
 struct pqi_device_queue {
@@ -156,6 +158,7 @@ struct pqi_capability {
 #define OQ_NELEMENTS 64
 
 struct scsi_express_device;
+struct pqi_sgl_descriptor;
 struct queue_info {
 	struct scsi_express_device *h;
 	int irq;
@@ -165,7 +168,10 @@ struct queue_info {
 	struct scsi_express_request *request;
 	unsigned long *request_bits;
 	struct pqi_device_queue *pqiq;
+	struct pqi_sgl_descriptor *sg;
+	dma_addr_t sg_bus_addr;
 };
+
 
 struct scsi_express_device {
 	struct pci_dev *pdev;
@@ -199,5 +205,39 @@ struct scsi_express_request {
 	u16 response_accumulated;
 	u8 response[MAX_RESPONSE_SIZE];
 };
+
+#pragma pack(1)
+struct pqi_sgl_descriptor {
+	u64 address;
+	u32 length;
+	u8 reserved[3];
+	u8 descriptor_type;
+#define PQI_SGL_DATA_BLOCK 0x00
+#define PQI_SGL_BIT_BUCKET 0x01
+#define PQI_SGL_STANDARD_SEG 0x02
+#define PQI_SGL_STANDARD_LAST_SEG 0x03
+};
+#pragma pack()
+
+#pragma pack(1)
+struct sop_limited_cmd_iu {
+	u8 iu_type;
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u8 flags;
+#define SOP_DATA_DIR_NONE		0x00
+#define SOP_DATA_DIR_FROM_DEVICE	0x01
+#define SOP_DATA_DIR_TO_DEVICE		0x02
+#define SOP_DATA_DIR_RESERVED		0x03
+#define SOP_PARTIAL_DATA_BUFFER		0x04
+	u8 reserved;
+	u32 xfer_size;
+	u8 cdb[16];
+	struct pqi_sgl_descriptor sg;
+};
+#pragma pack()
 
 #endif
