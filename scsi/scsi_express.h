@@ -223,6 +223,7 @@ struct pqi_sgl_descriptor {
 #pragma pack(1)
 struct sop_limited_cmd_iu {
 	u8 iu_type;
+#define SOP_LIMITED_CMD_IU	0x10
 	u8 compatible_features;
 	u16 iu_length;
 	u16 queue_id;

@@ -1311,13 +1311,65 @@ static inline struct scsi_express_device *sdev_to_hba(struct scsi_device *sdev)
 	return (struct scsi_express_device *) *priv;
 }
 
+static struct queue_info *find_submission_queue(struct scsi_express_device *h)
+{
+	/* FIXME: should return iq for this numa node not just the first iq */
+	dev_warn(&h->pdev->dev, "h->noqs = %d, queue to device = %d\n",
+				h->noqs, h->noqs + 2);
+	if (h->noqs + 2 != 8)
+		return &h->qinfo[8];
+	return &h->qinfo[h->noqs + 2];
+}
+
+static int scsi_express_scatter_gather(struct scsi_express_device *h,
+			struct sop_limited_cmd_iu *r,
+			struct scsi_cmnd *sc)
+{
+	struct scatterlist *sg;
+	int sg_block_number;
+	struct queue_info *q = &h->qinfo[r->queue_id];
+	int i, use_sg;
+	struct pqi_sgl_descriptor *datasg;
+
+	BUG_ON(scsi_sg_count(sc) > MAX_SGLS);
+	sg_block_number = r->queue_id * MAX_CMDS * MAX_SGLS;
+	datasg = &q->sg[sg_block_number];
+
+	r->sg.address = cpu_to_le64(q->sg_bus_addr + sg_block_number *
+					sizeof(struct pqi_sgl_descriptor));
+	r->sg.length = cpu_to_le32(scsi_sg_count(sc) *
+					sizeof(struct pqi_sgl_descriptor));
+	r->sg.descriptor_type = PQI_SGL_STANDARD_LAST_SEG;
+
+	use_sg = scsi_dma_map(sc);
+	if (use_sg < 0)
+		return use_sg;
+	if (!use_sg)
+		goto sg_list_finished;
+
+	scsi_for_each_sg(sc, sg, use_sg, i) {
+		datasg->address = cpu_to_le64(sg_dma_address(sg));
+		datasg->length = cpu_to_le32(sg_dma_len(sg));
+		datasg->descriptor_type = PQI_SGL_DATA_BLOCK;
+		datasg++;
+	}
+
+sg_list_finished:
+	return 0;
+}
+
 static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
         void (*done)(struct scsi_cmnd *))
 {
 	struct scsi_express_device *h;
 	struct scsi_device *sdev = sc->device;
+	struct queue_info *q;
+	struct sop_limited_cmd_iu *r;
+	u16 request_id;
 
+	printk(KERN_WARNING "top of queuecommand\n");
 	h = sdev_to_hba(sc->device);
+	printk(KERN_WARNING "queuecommand, h = %p\n", h);
 
 	dev_warn(&h->pdev->dev, "scsi_express_queuecommand called\n");
 
@@ -1329,6 +1381,46 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 		sc->cmnd[8], sc->cmnd[9], sc->cmnd[10], sc->cmnd[11],
 		sc->cmnd[12], sc->cmnd[13], sc->cmnd[14], sc->cmnd[15]);
 
+	q = find_submission_queue(h);
+	if (!q)
+		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
+	if (!q->pqiq)
+		dev_warn(&h->pdev->dev, "queuecommand: q->pqiq is null!\n");
+	r = pqi_alloc_elements(q->pqiq, 1);
+	request_id = alloc_request(h, q->pqiq->queue_id);
+
+	r->iu_type = SOP_LIMITED_CMD_IU;
+	r->compatible_features = 0;
+	r->iu_length = cpu_to_le16(64);
+	r->queue_id = cpu_to_le16(q->pqiq->queue_id);
+	r->work_area = 0;
+	r->request_id = request_id;
+
+	switch (sc->sc_data_direction) {
+	case DMA_TO_DEVICE:
+		r->flags = SOP_DATA_DIR_TO_DEVICE;
+		break;
+	case DMA_FROM_DEVICE:
+		r->flags = SOP_DATA_DIR_FROM_DEVICE;
+		break;
+	case DMA_NONE:
+		r->flags = SOP_DATA_DIR_NONE;
+		break;
+	case DMA_BIDIRECTIONAL:
+		r->flags = SOP_DATA_DIR_RESERVED;
+		break;
+	}
+
+	if (scsi_express_scatter_gather(h, r, sc)) {
+		/* FIXME:  What to do here?  We already allocated a
+		 * slot in the submission ring buffer.  Either make
+		 * it a NULL IU, or unallocate it somehow while avoiding races.
+		 */
+		dev_warn(&h->pdev->dev,
+				"Need to implement handling of scsi_dma_map failure.\n");
+		return SCSI_MLQUEUE_HOST_BUSY;
+	}
+	pqi_notify_device_queue_written(q->pqiq);
 	return 0;
 }
 
