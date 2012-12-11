@@ -201,9 +201,11 @@ struct scsi_express_device {
 
 #define MAX_RESPONSE_SIZE 64
 struct scsi_express_request {
-	u8 q;
 	struct completion *waiting;
+	struct scsi_cmnd *scmd;
 	u16 response_accumulated;
+	u16 request_id;
+	u8 q;
 	u8 response[MAX_RESPONSE_SIZE];
 };
 
@@ -241,5 +243,10 @@ struct sop_limited_cmd_iu {
 	struct pqi_sgl_descriptor sg[2];
 };
 #pragma pack()
+
+#define SOP_RESPONSE_CMD_SUCCESS_IU_TYPE 0x90
+#define SOP_RESPONSE_CMD_RESPONSE_IU_TYPE 0x91
+#define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
+#define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
 
 #endif

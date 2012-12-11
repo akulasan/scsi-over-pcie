@@ -779,17 +779,6 @@ default_int_mode:
 	return -1;
 }
 
-irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
-{
-	struct queue_info *q = devid;
-	/* struct scsi_express_device __attribute__((unused)) *h = queue_to_hba(q); */
-
-	printk(KERN_WARNING "Got ioq interrupt, q = %p (%d) vector = %d\n",
-			q, q->pqiq->queue_id, q->msix_vector);
-
-	return IRQ_HANDLED;
-}
-
 /* function to determine whether a complete response has been accumulated */
 static int scsi_express_response_accumulated(struct scsi_express_request *r)
 {
@@ -801,6 +790,100 @@ static int scsi_express_response_accumulated(struct scsi_express_request *r)
 	printk(KERN_WARNING "r->response_accumulated = %hu, iu_length = %hu\n", 
 			r->response_accumulated, iu_length);
 	return (r->response_accumulated >= iu_length);
+}
+
+static void free_request(struct scsi_express_device *h, u8 q, u16 request_id);
+
+static void complete_scsi_cmd(struct scsi_express_device *h,
+				struct scsi_express_request *r)
+{
+	struct scsi_cmnd *scmd;
+
+        scmd = r->scmd;
+        scsi_dma_unmap(scmd); /* undo the DMA mappings */
+
+        scmd->result = (DID_OK << 16);           /* host byte */
+        scmd->result |= (COMMAND_COMPLETE << 8); /* msg byte */
+        /* scmd->result |= ei->ScsiStatus; */
+
+        scsi_set_resid(scmd, 0); /* FIXME */
+
+	free_request(h, r->request_id >> 8, r->request_id);
+
+	dev_warn(&h->pdev->dev, "Response UI type is 0x%02x\n", r->response[0]);
+	switch (r->response[0]) {
+	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
+                scmd->scsi_done(scmd);
+		break;
+	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
+	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
+		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
+		break;
+	}
+}
+
+irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
+{
+	u16 request_id;
+	u8 iu_type;
+	u8 sq;
+	int rc;
+	struct queue_info *q = devid;
+	struct scsi_express_device *h = q->h;
+
+	printk(KERN_WARNING "Got ioq interrupt, q = %p (%d) vector = %d\n",
+			q, q->pqiq->queue_id, q->msix_vector);
+
+	do {
+		struct scsi_express_request *r = q->pqiq->request;
+
+		if (pqi_from_device_queue_is_empty(q->pqiq)) {
+			dev_warn(&h->pdev->dev, "interrupt, but ioq %d is empty\n",
+					q->pqiq->queue_id);
+			break;
+		}
+
+		if (r == NULL) {
+			/* Receiving completion of a new request */ 
+			iu_type = pqi_peek_ui_type_from_device(q->pqiq);
+			request_id = pqi_peek_request_id_from_device(q->pqiq);
+			sq = request_id >> 8; /* queue that request was submitted on */
+			dev_warn(&h->pdev->dev, "new io completion, iu type=%hhu, id=%hu, cq=%hhu, sq=%hhu\n",
+					iu_type, request_id, q->pqiq->queue_id, sq);
+			r = q->pqiq->request = &h->qinfo[sq].request[request_id & 0x00ff];
+			dev_warn(&h->pdev->dev, "completion request is %p\n", r);
+			r->request_id = request_id;
+			dev_warn(&h->pdev->dev, "io intr: r = %p\n", r);
+			r->response_accumulated = 0;
+		}
+		rc = pqi_dequeue_from_device(q->pqiq,
+				&r->response[r->response_accumulated]); 
+		dev_warn(&h->pdev->dev, "dequeued from q %p\n", q);
+		if (rc) { /* queue is empty */
+			dev_warn(&h->pdev->dev, "io OQ %hhu is empty\n", q->pqiq->queue_id);
+			return IRQ_HANDLED;
+		}
+		r->response_accumulated += q->pqiq->element_size;
+		dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated);
+		if (scsi_express_response_accumulated(r)) {
+			dev_warn(&h->pdev->dev, "accumlated response\n");
+			q->request = NULL;
+			wmb();
+			WARN_ON((!r->waiting && !r->scmd));
+			if (likely(r->scmd)) {
+				complete_scsi_cmd(h, r);
+			} else {
+				if (likely(r->waiting)) {
+					complete(r->waiting);
+				} else {
+					dev_warn(&h->pdev->dev, "r->scmd and r->waiting both null\n");
+				}
+			}
+			pqi_notify_device_queue_read(&h->admin_q_from_dev);
+		}
+	} while (1);
+
+	return IRQ_HANDLED;
 }
 
 irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
@@ -1490,6 +1573,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	struct scsi_device *sdev = sc->device;
 	struct queue_info *q;
 	struct sop_limited_cmd_iu *r;
+	struct scsi_express_request *ser;
 	u16 request_id;
 
 	printk(KERN_WARNING "top of queuecommand\n");
@@ -1528,6 +1612,10 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	r->work_area = 0;
 	r->request_id = request_id;
 	r->xfer_size = 0;
+	ser = &q->request[request_id & 0x0ff];
+	dev_warn(&h->pdev->dev, "Submission request is %p, request_id = %hu\n", ser, request_id);
+	ser->scmd = sc;
+	ser->waiting = NULL;
 
 	dev_warn(&h->pdev->dev, "queuecommand C\n");
 	switch (sc->sc_data_direction) {
