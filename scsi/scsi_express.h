@@ -249,4 +249,27 @@ struct sop_limited_cmd_iu {
 #define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
 #define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
 
+
+#pragma pack(1)
+struct sop_cmd_ui {
+	u8 iu_type;
+#define SOP_CMD_IU	0x11
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u16 nexus_id;
+	u32 xfer_size;
+	u64 lun;
+	u16 protocol_specific;
+	u8 flags;
+	u8 reserved[3];
+	u8 priority_task_attr;
+	u8 additional_cdb_bytes;
+	u8 cdb[16];
+	/* total size is 64 bytes, sgl follows in next IU. */
+};
+#pragma pack()
+
 #endif
