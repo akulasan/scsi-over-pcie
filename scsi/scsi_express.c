@@ -1109,6 +1109,47 @@ static int scsi_express_set_dma_mask(struct pci_dev * pdev)
 	return rc;
 }
 
+static int scsi_express_register_host(struct scsi_express_device *h)
+{
+	struct Scsi_Host *sh;
+	int rc;
+
+	dev_warn(&h->pdev->dev, "zzz scsi_express_register_host 1\n");
+
+	sh = scsi_host_alloc(&scsi_express_template, sizeof(h));
+	if (!sh)
+		goto bail;
+	sh->io_port = 0;
+	sh->n_io_port = 0;
+	sh->this_id = -1;
+	sh->max_channel = 1;
+	sh->max_cmd_len = MAX_COMMAND_SIZE;
+	sh->max_lun = 255; /* FIXME are these correct? */
+	sh->max_id = 255;
+	sh->can_queue = 64; /* FIXME: get this from device if possible. */
+	sh->cmd_per_lun = 64;
+	sh->sg_tablesize = 2; /* FIXME make this bigger */
+	sh->hostdata[0] = (unsigned long) h;
+	sh->irq = h->qinfo[0].msix_vector;
+	sh->unique_id = sh->irq; /* really? */
+	dev_warn(&h->pdev->dev, "zzz scsi_express_register_host 2\n");
+	rc = scsi_add_host(sh, &h->pdev->dev);
+	if (rc)
+		goto add_host_failed;
+	dev_warn(&h->pdev->dev, "zzz scsi_express_register_host 3\n");
+	scsi_scan_host(sh);
+	dev_warn(&h->pdev->dev, "zzz scsi_express_register_host 4\n");
+	return 0;
+
+add_host_failed:
+	dev_err(&h->pdev->dev, "scsi_add_host failed.\n");
+	scsi_host_put(sh);
+	return rc;
+bail:
+	dev_err(&h->pdev->dev, "scsi_host_alloc failed.\n");
+	return -ENOMEM;
+}
+
 static int __devinit scsi_express_probe(struct pci_dev *pdev,
 			const struct pci_device_id *pci_id)
 {
@@ -1184,7 +1225,10 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 
 	dev_warn(&h->pdev->dev, "Setting up i/o queues\n");
 	rc = scsi_express_setup_io_queues(h);
+	if (rc)
+		goto bail;
 	dev_warn(&h->pdev->dev, "Finished Setting up i/o queues, rc = %d\n", rc);
+	rc = scsi_express_register_host(h);
 	if (rc)
 		goto bail;
 
