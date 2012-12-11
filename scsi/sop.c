@@ -394,20 +394,6 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 	return p;
 }
 
-static int __attribute__((unused)) pqi_enqueue_to_device(struct pqi_device_queue *q, void *element)
-{
-	void *p;
-
-	if (pqi_to_device_queue_is_full(q, 1))
-		return PQI_QUEUE_FULL;
-
-	/* FIXME, this is wrong, shouldn't memcpy. */
-	p = q->queue_vaddr + q->unposted_index * q->element_size;
-	memcpy(p, element, q->element_size);
-	q->unposted_index = (q->unposted_index + 1) % q->nelements;
-	return 0;
-}
-
 static int pqi_dequeue_from_device(struct pqi_device_queue *q, void *element)
 {
 	void *p;
