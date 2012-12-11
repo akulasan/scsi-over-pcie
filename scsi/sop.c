@@ -1307,8 +1307,10 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 5\n");
 	resp = (volatile struct report_pqi_device_capability_response *)
 			h->qinfo[aq->queue_id].request[request_idx].response;
-	if (resp->status != 0)
+	if (resp->status != 0) {
+		kfree(buffer);
 		return -1;
+	}
 
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 6\n");
 	h->max_iqs = le16_to_cpu(buffer->max_iqs);
@@ -1349,6 +1351,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	dev_warn(&h->pdev->dev, "admin_sgl_support_bitmask = 0x%04x\n", h->admin_sgl_support_bitmask);
 	
 
+	kfree(buffer);
 	return 0;
 }
 
