@@ -431,7 +431,7 @@ static void print_iu(unsigned char *iu)
 	u16 iu_length;
 
 	memcpy(&iu_length, &iu[2], 2);
-	iu_length = le16_to_cpu(iu_length);
+	iu_length = le16_to_cpu(iu_length) + 4;
 	printk(KERN_WARNING "***** IU type = 0x%02x, len = %hd, compat_features = %02x *****\n",
 			iu[0], iu_length, iu[1]);
 	print_bytes(iu, (int) iu_length, 1, 0);
@@ -803,7 +803,7 @@ static int scsi_express_response_accumulated(struct scsi_express_request *r)
 
 	if (r->response_accumulated == 0)
 		return 0;
-	iu_length = le16_to_cpu(*(u16 *) &r->response[2]);
+	iu_length = le16_to_cpu(*(u16 *) &r->response[2]) + 4;
 	return (r->response_accumulated >= iu_length);
 }
 
