@@ -344,7 +344,8 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 	return p;
 }
 
-static int pqi_enqueue_to_device(struct pqi_device_queue *q, void *element)
+
+static int __attribute__((unused)) pqi_enqueue_to_device(struct pqi_device_queue *q, void *element)
 {
 	void *p;
 
@@ -437,7 +438,7 @@ static void print_iu(unsigned char *iu)
 	print_bytes(iu, (int) iu_length, 1, 0);
 }
 
-static void print_unsubmitted_commands(struct pqi_device_queue *q)
+static void __attribute__((unused)) print_unsubmitted_commands(struct pqi_device_queue *q)
 {
 	u16 pi;
 	int i;
