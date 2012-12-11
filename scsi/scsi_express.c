@@ -446,9 +446,24 @@ static void print_unsubmitted_commands(struct pqi_device_queue *q)
 	unsigned char *iu;
 
 	pi = readw(q->pi);
-	for (i = pi; i < q->unposted_index; i++) {
-		iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
-		print_iu(iu);
+	if (pi == q->unposted_index) {
+		printk(KERN_WARNING "submit queue is empty.\n");
+		return;
+	}
+	if (pi < q->unposted_index) {
+		for (i = pi; i < q->unposted_index; i++) {
+			iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
+			print_iu(iu);
+		}
+	} else {
+		for (i = pi; i < q->nelements; i++) {
+			iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
+			print_iu(iu);
+		}
+		for (i = 0; i < q->unposted_index; i++) {
+			iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
+			print_iu(iu);
+		}
 	}
 }
 
