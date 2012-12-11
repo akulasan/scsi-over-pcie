@@ -1558,19 +1558,18 @@ static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
 }
 
 static int scsi_express_scatter_gather(struct scsi_express_device *h,
+			struct queue_info *q, 
 			struct sop_limited_cmd_iu *r,
 			struct scsi_cmnd *sc)
 {
 	struct scatterlist *sg;
 	int sg_block_number;
-	struct queue_info *q = &h->qinfo[r->queue_id];
 	int i, j, use_sg;
 	struct pqi_sgl_descriptor *datasg;
 	static const u16 no_sgl_size =
 			(u16) (sizeof(*r) - sizeof(r->sg[0]) * 2) - 4;
 
 	BUG_ON(scsi_sg_count(sc) > MAX_SGLS);
-	sg_block_number = r->queue_id * MAX_CMDS * MAX_SGLS;
 
 	use_sg = scsi_dma_map(sc);
 	if (use_sg < 0)
@@ -1581,19 +1580,30 @@ static int scsi_express_scatter_gather(struct scsi_express_device *h,
 		return 0;
 	}
 
+	sg_block_number = (r->request_id & 0x0ff) * MAX_SGLS;
+	dev_warn(&h->pdev->dev, "use_sg = %d, sg_block_number = %d\n",
+			use_sg, sg_block_number);
 	r->xfer_size = 0;
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * 2);
 	datasg = &r->sg[0];
 	j = 0;
 	scsi_for_each_sg(sc, sg, use_sg, i) {
+		dev_warn(&h->pdev->dev, "j = %d, datasg = %p\n", j, datasg);
 		if (j == 1) {
+			dev_warn(&h->pdev->dev, "filling sg chain element\n");
 			fill_sg_chain_element(datasg, q,
 					sg_block_number, scsi_sg_count(sc) - 1);
+			dev_warn(&h->pdev->dev, "filled sg chain element\n");
 			datasg = &q->sg[sg_block_number];
 			j++;
+			dev_warn(&h->pdev->dev, "j is now %d, datasg = %p\n", j, datasg);
 		}
+		if (j > 1)
+			dev_warn(&h->pdev->dev, "j = %d, fill %p\n", j, datasg);
 		fill_sg_data_element(datasg, sg, &r->xfer_size);
 		datasg++;
+		if (j > 1)
+			dev_warn(&h->pdev->dev, "j = %d, filled, datasg = %p\n", j, datasg);
 		j++;
 	}
 	return 0;
@@ -1671,7 +1681,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	}
 	memset(r->cdb, 0, 16);
 	memcpy(r->cdb, sc->cmnd, sc->cmd_len);
-	if (scsi_express_scatter_gather(h, r, sc)) {
+	if (scsi_express_scatter_gather(h, q, r, sc)) {
 		/* FIXME:  What to do here?  We already allocated a
 		 * slot in the submission ring buffer.  Either make
 		 * it a NULL IU, or unallocate it somehow while avoiding races.
