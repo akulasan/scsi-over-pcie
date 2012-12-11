@@ -1182,6 +1182,77 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	dev_warn(&h->pdev->dev, "wait_for_completion returned\n");
 }
 
+static void fill_get_pqi_device_capabilities(struct sop_device *h,
+			struct report_pqi_device_capability_iu *r,
+			u16 request_id, void *buffer, u32 buffersize)
+{
+	u64 busaddr;
+
+	memset(r, 0, sizeof(*r));
+	r->iu_type = REPORT_PQI_DEVICE_CAPABILITY;
+	r->compatible_features = 0;
+	r->iu_length = cpu_to_le16(0x003C);
+	r->response_oq = 0;
+	r->work_area = 0;
+	r->request_id = cpu_to_le16(request_id);
+	r->function_code = 0;
+	r->buffer_size = cpu_to_le32(buffersize);
+
+        busaddr = pci_map_single(h->pdev, buffer, buffersize,
+                                PCI_DMA_FROMDEVICE);
+	/* FIXME: what if pci_map_single fails. */
+	r->sg.address = cpu_to_le64(busaddr);
+	r->sg.length = cpu_to_le32(buffersize);
+	r->sg.descriptor_type = PQI_SGL_DATA_BLOCK;
+}
+
+static int sop_get_pqi_device_capabilities(struct sop_device *h)
+{
+	struct report_pqi_device_capability_iu *r;
+	volatile struct report_pqi_device_capability_response *resp;
+	struct pqi_device_queue *aq = &h->admin_q_to_dev;
+	struct pqi_device_capabilities *buffer;
+	u16 request_id;
+	u64 busaddr;
+
+	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
+	if (!buffer)
+		return -ENOMEM;
+	r = pqi_alloc_elements(aq, 1);
+	request_id = alloc_request(h, aq->queue_id);
+	fill_get_pqi_device_capabilities(h, r, request_id, buffer,
+						(u32) sizeof(*buffer));
+	send_admin_command(h, request_id);
+	busaddr = le64_to_cpu(r->sg.address);
+	pci_unmap_single(h->pdev, busaddr, sizeof(*buffer),
+						PCI_DMA_FROMDEVICE);
+	resp = (volatile struct report_pqi_device_capability_response *)
+			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
+	if (resp->status != 0)
+		return -1;
+
+	h->max_iqs = le16_to_cpu(buffer->max_iqs);
+	h->max_iq_elements = le16_to_cpu(buffer->max_iq_elements);
+	h->max_iq_element_length = le16_to_cpu(buffer->max_iq_element_length);
+	h->min_iq_element_length = le16_to_cpu(buffer->min_iq_element_length);
+	h->max_oqs = le16_to_cpu(buffer->max_oqs);
+	h->max_oq_elements = le16_to_cpu(buffer->max_oq_elements);
+	h->max_oq_element_length = le16_to_cpu(buffer->max_oq_element_length);
+	h->min_oq_element_length = le16_to_cpu(buffer->min_oq_element_length);
+	h->intr_coalescing_time_granularity =
+		le16_to_cpu( buffer->intr_coalescing_time_granularity);
+	h->iq_alignment_exponent = buffer->iq_alignment_exponent;
+	h->oq_alignment_exponent = buffer->oq_alignment_exponent;
+	h->iq_ci_alignment_exponent = buffer->iq_ci_alignment_exponent;
+	h->oq_pi_alignment_exponent = buffer->oq_pi_alignment_exponent;
+	h->protocol_support_bitmask =
+		le32_to_cpu(buffer->protocol_support_bitmask);
+	h->admin_sgl_support_bitmask =
+		le16_to_cpu(buffer->admin_sgl_support_bitmask);
+
+	return 0;
+}
+
 static int sop_setup_io_queues(struct sop_device *h)
 {
 
@@ -1504,6 +1575,10 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	rc = sop_request_irqs(h, sop_adminq_msix_handler,
 					sop_ioq_msix_handler);
 	if (rc != 0)
+		goto bail;
+
+	rc = sop_get_pqi_device_capabilities(h);
+	if (rc)
 		goto bail;
 
 	dev_warn(&h->pdev->dev, "Setting up i/o queues\n");
@@ -1977,6 +2052,59 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(data_out_xferred, 28);
 	VERIFY_OFFSET(response, 32);
 	VERIFY_OFFSET(sense, 32);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct report_pqi_device_capability_iu, field) != offset)
+
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(response_oq, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(function_code, 10);
+	VERIFY_OFFSET(reserved, 11);
+	VERIFY_OFFSET(buffer_size, 44);
+	VERIFY_OFFSET(sg, 48);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct report_pqi_device_capability_response, field) != offset)
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(function_code, 10);
+	VERIFY_OFFSET(status, 11);
+	VERIFY_OFFSET(additional_status, 12);
+	VERIFY_OFFSET(reserved, 16);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct pqi_device_capabilities, field) != offset)
+	VERIFY_OFFSET(length, 0);
+	VERIFY_OFFSET(reserved, 2);
+	VERIFY_OFFSET(max_iqs, 16);
+	VERIFY_OFFSET(max_iq_elements, 18);
+	VERIFY_OFFSET(reserved2, 20);
+	VERIFY_OFFSET(max_iq_element_length, 24);
+	VERIFY_OFFSET(min_iq_element_length, 26);
+	VERIFY_OFFSET(max_oqs, 28);
+	VERIFY_OFFSET(max_oq_elements, 30);
+	VERIFY_OFFSET(reserved3, 32);
+	VERIFY_OFFSET(intr_coalescing_time_granularity, 34);
+	VERIFY_OFFSET(max_oq_element_length, 36);
+	VERIFY_OFFSET(min_oq_element_length, 38);
+	VERIFY_OFFSET(iq_alignment_exponent, 40);
+	VERIFY_OFFSET(oq_alignment_exponent, 41);
+	VERIFY_OFFSET(iq_ci_alignment_exponent, 42);
+	VERIFY_OFFSET(oq_pi_alignment_exponent, 43);
+	VERIFY_OFFSET(protocol_support_bitmask, 44);
+	VERIFY_OFFSET(admin_sgl_support_bitmask, 48);
+	VERIFY_OFFSET(reserved4, 50);
 #undef VERIFY_OFFSET
 
 }

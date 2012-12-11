@@ -177,6 +177,68 @@ struct pqi_capability {
 	u8 admin_oq_element_length; /* length in 16 byte units */
 	u8 reserved[4];
 };
+
+struct pqi_sgl_descriptor {
+	u64 address;
+	u32 length;
+	u8 reserved[3];
+	u8 descriptor_type;
+#define PQI_SGL_DATA_BLOCK (0x00 << 4)
+#define PQI_SGL_BIT_BUCKET (0x01 << 4)
+#define PQI_SGL_STANDARD_SEG (0x02 << 4)
+#define PQI_SGL_STANDARD_LAST_SEG (0x03 << 4)
+};
+
+struct report_pqi_device_capability_iu {
+	u8 iu_type;
+#define REPORT_PQI_DEVICE_CAPABILITY 0x60
+	u8 compatible_features;
+	u16 iu_length;
+	u16 response_oq;
+	u16 work_area;
+	u16 request_id;
+	u8 function_code;
+	u8 reserved[33];
+	u32 buffer_size;
+	struct pqi_sgl_descriptor sg;
+};
+
+struct report_pqi_device_capability_response {
+	u8 iu_type;
+#define REPORT_PQI_DEVICE_CAPABILITY_RESPONSE 0xE0
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u8 function_code;
+	u8 status;
+	u32 additional_status;
+	u8 reserved[63-15];
+};
+
+struct pqi_device_capabilities {
+	u16 length;
+	u8 reserved[14];
+	u16 max_iqs;
+	u16 max_iq_elements;
+	u8 reserved2[4];
+	u16 max_iq_element_length;
+	u16 min_iq_element_length;
+	u16 max_oqs;
+	u16 max_oq_elements;
+	u8 reserved3[2];
+	u16 intr_coalescing_time_granularity;
+	u16 max_oq_element_length;
+	u16 min_oq_element_length;
+	u8 iq_alignment_exponent;
+	u8 oq_alignment_exponent;
+	u8 iq_ci_alignment_exponent;
+	u8 oq_pi_alignment_exponent;
+	u32 protocol_support_bitmask;
+	u16 admin_sgl_support_bitmask;
+	u8 reserved4[63 - 49];
+};
 #pragma pack()
 
 #define IQ_IU_SIZE 64
@@ -185,7 +247,6 @@ struct pqi_capability {
 #define OQ_NELEMENTS 64
 
 struct sop_device;
-struct pqi_sgl_descriptor;
 struct queue_info {
 	struct sop_device *h;
 	int irq;
@@ -198,7 +259,6 @@ struct queue_info {
 	struct pqi_sgl_descriptor *sg;
 	dma_addr_t sg_bus_addr;
 };
-
 
 struct sop_device {
 	struct pci_dev *pdev;
@@ -218,6 +278,24 @@ struct sop_device {
 	struct pqi_device_queue admin_q_to_dev, admin_q_from_dev;
 	struct pqi_device_queue *io_q_to_dev;
 	struct pqi_device_queue *io_q_from_dev;
+
+	/* cached data about PQI device limits */
+	u16 max_iqs;
+	u16 max_iq_elements;
+	u16 max_iq_element_length;
+	u16 min_iq_element_length;
+	u16 max_oqs;
+	u16 max_oq_elements;
+	u16 max_oq_element_length;
+	u16 min_oq_element_length;
+	u16 intr_coalescing_time_granularity;
+	u8 iq_alignment_exponent;
+	u8 oq_alignment_exponent;
+	u8 iq_ci_alignment_exponent;
+	u8 oq_pi_alignment_exponent;
+	u32 protocol_support_bitmask;
+	u16 admin_sgl_support_bitmask;
+	
 	u16 current_id;
 	struct queue_info qinfo[MAX_TOTAL_QUEUES];
 	struct Scsi_Host *sh;
@@ -237,18 +315,6 @@ struct sop_request {
 	u16 request_id;
 	u8 q;
 	u8 response[MAX_RESPONSE_SIZE];
-};
-
-#pragma pack(1)
-struct pqi_sgl_descriptor {
-	u64 address;
-	u32 length;
-	u8 reserved[3];
-	u8 descriptor_type;
-#define PQI_SGL_DATA_BLOCK (0x00 << 4)
-#define PQI_SGL_BIT_BUCKET (0x01 << 4)
-#define PQI_SGL_STANDARD_SEG (0x02 << 4)
-#define PQI_SGL_STANDARD_LAST_SEG (0x03 << 4)
 };
 #pragma pack()
 
