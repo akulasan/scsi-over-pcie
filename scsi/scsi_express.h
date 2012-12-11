@@ -21,7 +21,8 @@
  *
  */
 
-#define MAX_SGLS (1024)
+/* #define MAX_SGLS (1024) */
+#define MAX_SGLS (32)
 #define MAX_CMDS (256)
 
 struct scsi_express_request;

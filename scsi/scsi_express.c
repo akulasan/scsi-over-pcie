@@ -90,7 +90,7 @@ static struct scsi_host_template scsi_express_template = {
 	.sdev_attrs			= scsi_express_sdev_attrs,
 	.host_attrs			= scsi_express_host_attrs,
 #endif
-	.max_sectors			= 8192, /* FIXME: is this correct? */
+	.max_sectors			= (MAX_SGLS * 8), /* FIXME: is this correct? */
 };
 
 /* 
@@ -1328,9 +1328,9 @@ static int scsi_express_register_host(struct scsi_express_device *h)
 	sh->max_cmd_len = MAX_COMMAND_SIZE;
 	sh->max_lun = 255; /* FIXME are these correct? */
 	sh->max_id = 255;
-	sh->can_queue = 64; /* FIXME: get this from device if possible. */
-	sh->cmd_per_lun = 64;
-	sh->sg_tablesize = 2; /* FIXME make this bigger */
+	sh->can_queue = 32; /* FIXME: get this from device if possible. */
+	sh->cmd_per_lun = 32;
+	sh->sg_tablesize = MAX_SGLS; /* FIXME make this bigger */
 	sh->hostdata[0] = (unsigned long) h;
 	sh->irq = h->qinfo[0].msix_vector;
 	sh->unique_id = sh->irq; /* really? */
