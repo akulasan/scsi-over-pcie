@@ -1301,7 +1301,7 @@ static int alloc_request(struct sop_device *h, u8 q)
         do {
                 rc = (u16) find_first_zero_bit(h->qinfo[q].request_bits,
 						h->qinfo[q].qdepth);
-                if (rc >= h->qinfo[q].qdepth) {
+                if (rc >= h->qinfo[q].qdepth - 1) {
 			spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
 			dev_warn(&h->pdev->dev, "alloc_request failed.\n");
 			return -EBUSY;
