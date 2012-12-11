@@ -132,7 +132,7 @@ static void free_q_request_buffers(struct queue_info *q)
 	}
 }
 
-static int allocate_sgl_area(struct scsi_express_device *h,
+static int allocate_sgl_area(struct sop_device *h,
 		struct queue_info *q)
 {
 	size_t total_size = q->qdepth * MAX_SGLS *
@@ -146,7 +146,7 @@ static int allocate_sgl_area(struct scsi_express_device *h,
 	return (q->sg) ? 0 : -ENOMEM;
 }
 
-static void free_sgl_area(struct scsi_express_device *h, struct queue_info *q)
+static void free_sgl_area(struct sop_device *h, struct queue_info *q)
 {
 	size_t total_size = q->qdepth * MAX_SGLS *
 				sizeof(struct pqi_sgl_descriptor);
@@ -157,7 +157,7 @@ static void free_sgl_area(struct scsi_express_device *h, struct queue_info *q)
 	q->sg = NULL;
 }
 
-static void free_all_q_sgl_areas(struct scsi_express_device *h)
+static void free_all_q_sgl_areas(struct sop_device *h)
 {
 	int i;
 
@@ -184,14 +184,14 @@ bailout:
 	return -ENOMEM;
 }
 
-static void free_all_q_request_buffers(struct scsi_express_device *h)
+static void free_all_q_request_buffers(struct sop_device *h)
 {
 	int i;
 	for (i = 0; i < h->nr_queues; i++)
 		free_q_request_buffers(&h->qinfo[i]);
 }
 
-static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
+static int pqi_device_queue_array_alloc(struct sop_device *h,
 		struct pqi_device_queue **xq, int num_queues,
 		u16 n_q_elements, u8 q_element_size_over_16,
 		int queue_direction, int starting_queue_id)
@@ -232,7 +232,7 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 			int q = i + starting_queue_id;
 			if (allocate_q_request_buffers(&h->qinfo[q],
 					n_q_elements,
-					sizeof(struct scsi_express_request)))
+					sizeof(struct sop_request)))
 				goto bailout;
 			dev_warn(&h->pdev->dev, "   5 Allocated #%d\n", i);
 		}
@@ -505,7 +505,7 @@ static void pqi_notify_device_queue_read(struct pqi_device_queue *q)
 	writew(q->unposted_index, q->ci);
 }
 
-static int wait_for_admin_command_ack(struct scsi_express_device *h)
+static int wait_for_admin_command_ack(struct sop_device *h)
 {
 	u64 paf;
 	u8 function_and_status;
@@ -527,7 +527,7 @@ static int wait_for_admin_command_ack(struct scsi_express_device *h)
 	return -1;
 }
 
-static int __devinit scsi_express_create_admin_queues(struct scsi_express_device *h)
+static int __devinit scsi_express_create_admin_queues(struct sop_device *h)
 {
 	u64 paf, pqicap, admin_iq_pi_offset, admin_oq_ci_offset;
 	u32 status, admin_queue_param;
@@ -710,11 +710,11 @@ static int __devinit scsi_express_create_admin_queues(struct scsi_express_device
 	/* Allocate request buffers for admin queues */
 	if (allocate_q_request_buffers(&h->qinfo[0],
 				ADMIN_QUEUE_ELEMENT_COUNT,
-				sizeof(struct scsi_express_request)))
+				sizeof(struct sop_request)))
 		goto bailout;
 	if (allocate_q_request_buffers(&h->qinfo[1],
 				ADMIN_QUEUE_ELEMENT_COUNT,
-				sizeof(struct scsi_express_request)))
+				sizeof(struct sop_request)))
 		goto bailout;
 	return 0;
 
@@ -726,7 +726,7 @@ bailout:
 	return -1;	
 }
 
-static int scsi_express_delete_admin_queues(struct scsi_express_device *h)
+static int scsi_express_delete_admin_queues(struct sop_device *h)
 {
 	u64 paf;
 	u32 status;
@@ -766,7 +766,7 @@ static int scsi_express_delete_admin_queues(struct scsi_express_device *h)
 	return -1;
 }
 
-static int scsi_express_setup_msix(struct scsi_express_device *h)
+static int scsi_express_setup_msix(struct sop_device *h)
 {
 	int i, err;
 
@@ -811,7 +811,7 @@ default_int_mode:
 }
 
 /* function to determine whether a complete response has been accumulated */
-static int scsi_express_response_accumulated(struct scsi_express_request *r)
+static int scsi_express_response_accumulated(struct sop_request *r)
 {
 	u16 iu_length;
 
@@ -821,10 +821,10 @@ static int scsi_express_response_accumulated(struct scsi_express_request *r)
 	return (r->response_accumulated >= iu_length);
 }
 
-static void free_request(struct scsi_express_device *h, u8 q, u16 request_id);
+static void free_request(struct sop_device *h, u8 q, u16 request_id);
 
-static void complete_scsi_cmd(struct scsi_express_device *h,
-				struct scsi_express_request *r)
+static void complete_scsi_cmd(struct sop_device *h,
+				struct sop_request *r)
 {
 	struct scsi_cmnd *scmd;
 	struct sop_cmd_response *scr;
@@ -905,13 +905,13 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 	u8 sq;
 	int rc;
 	struct queue_info *q = devid;
-	struct scsi_express_device *h = q->h;
+	struct sop_device *h = q->h;
 #if 0
 	printk(KERN_WARNING "=========> Got ioq interrupt, q = %p (%d) vector = %d\n",
 			q, q->pqiq->queue_id, q->msix_vector);
 #endif
 	do {
-		struct scsi_express_request *r = q->pqiq->request;
+		struct sop_request *r = q->pqiq->request;
 
 		if (pqi_from_device_queue_is_empty(q->pqiq)) {
 			/* dev_warn(&h->pdev->dev, "==== interrupt, ioq %d is empty ====\n",
@@ -966,14 +966,14 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 	u8 iu_type;
 	u16 request_id;
 	int rc;
-	struct scsi_express_device *h = q->h;
+	struct sop_device *h = q->h;
 	u8 sq;
 
 	printk(KERN_WARNING "Got admin oq interrupt, q = %p\n", q);
 	printk(KERN_WARNING "Got admin oq interrupt, q = %p (%d)\n", q, q->pqiq->queue_id);
 
 	do {
-		struct scsi_express_request *r = h->admin_q_from_dev.request;
+		struct sop_request *r = h->admin_q_from_dev.request;
 
 		dev_warn(&h->pdev->dev, "admin intr, r = %p\n", r);
 
@@ -1014,7 +1014,7 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 	return IRQ_HANDLED;
 }
 
-static void scsi_express_irq_affinity_hints(struct scsi_express_device *h)
+static void scsi_express_irq_affinity_hints(struct sop_device *h)
 {
 	int i, cpu;
 
@@ -1027,7 +1027,7 @@ static void scsi_express_irq_affinity_hints(struct scsi_express_device *h)
 	}
 }
 
-static int scsi_express_request_irqs(struct scsi_express_device *h,
+static int sop_request_irqs(struct sop_device *h,
 					irq_handler_t msix_adminq_handler,
 					irq_handler_t msix_ioq_handler)
 {
@@ -1064,7 +1064,7 @@ default_int_mode:
 	return -1;
 }
 
-static void scsi_express_free_irqs(struct scsi_express_device *h)
+static void scsi_express_free_irqs(struct sop_device *h)
 {
 	int i;
 
@@ -1079,7 +1079,7 @@ static void scsi_express_free_irqs(struct scsi_express_device *h)
 }
 
 static void scsi_express_free_irqs_and_disable_msix(
-		struct scsi_express_device *h)
+		struct sop_device *h)
 {
 	scsi_express_free_irqs(h);
 #ifdef CONFIG_PCI_MSI
@@ -1089,7 +1089,7 @@ static void scsi_express_free_irqs_and_disable_msix(
 }
 
 /* FIXME: maybe there's a better way to do this */
-static u16 alloc_request(struct scsi_express_device *h, u8 q)
+static u16 alloc_request(struct sop_device *h, u8 q)
 {
 	u16 rc;
 	unsigned long flags;
@@ -1113,13 +1113,13 @@ static u16 alloc_request(struct scsi_express_device *h, u8 q)
 	return rc | (q << 8);
 }
 
-static void free_request(struct scsi_express_device *h, u8 q, u16 request_id)
+static void free_request(struct sop_device *h, u8 q, u16 request_id)
 {
 	BUG_ON((request_id >> 8) != q);
 	clear_bit(request_id & 0x00ff, h->qinfo[q].request_bits);
 }
 
-static void fill_create_io_queue_request(struct scsi_express_device *h,
+static void fill_create_io_queue_request(struct sop_device *h,
 	struct pqi_create_operational_queue_request *r,
 	struct pqi_device_queue *q, int to_device, u16 request_id,
 	u16 msix_vector)
@@ -1151,7 +1151,7 @@ static void fill_create_io_queue_request(struct scsi_express_device *h,
 	}
 }
 
-static void fill_delete_io_queue_request(struct scsi_express_device *h,
+static void fill_delete_io_queue_request(struct sop_device *h,
 	struct pqi_delete_operational_queue_request *r, u16 queue_id,
 	int to_device, u16 request_id)
 {
@@ -1165,9 +1165,9 @@ static void fill_delete_io_queue_request(struct scsi_express_device *h,
 	r->queue_id = cpu_to_le16(queue_id);
 }
 
-static void send_admin_command(struct scsi_express_device *h, u16 request_id)
+static void send_admin_command(struct sop_device *h, u16 request_id)
 {
-	struct scsi_express_request *request;
+	struct sop_request *request;
 	struct pqi_device_queue *aq = &h->admin_q_to_dev;
 	DECLARE_COMPLETION_ONSTACK(wait);
 
@@ -1182,7 +1182,7 @@ static void send_admin_command(struct scsi_express_device *h, u16 request_id)
 	dev_warn(&h->pdev->dev, "wait_for_completion returned\n");
 }
 
-static int scsi_express_setup_io_queues(struct scsi_express_device *h)
+static int scsi_express_setup_io_queues(struct sop_device *h)
 {
 
 	int i, niqs, noqs;
@@ -1301,7 +1301,7 @@ bail_out:
 	return -1;
 }
 
-static void scsi_express_free_io_queues(struct scsi_express_device *h)
+static void scsi_express_free_io_queues(struct sop_device *h)
 {
 	size_t total_size, n_q_elements, element_size;
 	int remainder;
@@ -1329,7 +1329,7 @@ static void scsi_express_free_io_queues(struct scsi_express_device *h)
 	}
 }
 
-static int scsi_express_delete_io_queues(struct scsi_express_device *h)
+static int scsi_express_delete_io_queues(struct sop_device *h)
 {
 	int i;
 	struct pqi_delete_operational_queue_request *r;
@@ -1389,7 +1389,7 @@ static int scsi_express_set_dma_mask(struct pci_dev * pdev)
 	return rc;
 }
 
-static int scsi_express_register_host(struct scsi_express_device *h)
+static int scsi_express_register_host(struct sop_device *h)
 {
 	struct Scsi_Host *sh;
 	int rc;
@@ -1433,7 +1433,7 @@ bail:
 static int __devinit scsi_express_probe(struct pci_dev *pdev,
 			const struct pci_device_id *pci_id)
 {
-	struct scsi_express_device *h;
+	struct sop_device *h;
 	u64 signature;
 	int i, rc;
 
@@ -1500,7 +1500,7 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 	if (rc)
 		goto bail;
 
-	rc = scsi_express_request_irqs(h, scsi_express_adminq_msix_handler,
+	rc = sop_request_irqs(h, scsi_express_adminq_msix_handler,
 					scsi_express_ioq_msix_handler);
 	if (rc != 0)
 		goto bail;
@@ -1535,7 +1535,7 @@ static int scsi_express_resume(__attribute__((unused)) struct pci_dev *pdev)
 
 static void __devexit scsi_express_remove(struct pci_dev *pdev)
 {
-	struct scsi_express_device *h;
+	struct sop_device *h;
 
 	h = pci_get_drvdata(pdev);
 	dev_warn(&pdev->dev, "remove called.\n");
@@ -1576,19 +1576,19 @@ static void __exit scsi_express_exit(void)
 	pci_unregister_driver(&scsi_express_pci_driver);
 }
 
-static inline struct scsi_express_device *sdev_to_hba(struct scsi_device *sdev)
+static inline struct sop_device *sdev_to_hba(struct scsi_device *sdev)
 {
 	unsigned long *priv = shost_priv(sdev->host);
-	return (struct scsi_express_device *) *priv;
+	return (struct sop_device *) *priv;
 }
 
-static struct queue_info *find_submission_queue(struct scsi_express_device *h)
+static struct queue_info *find_submission_queue(struct sop_device *h)
 {
 	int q = h->noqs + 1 + (smp_processor_id() % (h->niqs - 1));
 	return &h->qinfo[q];
 }
 
-static struct queue_info *find_reply_queue(struct scsi_express_device *h)
+static struct queue_info *find_reply_queue(struct sop_device *h)
 {
 	int q = 2 + (smp_processor_id() % (h->noqs - 1));
 	return &h->qinfo[q];
@@ -1641,7 +1641,7 @@ static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
 	}
 }
 
-static int scsi_express_scatter_gather(struct scsi_express_device *h,
+static int scsi_express_scatter_gather(struct sop_device *h,
 			struct queue_info *q, 
 			struct sop_limited_cmd_iu *r,
 			struct scsi_cmnd *sc, u32 *xfer_size)
@@ -1686,11 +1686,11 @@ static int scsi_express_scatter_gather(struct scsi_express_device *h,
 static int sop_queuecommand_lck(struct scsi_cmnd *sc,
         void (*done)(struct scsi_cmnd *))
 {
-	struct scsi_express_device *h;
+	struct sop_device *h;
 	/* struct scsi_device *sdev = sc->device; */
 	struct queue_info *submitq, *replyq;
 	struct sop_limited_cmd_iu *r;
-	struct scsi_express_request *ser;
+	struct sop_request *ser;
 	u16 request_id;
 
 	h = sdev_to_hba(sc->device);
@@ -1773,7 +1773,7 @@ static DEF_SCSI_QCMD(sop_queuecommand);
 static int sop_change_queue_depth(struct scsi_device *sdev,
         int qdepth, int reason)
 {
-	struct scsi_express_device *h = sdev_to_hba(sdev);
+	struct sop_device *h = sdev_to_hba(sdev);
 
 	dev_warn(&h->pdev->dev, "sop_change_queue_depth called but not implemented\n");
 	return 0;
@@ -1781,7 +1781,7 @@ static int sop_change_queue_depth(struct scsi_device *sdev,
 
 static int sop_abort_handler(struct scsi_cmnd *sc)
 {
-	struct scsi_express_device *h;
+	struct sop_device *h;
 
 	h = sdev_to_hba(sc->device);
 	dev_warn(&h->pdev->dev, "sop_abort_handler called but not implemented\n");
@@ -1790,7 +1790,7 @@ static int sop_abort_handler(struct scsi_cmnd *sc)
 
 static int sop_device_reset_handler(struct scsi_cmnd *sc)
 {
-	struct scsi_express_device *h;
+	struct sop_device *h;
 
 	h = sdev_to_hba(sc->device);
 	dev_warn(&h->pdev->dev, "sop_device_reset_handler called but not implemented\n");
@@ -1799,7 +1799,7 @@ static int sop_device_reset_handler(struct scsi_cmnd *sc)
 
 static int sop_slave_alloc(struct scsi_device *sdev)
 {
-	/* struct scsi_express_device *h = sdev_to_hba(sdev); */
+	/* struct sop_device *h = sdev_to_hba(sdev); */
 
 	/* dev_warn(&h->pdev->dev, "sop_slave_alloc called but not implemented\n"); */
 	return 0;
@@ -1807,7 +1807,7 @@ static int sop_slave_alloc(struct scsi_device *sdev)
 
 static void sop_slave_destroy(struct scsi_device *sdev)
 {
-	/* struct scsi_express_device *h = sdev_to_hba(sdev); */
+	/* struct sop_device *h = sdev_to_hba(sdev); */
 
 	/* dev_warn(&h->pdev->dev, "sop_slave_destroy called but not implemented\n"); */
 	return;
@@ -1816,7 +1816,7 @@ static void sop_slave_destroy(struct scsi_device *sdev)
 static int sop_compat_ioctl(struct scsi_device *sdev,
 						int cmd, void *arg)
 {
-	struct scsi_express_device *h = sdev_to_hba(sdev);
+	struct sop_device *h = sdev_to_hba(sdev);
 
 	dev_warn(&h->pdev->dev, "sop_compat_ioctl called but not implemented\n");
 	return 0;
@@ -1824,7 +1824,7 @@ static int sop_compat_ioctl(struct scsi_device *sdev,
 
 static int sop_ioctl(struct scsi_device *sdev, int cmd, void *arg)
 {
-	struct scsi_express_device *h = sdev_to_hba(sdev);
+	struct sop_device *h = sdev_to_hba(sdev);
 
 	dev_warn(&h->pdev->dev, "sop_ioctl called but not implemented\n");
 	return 0;

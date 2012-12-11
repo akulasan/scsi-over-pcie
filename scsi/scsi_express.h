@@ -26,7 +26,7 @@
 #define MAX_SGLS (32)
 #define MAX_CMDS (256)
 
-struct scsi_express_request;
+struct sop_request;
 
 struct pqi_device_queue {
 	__iomem void *queue_vaddr;
@@ -46,7 +46,7 @@ struct pqi_device_queue {
 	spinlock_t index_lock;
 #define PQI_DIR_TO_DEVICE 0
 #define PQI_DIR_FROM_DEVICE 1
-	struct scsi_express_request *request; /* used by oq only */
+	struct sop_request *request; /* used by oq only */
 };
 
 #define PQI_QUEUE_FULL (-1)
@@ -184,15 +184,15 @@ struct pqi_capability {
 #define IQ_NELEMENTS 64
 #define OQ_NELEMENTS 64
 
-struct scsi_express_device;
+struct sop_device;
 struct pqi_sgl_descriptor;
 struct queue_info {
-	struct scsi_express_device *h;
+	struct sop_device *h;
 	int irq;
 	int msix_vector;
 	spinlock_t qlock;
 	u16 qdepth;
-	struct scsi_express_request *request;
+	struct sop_request *request;
 	unsigned long *request_bits;
 	struct pqi_device_queue *pqiq;
 	struct pqi_sgl_descriptor *sg;
@@ -200,7 +200,7 @@ struct queue_info {
 };
 
 
-struct scsi_express_device {
+struct sop_device {
 	struct pci_dev *pdev;
 	struct pqi_capability pqicap;
 	__iomem struct pqi_device_register_set *pqireg;
@@ -228,7 +228,7 @@ struct scsi_express_device {
 #pragma pack()
 
 #define MAX_RESPONSE_SIZE 64
-struct scsi_express_request {
+struct sop_request {
 	struct completion *waiting;
 	struct scsi_cmnd *scmd;
 	u32 xfer_size;
