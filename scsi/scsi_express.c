@@ -1523,7 +1523,8 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
 	r->compatible_features = 0;
-	r->queue_id = cpu_to_le16(q->pqiq->queue_id);
+	/* hard code this to queue 2 for now.  FIXME later. */
+	r->queue_id = cpu_to_le16(h->qinfo[2].pqiq->queue_id);
 	r->work_area = 0;
 	r->request_id = request_id;
 	r->xfer_size = 0;
