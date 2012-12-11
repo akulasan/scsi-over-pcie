@@ -253,7 +253,7 @@ struct pqi_device_capabilities {
 #pragma pack()
 
 #define IQ_IU_SIZE 64
-#define OQ_IU_SIZE 16
+#define OQ_IU_SIZE 64
 #define IQ_NELEMENTS 64
 #define OQ_NELEMENTS 64
 
