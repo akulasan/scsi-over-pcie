@@ -315,7 +315,9 @@ struct sop_device {
 	void *iq_vaddr, *oq_vaddr;
 	struct Scsi_Host *scsi_host;
 	int elements_per_io_queue;
-	atomic_t max_outstanding_commands;
+	int max_outstanding_commands;
+	atomic_t curr_outstanding_commands;
+	spinlock_t stat_lock;
 };
 
 #pragma pack()

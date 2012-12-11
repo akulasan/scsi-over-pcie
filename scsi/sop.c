@@ -74,11 +74,11 @@ static ssize_t host_show_sopstats(struct device *dev,
 {
         struct sop_device *h;
         struct Scsi_Host *shost = class_to_shost(dev);
-	int moc;
+	int curr;
 
         h = shost_to_hba(shost);
-	moc = atomic_read(&h->max_outstanding_commands);
-        return snprintf(buf, 20, "%d\n", moc);
+	curr = atomic_read(&h->curr_outstanding_commands);
+        return snprintf(buf, 20, "max out: %d curr out: %d\n", h->max_outstanding_commands, curr);
 }
 
 static DEVICE_ATTR(sopstats, S_IRUGO, host_show_sopstats, NULL);
@@ -550,6 +550,7 @@ static void __attribute__((unused)) print_unsubmitted_commands(struct pqi_device
 static void pqi_notify_device_queue_written(struct sop_device *h, struct pqi_device_queue *q)
 {
 	unsigned long flags;
+	int curr;
 	/*
 	 * Notify the device that the host has produced data for the device
 	 */
@@ -558,7 +559,12 @@ static void pqi_notify_device_queue_written(struct sop_device *h, struct pqi_dev
 	q->local_pi = q->unposted_index;
 	writew(q->unposted_index, q->pi);
 	spin_unlock_irqrestore(&q->index_lock, flags);
-	atomic_inc(&h->max_outstanding_commands);
+	atomic_inc(&h->curr_outstanding_commands);
+	spin_lock_irqsave(&h->stat_lock, flags);
+	curr = atomic_read(&h->curr_outstanding_commands);
+	if (curr > h->max_outstanding_commands)
+		h->max_outstanding_commands = curr;
+	spin_unlock_irqrestore(&h->stat_lock, flags);
 }
 
 static void pqi_notify_device_queue_read(struct pqi_device_queue *q)
@@ -1155,7 +1161,7 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 				}
 			}
 			pqi_notify_device_queue_read(q->pqiq);
-			atomic_dec(&h->max_outstanding_commands);
+			atomic_dec(&h->curr_outstanding_commands);
 		}
 	} while (1);
 
@@ -1197,7 +1203,7 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 			wmb();
 			complete(r->waiting);
 			pqi_notify_device_queue_read(&h->admin_q_from_dev);
-			atomic_dec(&h->max_outstanding_commands);
+			atomic_dec(&h->curr_outstanding_commands);
 		}
 	} while (1);
 
@@ -1849,7 +1855,9 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (!h)
 		return -ENOMEM;
 
-	atomic_set(&h->max_outstanding_commands, 0);
+	h->max_outstanding_commands = 0;
+	atomic_set(&h->curr_outstanding_commands, 0);
+	spin_lock_init(&h->stat_lock);
 	h->ctlr = controller_num;
 	for (i = 0; i < MAX_TOTAL_QUEUES; i++) {
 		spin_lock_init(&h->qinfo[i].qlock);
