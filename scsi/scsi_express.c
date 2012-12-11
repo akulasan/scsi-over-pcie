@@ -567,48 +567,6 @@ bailout:
 					admin_iq, admin_iq_busaddr);
 	free_all_q_request_buffers(h);
 	return -1;	
-	
-
-#if 0
-	/*
-	 * If the FUNCTION AND STATUS CODE field in the Process Administrator
-	 * Function register is set to 00h (i.e., IDLE) (see 5.2.5) and the
-	 * Status register PQI DEVICE STATE field is set to 02h (see 5.2.10)
-	 * (i.e., S2:Ready_For_Administrator_Function), then the PQI host may
-	 * create the administrator queues using the following steps:
-	 * 1) read the Capability register to determine the element length and
-	 *    the maximum number of the element in each of the administrator
-	 *    queues; 2) allocates the PCI memory spaces using a mechanism outside
-	 * the scope of this standard for the
-	 *	 * following:
-	 *	 * A) Administrator IQ element array;
-	 *	 * B) Administrator OQ element array;
-	 *	 * C) Administrator IQ CI; and
-	 *	 * D) Administrator OQ PI;
-	 * 3) set the fields as shown in table 15;
-	 * 4) set the value of the FUNCTION AND STATUS CODE field in the
-	 *    Process Administrator Function register to 01h (i.e., CREATE
-	 *    ADMINISTRATOR QUEUE FUNCTION); 5) read the Process Administrator
-	 *    Function register until:
-	 *	 * A) the FUNCTION AND STATUS CODE field is set to 00h (i.e., IDLE); or
-	 *	 * B) 100 ms has elapsed;
-	 * 6) if the FUNCTION AND STATUS CODE field is not set to 00h and 100
-	 *    ms has elapsed then read the Process Administrator Function
-	 *    register; 7) if the FUNCTION AND STATUS CODE field is set to 00h,
-	 *    then:
-	 *	 * A) read the administrator IQ PI offset from the
-	 *	 Administrator IQ PI Offset register and save the value in
-	 *	 the PQI host local memory; and
-	 *	 * B) read the administrator OQ CI offset from the
-	 *	 Administrator OQ CI Offset register and save the value in
-	 *	 the PQI host local memory;
-	 * and
-	 * 8) if the FUNCTION AND STATUS CODE field is not set to 00h, then
-	 *    read the Status register and report the status in a vendor specific
-	 *    manner.
-	 */
-#endif
-
 }
 
 static int scsi_express_delete_admin_queues(struct scsi_express_device *h)
