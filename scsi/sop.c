@@ -1144,6 +1144,8 @@ static int sop_request_irqs(struct sop_device *h,
 	u8 i, j;
 	int rc;
 
+	sop_irq_affinity_hints(h);
+
 	rc = request_irq(h->qinfo[0].msix_vector, msix_adminq_handler, 0,
 					h->devname, &h->qinfo[0]);
 	if (rc != 0) {
@@ -1161,7 +1163,6 @@ static int sop_request_irqs(struct sop_device *h,
 			goto freeirqs;
 		}
 	}
-	sop_irq_affinity_hints(h);
 	return 0;
 
 freeirqs:
