@@ -1866,7 +1866,7 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	/* struct scsi_device *sdev = sc->device; */
 	struct queue_info *submitq, *replyq;
 	struct sop_limited_cmd_iu *r;
-	struct sop_request *ser;
+	struct sop_request *sopr;
 	int request_id;
 
 	h = sdev_to_hba(sc->device);
@@ -1899,20 +1899,20 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	r->queue_id = cpu_to_le16(replyq->pqiq->queue_id);
 	r->work_area = 0;
 	r->request_id = request_id;
-	ser = &submitq->request[request_id & h->qid_mask];
-	ser->xfer_size = 0;
+	sopr = &submitq->request[request_id & h->qid_mask];
+	sopr->xfer_size = 0;
 #if 0
 	dev_warn(&h->pdev->dev, "h%db%dt%dl%d: "
-		"CDB = 0x%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x ser = %p, rid = %hu\n",
+		"CDB = 0x%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x sopr = %p, rid = %hu\n",
 		sdev->host->host_no, sdev_channel(sc->device), sdev_id(sc->device), sdev->lun,
 		sc->cmnd[0], sc->cmnd[1], sc->cmnd[2], sc->cmnd[3],
 		sc->cmnd[4], sc->cmnd[5], sc->cmnd[6], sc->cmnd[7],
 		sc->cmnd[8], sc->cmnd[9], sc->cmnd[10], sc->cmnd[11],
 		sc->cmnd[12], sc->cmnd[13], sc->cmnd[14], sc->cmnd[15],
-		ser, request_id);
+		sopr, request_id);
 #endif
-	ser->scmd = sc;
-	ser->waiting = NULL;
+	sopr->scmd = sc;
+	sopr->waiting = NULL;
 
 	switch (sc->sc_data_direction) {
 	case DMA_TO_DEVICE:
@@ -1930,7 +1930,7 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	}
 	memset(r->cdb, 0, 16);
 	memcpy(r->cdb, sc->cmnd, sc->cmd_len);
-	if (sop_scatter_gather(h, submitq, r, sc, &ser->xfer_size)) {
+	if (sop_scatter_gather(h, submitq, r, sc, &sopr->xfer_size)) {
 		/* FIXME:  What to do here?  We already allocated a
 		 * slot in the submission ring buffer.  Either make
 		 * it a NULL IU, or unallocate it somehow while avoiding races.
@@ -1939,7 +1939,7 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 				"Need to implement handling of scsi_dma_map failure.\n");
 		return SCSI_MLQUEUE_HOST_BUSY;
 	}
-	r->xfer_size = cpu_to_le32(ser->xfer_size);
+	r->xfer_size = cpu_to_le32(sopr->xfer_size);
 	pqi_notify_device_queue_written(submitq->pqiq);
 	return 0;
 }
