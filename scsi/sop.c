@@ -1131,8 +1131,13 @@ static void sop_irq_affinity_hints(struct sop_device *h)
 	cpu = cpumask_first(cpu_online_mask);
 	for (i = 0; i < h->noqs; i++) {
 		int idx = i ? i + 1 : i;
-		irq_set_affinity_hint(h->qinfo[idx].msix_vector,
+		int rc;
+		rc = irq_set_affinity_hint(h->qinfo[idx].msix_vector,
 					get_cpu_mask(cpu));
+
+		if (rc)
+			dev_warn(&h->pdev->dev, "Failed to hint affinity of vector %d to cpu %d\n",
+					h->qinfo[idx].msix_vector, cpu);
 		cpu = cpumask_next(cpu, cpu_online_mask);
 	}
 }
