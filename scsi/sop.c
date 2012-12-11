@@ -545,33 +545,32 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 
 	/* Check that device is ready to be set up */
 	for (count = 0; count < 10; count++) {
-	paf = readq(&h->pqireg->process_admin_function);
-	printk(KERN_WARNING
-		"paf = %02x %02x %02x %02x %02x %02x %02x %02x\n",
-		x[0], x[1], x[2], x[3],
-		x[4], x[5], x[6], x[7]);
-	status = readl(&h->pqireg->pqi_device_status);
-	x = (unsigned char *) &status;
-	printk(KERN_WARNING "pqi device status = %02x %02x %02x %02x\n",
-		x[0], x[1], x[2], x[3]);
-	function_and_status = paf & 0xff;
-	pqi_device_state = status & 0xff;
+		paf = readq(&h->pqireg->process_admin_function);
+		pr_warn("paf = %02x %02x %02x %02x %02x %02x %02x %02x\n",
+			x[0], x[1], x[2], x[3],
+			x[4], x[5], x[6], x[7]);
+		status = readl(&h->pqireg->pqi_device_status);
+		x = (unsigned char *) &status;
+		pr_warn("pqi device status = %02x %02x %02x %02x\n",
+			x[0], x[1], x[2], x[3]);
+		function_and_status = paf & 0xff;
+		pqi_device_state = status & 0xff;
 	
-	if (function_and_status != PQI_IDLE) {
-		dev_warn(&h->pdev->dev,
-			"Device not idle during initialization.\n");
-		/* return -1; */
-	}
+		if (function_and_status != PQI_IDLE) {
+			dev_warn(&h->pdev->dev,
+				"Device not idle during initialization.\n");
+			/* return -1; */
+		}
 
-	if (pqi_device_state != PQI_READY_FOR_ADMIN_FUNCTION) {
-		dev_warn(&h->pdev->dev,
-			"Device not ready during initialization.\n");
-		/* return -1; */
-	}
-	printk(KERN_WARNING "fas = %d, device_state = %d\n",
-		function_and_status, pqi_device_state);
-		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
-				ADMIN_SLEEP_INTERVAL_MAX);
+		if (pqi_device_state != PQI_READY_FOR_ADMIN_FUNCTION) {
+			dev_warn(&h->pdev->dev,
+				"Device not ready during initialization.\n");
+			/* return -1; */
+		}
+		pr_warn("fas = %d, device_state = %d\n",
+			function_and_status, pqi_device_state);
+			usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+					ADMIN_SLEEP_INTERVAL_MAX);
 	}
 
 	pqicap = readq(&h->pqireg->capability);
