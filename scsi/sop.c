@@ -147,6 +147,17 @@ static inline int check_for_read_failure(__iomem void *sig)
 	return signature == 0xffffffffffffffffULL;
 }
 
+static inline int safe_readw(__iomem void *sig, u16 *value,
+				const volatile void __iomem *addr)
+{
+	*value = readw(addr);
+	if (unlikely(*value == (u16) 0xffff)) {
+		if (check_for_read_failure(sig))
+			return -1;
+	}
+	return 0;
+}
+
 static inline int safe_readl(__iomem void *sig, u32 *value,
 				const volatile void __iomem *addr)
 {
@@ -337,13 +348,12 @@ static void pqi_device_queue_init(struct pqi_device_queue *q,
 static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
 				int nelements)
 {
-	u32 qciw;
 	u16 qci;
 	u32 nfree;
 
-	/* FIXME, what about -1 here? */
-	qciw = readw(q->ci);
-	qci = le16_to_cpu(*(u16 *) &qciw);
+	if (safe_readw(&q->registers->signature, &qci, q->ci))
+		return 0;
+	qci = le16_to_cpu(*(u16 *) &qci);
 
 	if (q->unposted_index > qci)
 		nfree = q->nelements - q->unposted_index + qci - 1;
@@ -358,9 +368,9 @@ static int pqi_from_device_queue_is_empty(struct pqi_device_queue *q)
 {
 	u16 qpi;
 
-	/* FIXME: shouldn't have to read this every time. */
-	/* FIXME: what about -1 here? */
-	qpi = le32_to_cpu(readw(q->pi));
+	if (safe_readw(&q->registers->signature, &qpi, q->pi))
+		return 0;
+	qpi = le16_to_cpu(qpi);
 	return qpi == q->unposted_index;
 }
 
