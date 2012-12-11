@@ -115,7 +115,7 @@ static struct pci_error_handlers sop_pci_error_handlers = {
  * version of arch/x86/include/asm/io.h 
  */
 #ifndef readq
-static inline __u64 readq(const volatile void __iomem *addr)
+static inline u64 readq(const volatile void __iomem *addr)
 {
 	const volatile u32 __iomem *p = addr;
 	u32 low, high;
@@ -128,12 +128,46 @@ static inline __u64 readq(const volatile void __iomem *addr)
 #endif
 
 #ifndef writeq
-static inline void writeq(__u64 val, volatile void __iomem *addr)
+static inline void writeq(u64 val, volatile void __iomem *addr)
 {
 	writel(val, addr);
 	writel(val >> 32, addr+4);
 }
 #endif
+
+static inline int check_for_read_failure(struct sop_device *h)
+{
+	/*
+	 * do a readl of a known constant value, if it comes back -1,
+	 * we know we're not able to read.
+	 */
+	u64 signature;
+
+	signature = readq(&h->pqireg->signature);
+	return signature == 0xffffffffffffffffULL;
+}
+
+static inline int safe_readl(struct sop_device *h, u32 *value,
+				const volatile void __iomem *addr)
+{
+	*value = readl(addr);
+	if (unlikely(*value == 0xffffffff)) {
+		if (check_for_read_failure(h))
+			return -1;
+	}
+	return 0;
+}
+
+static inline int safe_readq(struct sop_device *h, u64 *value,
+				const volatile void __iomem *addr)
+{
+	*value = readq(addr);
+	if (unlikely(*value == 0xffffffffffffffffULL)) {
+		if (check_for_read_failure(h))
+			return -1;
+	}
+	return 0;
+}
 
 static void free_q_request_buffers(struct queue_info *q)
 {
@@ -304,6 +338,7 @@ static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
 	u16 qci;
 	u32 nfree;
 
+	/* FIXME, what about -1 here? */
 	qciw = readw(q->ci);
 	qci = le16_to_cpu(*(u16 *) &qciw);
 
@@ -321,6 +356,7 @@ static int pqi_from_device_queue_is_empty(struct pqi_device_queue *q)
 	u16 qpi;
 
 	/* FIXME: shouldn't have to read this every time. */
+	/* FIXME: what about -1 here? */
 	qpi = le32_to_cpu(readw(q->pi));
 	return qpi == q->unposted_index;
 }
@@ -516,7 +552,11 @@ static int wait_for_admin_command_ack(struct sop_device *h)
 #define ADMIN_SLEEP_INTERATIONS 1000 /* total of 100 milliseconds */
 
 	do {
-		paf = readq(&h->pqireg->process_admin_function);
+		if (safe_readq(h, &paf, &h->pqireg->process_admin_function)) {
+			dev_warn(&h->pdev->dev,
+				"%s: Failed to read device memory\n", __func__);
+			return -1;
+		}
 		function_and_status = paf & 0xff;
 		if (function_and_status == 0x00)
 			return 0;
@@ -542,11 +582,18 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	int rc, count;
 	unsigned char *x = (unsigned char *) &paf;
 	dma_addr_t admin_q_dhandle;
+	char *msg = "";
 
 	/* Check that device is ready to be set up */
 	for (count = 0; count < 10; count++) {
-		paf = readq(&h->pqireg->process_admin_function);
-		status = readl(&h->pqireg->pqi_device_status);
+		if (safe_readq(h, &paf, &h->pqireg->process_admin_function)) {
+			msg = "Unable to read process admin function register";
+			goto bailout;
+		}
+		if (safe_readl(h, &status, &h->pqireg->pqi_device_status)) {
+			msg = "Unable to read from device memory";
+			goto bailout;
+		}
 		x = (unsigned char *) &status;
 		function_and_status = paf & 0xff;
 		pqi_device_state = status & 0xff;
@@ -566,7 +613,10 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 				ADMIN_SLEEP_INTERVAL_MAX);
 	}
 
-	pqicap = readq(&h->pqireg->capability);
+	if (safe_readq(h, &pqicap, &h->pqireg->capability)) {
+		msg = "Unable to read pqi capability register";
+		goto bailout;
+	}
 	memcpy(&h->pqicap, &pqicap, sizeof(h->pqicap));
 
 #define ADMIN_QUEUE_ELEMENT_COUNT ((MAX_IO_QUEUES + 1) * 2)
@@ -591,8 +641,8 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	admin_iq = pci_alloc_consistent(h->pdev, total_admin_queue_size,
 						&admin_q_dhandle);
 	if (!admin_iq) {
-		dev_warn(&h->pdev->dev, "failed to allocate PQI admin queues\n");
-		return -1;
+		msg = "failed to allocate PQI admin queues";
+		goto bailout;
 	}
 	admin_iq_ci = admin_iq + ADMIN_QUEUE_ELEMENT_COUNT *
 				h->pqicap.admin_iq_element_length * 16;
@@ -642,25 +692,43 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 
 	rc = wait_for_admin_command_ack(h);
 	if (rc) {
-		paf = readq(&h->pqireg->process_admin_function);
+		if (safe_readq(h, &paf, &h->pqireg->process_admin_function)) {
+			msg = "Failed reading process admin function register";
+			goto bailout;
+		}
 		function_and_status = paf & 0xff;
 		dev_warn(&h->pdev->dev,
 			"Failed to create admin queues: function_and_status = 0x%02x\n",
 			function_and_status);
-		if (function_and_status != 0) {
-			status = readl(&h->pqireg->pqi_device_status);
-			dev_warn(&h->pdev->dev, "Device status = 0x%08x\n", status);
+		if (function_and_status == 0) {
+			msg = "Failed waiting for admin command ack";
+			goto bailout;
 		}
-		goto bailout;
+		if (safe_readl(h, &status, &h->pqireg->pqi_device_status)) {
+			msg = "Failed reading pqi device status register";
+			goto bailout;
+		}
+		dev_warn(&h->pdev->dev, "Device status = 0x%08x\n", status);
 	}
 
 	/* Get the offsets of the hardware updated producer/consumer indices */
-	admin_iq_pi_offset = readq(&h->pqireg->admin_iq_pi_offset);
-	admin_oq_ci_offset = readq(&h->pqireg->admin_oq_ci_offset);
+	if (safe_readq(h, &admin_iq_pi_offset,
+				&h->pqireg->admin_iq_pi_offset)) {
+		msg = "Unable to read admin iq pi offset register";
+		goto bailout;
+	}
+	if (safe_readq(h, &admin_oq_ci_offset,
+				&h->pqireg->admin_oq_ci_offset)) {
+		msg = "Unable to read admin oq ci offset register";
+		goto bailout;
+	}
 	admin_iq_pi = ((void *) h->pqireg) + admin_iq_pi_offset;
 	admin_oq_ci = ((void *) h->pqireg) + admin_oq_ci_offset;
 
-	status = readl(&h->pqireg->pqi_device_status);
+	if (safe_readl(h, &status, &h->pqireg->pqi_device_status)) {
+		msg = "Failed to read device status register";
+		goto bailout;
+	}
 	x = (unsigned char *) &status;
 	function_and_status = paf & 0xff;
 	pqi_device_state = status & 0xff;
@@ -681,12 +749,16 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	/* Allocate request buffers for admin queues */
 	if (allocate_q_request_buffers(&h->qinfo[0],
 				ADMIN_QUEUE_ELEMENT_COUNT,
-				sizeof(struct sop_request)))
+				sizeof(struct sop_request))) {
+		msg = "Failed to allocate request queue buffer for queue 0";
 		goto bailout;
+	}
 	if (allocate_q_request_buffers(&h->qinfo[1],
 				ADMIN_QUEUE_ELEMENT_COUNT,
-				sizeof(struct sop_request)))
+				sizeof(struct sop_request))) {
+		msg = "Failed to allocate request queue buffer for queue 1";
 		goto bailout;
+	}
 	return 0;
 
 bailout:
@@ -694,6 +766,7 @@ bailout:
 		pci_free_consistent(h->pdev, total_admin_queue_size,
 					admin_iq, admin_iq_busaddr);
 	free_all_q_request_buffers(h);
+	dev_warn(&h->pdev->dev, "%s: %s\n", __func__, msg);
 	return -1;	
 }
 
@@ -703,37 +776,55 @@ static int sop_delete_admin_queues(struct sop_device *h)
 	u32 status;
 	int rc;
 	u8 pqi_device_state, function_and_status;
+	char *msg = NULL;
 
-	paf = 0x0ff & readq(&h->pqireg->process_admin_function);
-	status = readl(&h->pqireg->pqi_device_status);
+	if (safe_readq(h, &paf, &h->pqireg->process_admin_function)) {
+		msg = "Cannot read process admin function register";
+		goto bailout;
+	}
+	paf &= 0x0ff;
+
+	if (safe_readl(h, &status, &h->pqireg->pqi_device_status)) {
+		msg = "Cannot read device status register";
+		goto bailout;
+	}
 	function_and_status = paf & 0xff;
 	pqi_device_state = status & 0xff;
 
 	if (function_and_status != PQI_IDLE) {
-		dev_warn(&h->pdev->dev,
-			"Cannot remove admin queues, device not idle\n");
-		return -1;
+		msg = "Cannot remove admin queues, device not idle";
+		goto bailout;
 	}
 
 	if (pqi_device_state != PQI_READY_FOR_IO) {
-		dev_warn(&h->pdev->dev,
-			"Cannot remove admin queues, device not ready for i/o\n");
-		return -1;
+		msg = "Cannot remove admin queues, device not ready for i/o";
+		goto bailout;
 	}
 	writeq(PQI_DELETE_ADMIN_QUEUES, &h->pqireg->process_admin_function);
 	rc = wait_for_admin_command_ack(h);
 	if (!rc)
 		return 0;
-	paf = readq(&h->pqireg->process_admin_function);
+	dev_warn(&h->pdev->dev, "Failed waiting for admin command acknowledgment\n");
+
+	if (safe_readq(h, &paf,  &h->pqireg->process_admin_function)) {
+		msg = "Cannot read process admin function register";
+		goto bailout;
+	}
 	function_and_status = paf & 0xff;
 	dev_warn(&h->pdev->dev,
 		"Failed to delete admin queues: function_and_status = 0x%02x\n",
 		function_and_status);
 	if (function_and_status != 0) {
-		status = readl(&h->pqireg->pqi_device_status);
+		if (safe_readl(h, &status, &h->pqireg->pqi_device_status)) {
+			msg = "Failed to read device status register";
+			goto bailout;
+		}
 		dev_warn(&h->pdev->dev, "Device status = 0x%08x\n",
 				status);
 	}
+
+bailout:
+	dev_warn(&h->pdev->dev, "%s\n", msg);
 	return -1;
 }
 
@@ -1554,7 +1645,10 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail;
 	}
 
-	signature = readq(&h->pqireg->signature);
+	if (safe_readq(h, &signature, &h->pqireg->signature)) {
+		dev_warn(&pdev->dev, "Unable to read PQI signature\n");
+		goto bail;
+	}
 	if (memcmp("PQI DREG", &signature, sizeof(signature)) != 0) {
 		dev_warn(&pdev->dev, "device does not appear to be a PQI device\n");
 		goto bail;
