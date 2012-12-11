@@ -971,7 +971,6 @@ static void complete_scsi_cmd(struct sop_device *h,
 	switch (r->response[0]) {
 	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
 		scsi_set_resid(scmd, 0);
-                scmd->scsi_done(scmd);
 		break;
 	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
 		scr = (struct sop_cmd_response *) r->response;
@@ -1007,19 +1006,17 @@ static void complete_scsi_cmd(struct sop_device *h,
 
 		if (response_data_len)
 			main_io_path_decode_response_data(h, scr, scmd);
-		scmd->scsi_done(scmd);
 		break;
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 		scmd->result |= (DID_ERROR << 16);
 		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
-		scmd->scsi_done(scmd);
 		break;
 	default:
 		scmd->result |= (DID_ERROR << 16);
 		dev_warn(&h->pdev->dev, "got UNKNOWN response type...\n");
-		scmd->scsi_done(scmd);
 		break;
 	}
+	scmd->scsi_done(scmd);
 }
 
 irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
