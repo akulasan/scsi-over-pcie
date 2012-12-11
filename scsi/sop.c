@@ -1363,6 +1363,7 @@ static void send_sop_command(struct sop_device *h, struct queue_info *submitq,
 	sopr->waiting = &wait;
 	sopr->response_accumulated = 0;
 	pqi_notify_device_queue_written(submitq->pqiq);
+	put_cpu();
 	wait_for_completion(&wait);
 }
 
@@ -1967,15 +1968,15 @@ static inline struct sop_device *sdev_to_hba(struct scsi_device *sdev)
 	return (struct sop_device *) *priv;
 }
 
-static struct queue_info *find_submission_queue(struct sop_device *h)
+static struct queue_info *find_submission_queue(struct sop_device *h, int cpu)
 {
-	int q = h->noqs + 1 + (smp_processor_id() % (h->niqs - 1));
+	int q = h->noqs + 1 + (cpu % (h->niqs - 1));
 	return &h->qinfo[q];
 }
 
-static struct queue_info *find_reply_queue(struct sop_device *h)
+static struct queue_info *find_reply_queue(struct sop_device *h, int cpu)
 {
-	int q = 2 + (smp_processor_id() % (h->noqs - 1));
+	int q = 2 + (cpu % (h->noqs - 1));
 	return &h->qinfo[q];
 }
 
@@ -2077,9 +2078,9 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	struct sop_limited_cmd_iu *r;
 	struct sop_request *sopr;
 	int request_id;
+	int cpu;
 
 	h = sdev_to_hba(sc->device);
-
 
 	/* reject io to devices other than b0t0l0 */
 	if (sc->device->channel != 0 || sc->device->id != 0 || 
@@ -2089,8 +2090,9 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
                 return 0;
 	}
 
-	submitq = find_submission_queue(h);
-	replyq = find_reply_queue(h);
+	cpu = get_cpu();
+	submitq = find_submission_queue(h, cpu);
+	replyq = find_reply_queue(h, cpu);
 	if (!submitq)
 		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
 	if (!submitq->pqiq)
@@ -2144,6 +2146,7 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	}
 	r->xfer_size = cpu_to_le32(sopr->xfer_size);
 	pqi_notify_device_queue_written(submitq->pqiq);
+	put_cpu();
 	return 0;
 }
 
@@ -2202,13 +2205,14 @@ static int sop_abort_handler(struct scsi_cmnd *sc)
 			(struct sop_request *) sc->host_scribble;
 	struct queue_info *submitq, *replyq;
 	struct sop_task_mgmt_iu *abort_cmd;
-	int request_id;
+	int request_id, cpu;
 
 	h = sdev_to_hba(sc->device);
 
 	dev_warn(&h->pdev->dev, "sop_abort_handler: this code is UNTESTED.\n");
-	submitq = find_submission_queue(h);
-	replyq = find_reply_queue(h);
+	cpu = get_cpu();
+	submitq = find_submission_queue(h, cpu);
+	replyq = find_reply_queue(h, cpu);
 	abort_cmd = pqi_alloc_elements(submitq->pqiq, 1);
 	if (IS_ERR(abort_cmd)) {
 		dev_warn(&h->pdev->dev, "%s: pqi_alloc_elements returned %ld\n",
@@ -2235,13 +2239,14 @@ static int sop_device_reset_handler(struct scsi_cmnd *sc)
 			(struct sop_request *) sc->host_scribble;
 	struct queue_info *submitq, *replyq;
 	struct sop_task_mgmt_iu *reset_cmd;
-	int request_id;
+	int request_id, cpu;
 
 	h = sdev_to_hba(sc->device);
 
 	dev_warn(&h->pdev->dev, "sop_device_reset_handler: this code is UNTESTED.\n");
-	submitq = find_submission_queue(h);
-	replyq = find_reply_queue(h);
+	cpu = get_cpu();
+	submitq = find_submission_queue(h, cpu);
+	replyq = find_reply_queue(h, cpu);
 	reset_cmd = pqi_alloc_elements(submitq->pqiq, 1);
 	if (IS_ERR(reset_cmd)) {
 		dev_warn(&h->pdev->dev, "%s: pqi_alloc_elements returned %ld\n",
