@@ -240,10 +240,10 @@ struct pqi_sgl_descriptor {
 	u32 length;
 	u8 reserved[3];
 	u8 descriptor_type;
-#define PQI_SGL_DATA_BLOCK 0x00
-#define PQI_SGL_BIT_BUCKET 0x01
-#define PQI_SGL_STANDARD_SEG 0x02
-#define PQI_SGL_STANDARD_LAST_SEG 0x03
+#define PQI_SGL_DATA_BLOCK (0x00 << 4)
+#define PQI_SGL_BIT_BUCKET (0x01 << 4)
+#define PQI_SGL_STANDARD_SEG (0x02 << 4)
+#define PQI_SGL_STANDARD_LAST_SEG (0x03 << 4)
 };
 #pragma pack()
 
