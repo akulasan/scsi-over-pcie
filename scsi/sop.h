@@ -253,8 +253,8 @@ struct pqi_device_capabilities {
 
 #define IQ_IU_SIZE 64
 #define OQ_IU_SIZE 64
-#define DRIVER_MAX_IQ_NELEMENTS 64
-#define DRIVER_MAX_OQ_NELEMENTS 64
+#define DRIVER_MAX_IQ_NELEMENTS 128
+#define DRIVER_MAX_OQ_NELEMENTS 128
 
 struct sop_device;
 struct queue_info {
