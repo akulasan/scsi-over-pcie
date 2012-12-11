@@ -275,6 +275,44 @@ struct sop_limited_cmd_iu {
 #define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
 #define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
 
+#pragma pack(1)
+struct sop_cmd_response {
+	u8 iu_type;
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u16 nexus_id;
+	u8 data_in_xfer_result;
+#define DATA_BUFFER_OK 0x00
+#define DATA_BUFFER_UNDERFLOW 0x01
+#define DATA_BUFFER_OVERFLOW_BUFFER_SIZE 0x40
+#define DATA_BUFFER_OVERFLOW_DESCRIPTOR_AREA 0x41
+#define DATA_BUFFER_OVERFLOW_BRIDGE_LOCAL_PORT 0x42
+#define DATA_BUFFER_ERROR 0x43
+#define PCIE_FABRIC_ERROR 0x60
+#define PCIE_COMPLETION_TIMEOUT 0x61
+#define PCIE_COMPLETER_ABORT 0x62
+#define PCIE_POISONED_TLB_RECEIVED 0x63
+#define PCIE_ECRC_CHECK_FAILED 0x64
+#define PCIE_UNSUPPORTED_REQUEST 0x65
+#define PCIE_ACS_VIOLATION 0x66
+#define PCIE_TLP_PREFIX_BLOCKED 0x67
+	u8 data_out_xfer_result;
+	u8 reserved[3];
+	u8 status;
+	u16 status_qualifier;
+	u16 sense_data_len;
+	u16 response_data_len;
+	u32 data_in_xferred;
+	u32 data_out_xferred;
+	union {
+		u8 response[0];
+		u8 sense[0];
+	};
+};
+#pragma pack()
 
 #pragma pack(1)
 struct sop_cmd_ui {

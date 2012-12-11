@@ -813,25 +813,64 @@ static void complete_scsi_cmd(struct scsi_express_device *h,
 				struct scsi_express_request *r)
 {
 	struct scsi_cmnd *scmd;
+	struct sop_cmd_response *scr;
+	u16 sense_data_len;
+	u16 response_data_len;
+	u8 xfer_result;
+	u32 data_xferred;
 
         scmd = r->scmd;
         scsi_dma_unmap(scmd); /* undo the DMA mappings */
 
         scmd->result = (DID_OK << 16);           /* host byte */
         scmd->result |= (COMMAND_COMPLETE << 8); /* msg byte */
-        /* scmd->result |= ei->ScsiStatus; */
-
-        scsi_set_resid(scmd, 0); /* FIXME */
-
 	free_request(h, r->request_id >> 8, r->request_id);
 
 	/* dev_warn(&h->pdev->dev, "Response IU type is 0x%02x\n", r->response[0]); */
 	switch (r->response[0]) {
 	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
-		/* dev_warn(&h->pdev->dev, "Completing request id %hu\n", r->request_id); */
+		scsi_set_resid(scmd, 0);
                 scmd->scsi_done(scmd);
 		break;
 	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
+		scr = (struct sop_cmd_response *) r->response;
+		scmd->result |= scr->status;
+		sense_data_len = le16_to_cpu(scr->sense_data_len);
+		response_data_len = le16_to_cpu(scr->response_data_len);
+		if (unlikely(response_data_len && sense_data_len))
+			dev_warn(&h->pdev->dev,
+				"Both sense and response data not expected.\n");
+
+		/* copy the sense data */
+		if (sense_data_len) {
+			if (SCSI_SENSE_BUFFERSIZE < sense_data_len)
+				sense_data_len = SCSI_SENSE_BUFFERSIZE;
+			memset(scmd->sense_buffer, 0, SCSI_SENSE_BUFFERSIZE);
+			memcpy(scmd->sense_buffer, scr->sense, sense_data_len);
+		}
+
+		/* paranoia, check for out of spec firmware */
+		if (scr->data_in_xfer_result && scr->data_out_xfer_result)
+			dev_warn(&h->pdev->dev,
+				"Unexpected bidirectional cmd with status in and out\n");
+
+		/* Calculate residual count */
+		if (scr->data_in_xfer_result) {
+			xfer_result = scr->data_in_xfer_result;
+			data_xferred = le32_to_cpu(scr->data_in_xferred);
+		} else {
+			xfer_result = scr->data_out_xfer_result;
+			data_xferred = le32_to_cpu(scr->data_out_xferred);
+		}
+		scsi_set_resid(scmd, r->xfer_size - data_xferred);
+
+		if (response_data_len) {
+			/* FIXME need to do something correct here... */
+			scmd->result |= (DID_ERROR << 16);
+			dev_warn(&h->pdev->dev, "Got response data... what to do with it?\n");
+		}
+		scmd->scsi_done(scmd);
+		break;
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 		scmd->result |= (DID_ERROR << 16);
 		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
@@ -1861,6 +1900,28 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(xfer_size, 12);
 	VERIFY_OFFSET(cdb, 16);
 	VERIFY_OFFSET(sg, 32);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct sop_cmd_response, field) != offset)
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(nexus_id, 10);
+	VERIFY_OFFSET(data_in_xfer_result, 12);
+	VERIFY_OFFSET(data_out_xfer_result, 13);
+	VERIFY_OFFSET(reserved, 14);
+	VERIFY_OFFSET(status, 17);
+	VERIFY_OFFSET(status_qualifier, 18);
+	VERIFY_OFFSET(sense_data_len, 20);
+	VERIFY_OFFSET(response_data_len, 22);
+	VERIFY_OFFSET(data_in_xferred, 24);
+	VERIFY_OFFSET(data_out_xferred, 28);
+	VERIFY_OFFSET(response, 32);
+	VERIFY_OFFSET(sense, 32);
 #undef VERIFY_OFFSET
 
 }
