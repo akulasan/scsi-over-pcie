@@ -2510,6 +2510,39 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(response_code, 15);
 #undef VERIFY_OFFSET
 
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct report_general_iu, field) != offset)
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(reserved, 10);
+	VERIFY_OFFSET(allocation_length, 12);
+	VERIFY_OFFSET(reserved2, 16);
+	VERIFY_OFFSET(data_in, 32);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct report_general_response_iu, field) != offset)
+		VERIFY_OFFSET(reserved, 0);
+		VERIFY_OFFSET(lun_bridge_present_flags, 4);
+		VERIFY_OFFSET(reserved2, 5);
+		VERIFY_OFFSET(app_clients_present_flags, 8);
+		VERIFY_OFFSET(reserved3, 9);
+		VERIFY_OFFSET(max_incoming_iu_size, 18);
+		VERIFY_OFFSET(max_incoming_embedded_data_buffers, 20);
+		VERIFY_OFFSET(max_data_buffers, 22);
+		VERIFY_OFFSET(reserved4, 24);
+		VERIFY_OFFSET(incoming_iu_type_support_bitmask, 32);
+		VERIFY_OFFSET(vendor_specific, 64);
+		VERIFY_OFFSET(reserved5, 72);
+		VERIFY_OFFSET(queuing_layer_specific_data_len, 74);
+		VERIFY_OFFSET(incoming_sgl_support_bitmask, 76);
+		VERIFY_OFFSET(reserved6, 78);
+#undef VERIFY_OFFSET
+
 }
 
 module_init(sop_init);

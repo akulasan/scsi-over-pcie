@@ -474,4 +474,43 @@ struct sop_task_mgmt_response {
 };
 #pragma pack()
 
+#pragma pack(1)
+struct report_general_iu {
+	u8 iu_type;
+#define REPORT_GENERAL_IU 0x01
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u16 reserved;
+	u32 allocation_length;
+	u8 reserved2[16];
+	u8 data_in[0]; /* if any */
+};
+#pragma pack()
+
+#pragma pack(1)
+struct report_general_response_iu {
+	u8 reserved[4];
+	u8 lun_bridge_present_flags;
+#define SOP_TARGET_BRIDGE_PRESENT 0x01
+#define LOGICAL_UNITS_PRESENT 0x02
+	u8 reserved2[3];
+	u8 app_clients_present_flags;
+#define SOP_APPLICATION_CLIENTS_PRESENT 0x02
+	u8 reserved3[9];
+	u16 max_incoming_iu_size;
+	u16 max_incoming_embedded_data_buffers;
+	u16 max_data_buffers;
+	u8 reserved4[8];
+	u8 incoming_iu_type_support_bitmask[32];
+	u8 vendor_specific[8];
+	u8 reserved5[2];
+	u16 queuing_layer_specific_data_len;
+	u16 incoming_sgl_support_bitmask;
+	u8 reserved6[2];
+};
+#pragma pack()
+
 #endif
