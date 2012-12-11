@@ -792,8 +792,12 @@ static void scsi_express_free_irqs(struct scsi_express_device *h)
 	int i;
 
 	for (i = 0; i < h->noqs; i++) {
-		int idx = i ? i + 1 : 0;
-		free_irq(h->qinfo[idx].msix_vector, &h->qinfo[idx]);
+		int idx, vector;
+
+		idx = i ? i + 1 : 0;
+		vector = h->qinfo[idx].msix_vector; 
+		irq_set_affinity_hint(vector, NULL);
+		free_irq(vector, &h->qinfo[idx]);
 	}
 }
 
