@@ -1349,6 +1349,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	u16 request_idx;
 	u64 busaddr;
 
+	h->elements_per_io_queue = DRIVER_MAX_IQ_NELEMENTS;
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities\n");
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
@@ -1419,6 +1420,17 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	dev_warn(&h->pdev->dev, "protocol support bitmask = 0x%08x\n", h->protocol_support_bitmask);
 	dev_warn(&h->pdev->dev, "admin_sgl_support_bitmask = 0x%04x\n", h->admin_sgl_support_bitmask);
 
+	h->elements_per_io_queue = DRIVER_MAX_IQ_NELEMENTS;
+	if (h->elements_per_io_queue > DRIVER_MAX_OQ_NELEMENTS)
+		h->elements_per_io_queue = DRIVER_MAX_OQ_NELEMENTS;
+	if (h->elements_per_io_queue > h->max_oq_elements)
+		h->elements_per_io_queue = h->max_oq_elements;
+	if (h->elements_per_io_queue > h->max_iq_elements)
+		h->elements_per_io_queue = h->max_iq_elements;
+
+	dev_warn(&h->pdev->dev, "elements per i/o queue: %d\n",
+			h->elements_per_io_queue);
+
 	kfree(buffer);
 	return 0;
 
@@ -1438,8 +1450,8 @@ static int sop_setup_io_queues(struct sop_device *h)
 
 	/* The queue ids == the msix vector index + 1 for OQs. */
 	noqs = pqi_device_queue_array_alloc(h, &h->io_q_from_dev,
-			h->noqs - 1, OQ_NELEMENTS, OQ_IU_SIZE / 16,
-			PQI_DIR_FROM_DEVICE, 2);
+			h->noqs - 1, h->elements_per_io_queue,
+			OQ_IU_SIZE / 16, PQI_DIR_FROM_DEVICE, 2);
 	if (h->noqs - 1 < 0)
 		goto bail_out;
 	if (h->noqs - 1 != noqs) {
@@ -1448,8 +1460,8 @@ static int sop_setup_io_queues(struct sop_device *h)
 	}
 
 	niqs = pqi_device_queue_array_alloc(h, &h->io_q_to_dev,
-			h->niqs - 1 , IQ_NELEMENTS, IQ_IU_SIZE / 16,
-			PQI_DIR_TO_DEVICE, 2 + noqs);
+			h->niqs - 1 , h->elements_per_io_queue,
+			IQ_IU_SIZE / 16, PQI_DIR_TO_DEVICE, 2 + noqs);
 	if (niqs < 0)
 		goto bail_out;
 	if (h->niqs - 1 != niqs) {
@@ -1624,8 +1636,8 @@ static int sop_register_host(struct sop_device *h)
 	sh->max_cmd_len = MAX_COMMAND_SIZE;
 	sh->max_lun = 1; /* FIXME are these correct? */
 	sh->max_id = 1;
-	sh->can_queue = 32; /* FIXME: get this from device if possible. */
-	sh->cmd_per_lun = 32;
+	sh->can_queue = h->elements_per_io_queue;
+	sh->cmd_per_lun = h->elements_per_io_queue;
 	sh->sg_tablesize = MAX_SGLS; /* FIXME make this bigger */
 	sh->hostdata[0] = (unsigned long) h;
 	sh->irq = h->qinfo[0].msix_vector;

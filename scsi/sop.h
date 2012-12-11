@@ -254,8 +254,8 @@ struct pqi_device_capabilities {
 
 #define IQ_IU_SIZE 64
 #define OQ_IU_SIZE 64
-#define IQ_NELEMENTS 64
-#define OQ_NELEMENTS 64
+#define DRIVER_MAX_IQ_NELEMENTS 64
+#define DRIVER_MAX_OQ_NELEMENTS 64
 
 struct sop_device;
 struct queue_info {
@@ -315,6 +315,7 @@ struct sop_device {
 	dma_addr_t iq_dhandle, oq_dhandle;
 	void *iq_vaddr, *oq_vaddr;
 	struct Scsi_Host *scsi_host;
+	int elements_per_io_queue;
 };
 
 #pragma pack()
