@@ -228,6 +228,7 @@ struct scsi_express_device {
 struct scsi_express_request {
 	struct completion *waiting;
 	struct scsi_cmnd *scmd;
+	u32 xfer_size;
 	u16 response_accumulated;
 	u16 request_id;
 	u8 q;

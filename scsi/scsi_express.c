@@ -1523,7 +1523,8 @@ static void fill_sg_chain_element(struct pqi_sgl_descriptor *sgld,
 }
 
 static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
-				struct scsi_cmnd *sc, int use_sg)
+				struct scsi_cmnd *sc, int use_sg,
+				u32 *xfer_size)
 {
 	struct pqi_sgl_descriptor *datasg;
 	struct scatterlist *sg;
@@ -1540,10 +1541,10 @@ static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
 		return;
 	}
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * use_sg);
-	r->xfer_size = 0;
+	*xfer_size = 0;
 	datasg = &r->sg[0];
 	scsi_for_each_sg(sc, sg, use_sg, i) {
-		fill_sg_data_element(datasg, sg, &r->xfer_size);
+		fill_sg_data_element(datasg, sg, xfer_size);
 		datasg++;
 	}
 }
@@ -1551,7 +1552,7 @@ static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
 static int scsi_express_scatter_gather(struct scsi_express_device *h,
 			struct queue_info *q, 
 			struct sop_limited_cmd_iu *r,
-			struct scsi_cmnd *sc)
+			struct scsi_cmnd *sc, u32 *xfer_size)
 {
 	struct scatterlist *sg;
 	int sg_block_number;
@@ -1567,12 +1568,12 @@ static int scsi_express_scatter_gather(struct scsi_express_device *h,
 		return use_sg;
 
 	if (use_sg < 3) {
-		fill_inline_sg_list(r, sc, use_sg);
+		fill_inline_sg_list(r, sc, use_sg, xfer_size);
 		return 0;
 	}
 
 	sg_block_number = (r->request_id & 0x0ff) * MAX_SGLS;
-	r->xfer_size = 0;
+	*xfer_size = 0;
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * 2);
 	datasg = &r->sg[0];
 	j = 0;
@@ -1583,7 +1584,7 @@ static int scsi_express_scatter_gather(struct scsi_express_device *h,
 			datasg = &q->sg[sg_block_number];
 			j++;
 		}
-		fill_sg_data_element(datasg, sg, &r->xfer_size);
+		fill_sg_data_element(datasg, sg, xfer_size);
 		datasg++;
 		j++;
 	}
@@ -1632,8 +1633,8 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	r->queue_id = cpu_to_le16(h->qinfo[2].pqiq->queue_id);
 	r->work_area = 0;
 	r->request_id = request_id;
-	r->xfer_size = 0;
 	ser = &q->request[request_id & 0x0ff];
+	ser->xfer_size = 0;
 #if 0
 	dev_warn(&h->pdev->dev, "h%db%dt%dl%d: "
 		"CDB = 0x%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x ser = %p, rid = %hu\n",
@@ -1663,7 +1664,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	}
 	memset(r->cdb, 0, 16);
 	memcpy(r->cdb, sc->cmnd, sc->cmd_len);
-	if (scsi_express_scatter_gather(h, q, r, sc)) {
+	if (scsi_express_scatter_gather(h, q, r, sc, &ser->xfer_size)) {
 		/* FIXME:  What to do here?  We already allocated a
 		 * slot in the submission ring buffer.  Either make
 		 * it a NULL IU, or unallocate it somehow while avoiding races.
@@ -1672,6 +1673,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 				"Need to implement handling of scsi_dma_map failure.\n");
 		return SCSI_MLQUEUE_HOST_BUSY;
 	}
+	r->xfer_size = cpu_to_le32(ser->xfer_size);
 	pqi_notify_device_queue_written(q->pqiq);
 	return 0;
 }
