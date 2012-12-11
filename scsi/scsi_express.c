@@ -1195,7 +1195,7 @@ bail:
 	if (h && h->pqireg)
 		iounmap(h->pqireg);
 	kfree(h);
-	return 0;
+	return -1;
 }
 
 static int scsi_express_suspend(__attribute__((unused)) struct pci_dev *pdev,
