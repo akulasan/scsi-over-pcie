@@ -1057,8 +1057,11 @@ static u16 alloc_request(struct scsi_express_device *h, u8 q)
         do {
                 rc = (u16) find_first_zero_bit(h->qinfo[q].request_bits,
 						h->qinfo[q].qdepth);
-                if (rc >= h->qinfo[q].qdepth)
+                if (rc >= h->qinfo[q].qdepth) {
+			spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
+			dev_warn(&h->pdev->dev, "alloc_request failed.\n");
                         return (u16) -EBUSY;
+		}
         } while (test_and_set_bit((int) rc, h->qinfo[q].request_bits));
 	spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
 	return rc | (q << 8);
@@ -1629,6 +1632,8 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 		dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %ld\n", PTR_ERR(r));
 	}
 	request_id = alloc_request(h, q->pqiq->queue_id);
+	if (request_id == (u16) -EBUSY)
+		dev_warn(&h->pdev->dev, "Failed to allocate request! Trouble ahead.\n");
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
 	r->compatible_features = 0;
