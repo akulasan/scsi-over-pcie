@@ -1680,12 +1680,9 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (rc != 0)
 		goto bail;
 
-#if 0
-	/* this isn't working for now, so punt... don't call it. */
 	rc = sop_get_pqi_device_capabilities(h);
 	if (rc)
 		goto bail;
-#endif
 
 	rc = sop_setup_io_queues(h);
 	if (rc)
