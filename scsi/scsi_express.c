@@ -907,7 +907,7 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 					dev_warn(&h->pdev->dev, "r->scmd and r->waiting both null\n");
 				}
 			}
-			pqi_notify_device_queue_read(&h->admin_q_from_dev);
+			pqi_notify_device_queue_read(q->pqiq);
 		}
 	} while (1);
 
