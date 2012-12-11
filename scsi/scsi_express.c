@@ -201,6 +201,9 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 	int i, nqs_alloced = 0, err = 0;
 	int total_size = (n_q_elements * q_element_size_over_16 * 16) +
 				sizeof(u64);
+	int remainder = total_size % 64;
+
+	total_size += remainder ? 64 - remainder : 0;
 
 	dev_warn(&h->pdev->dev, "1 Allocating %d queues %s device...\n", 
 		num_queues,
@@ -312,9 +315,6 @@ static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
 		nfree = qci - q->unposted_index - 1;
 	else
 		nfree = q->nelements;
-	printk(KERN_WARNING "Qid %d: upi = %u, qci = %u, nfree = %u, %s\n",
-		q->queue_id, q->unposted_index, qci, nfree,
-		nfree < nelements ? "full" : "not full");
 	return (nfree < nelements);
 }
 
@@ -359,7 +359,6 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 	q->unposted_index = (q->unposted_index + nelements) % q->nelements;
 	return p;
 }
-
 
 static int __attribute__((unused)) pqi_enqueue_to_device(struct pqi_device_queue *q, void *element)
 {
@@ -495,8 +494,6 @@ static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 	spin_lock_irqsave(&q->index_lock, flags);
 	q->local_pi = q->unposted_index;
 	writew(q->unposted_index, q->pi);
-	printk(KERN_WARNING "notifying write to qid %d to %u, pi = %p\n",
-			q->queue_id, q->unposted_index, q->pi);
 	spin_unlock_irqrestore(&q->index_lock, flags);
 }
 
@@ -1291,6 +1288,10 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 						le64_to_cpu(resp->index_offset); */
 		h->io_q_to_dev[i].pi = ((void *) h->pqireg) +
 					le64_to_cpu(resp->index_offset);
+		dev_warn(&h->pdev->dev, "oq %d pi = %p, offset is %llu\n",
+					h->io_q_to_dev[i].queue_id,
+					h->io_q_to_dev[i].pi,
+					le64_to_cpu(resp->index_offset));
 		free_request(h, aq->queue_id, request_id);
 	}
 
@@ -1303,10 +1304,13 @@ bail_out:
 static void scsi_express_free_io_queues(struct scsi_express_device *h)
 {
 	size_t total_size, n_q_elements, element_size;
+	int remainder;
 	if (h->iq_vaddr) {
 		n_q_elements = h->io_q_to_dev[0].nelements;
 		element_size = h->io_q_to_dev[0].element_size;
 		total_size = n_q_elements * element_size + sizeof(u64);
+		remainder = total_size % 64;
+		total_size += remainder ? 64 - remainder : 0;
 		pci_free_consistent(h->pdev, total_size,
 				h->iq_vaddr, h->iq_dhandle);
 		h->iq_vaddr = NULL;
@@ -1316,6 +1320,8 @@ static void scsi_express_free_io_queues(struct scsi_express_device *h)
 		n_q_elements = h->io_q_from_dev[0].nelements;
 		element_size = h->io_q_from_dev[0].element_size;
 		total_size = n_q_elements * element_size + sizeof(u64);
+		remainder = total_size % 64;
+		total_size += remainder ? 64 - remainder : 0;
 		pci_free_consistent(h->pdev, total_size,
 				h->oq_vaddr, h->oq_dhandle);
 		h->oq_vaddr = NULL;
@@ -1466,6 +1472,8 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 		return rc;
 	}
 
+	dev_warn(&pdev->dev, "pci_resource_len = %llu\n",
+			(unsigned long long) pci_resource_len(pdev, 0));
 	h->pqireg = pci_ioremap_bar(pdev, 0);
 	if (!h->pqireg) {
 		rc = -ENOMEM;
@@ -1577,11 +1585,15 @@ static inline struct scsi_express_device *sdev_to_hba(struct scsi_device *sdev)
 static struct queue_info *find_submission_queue(struct scsi_express_device *h)
 {
 	int q = h->noqs + 1 + (smp_processor_id() % (h->niqs - 1));
-	dev_warn(&h->pdev->dev, "find_submission_queue: returns %d %p\n",
-			q, &h->qinfo[q]);
-
 	return &h->qinfo[q];
 }
+
+static struct queue_info *find_reply_queue(struct scsi_express_device *h)
+{
+	int q = 2 + (smp_processor_id() % (h->noqs - 1));
+	return &h->qinfo[q];
+}
+
 
 static void fill_sg_data_element(struct pqi_sgl_descriptor *sgld,
 				struct scatterlist *sg, u32 *xfer_size)
@@ -1676,7 +1688,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 {
 	struct scsi_express_device *h;
 	/* struct scsi_device *sdev = sc->device; */
-	struct queue_info *q;
+	struct queue_info *submitq, *replyq;
 	struct sop_limited_cmd_iu *r;
 	struct scsi_express_request *ser;
 	u16 request_id;
@@ -1692,28 +1704,26 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
                 return 0;
 	}
 
-	q = find_submission_queue(h);
-	if (!q)
+	submitq = find_submission_queue(h);
+	replyq = find_reply_queue(h);
+	if (!submitq)
 		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
-	if (!q->pqiq)
+	if (!submitq->pqiq)
 		dev_warn(&h->pdev->dev, "queuecommand: q->pqiq is null!\n");
-	/* dev_warn(&h->pdev->dev, "Calling pqi_alloc_elements(%p, %d)\n", q->pqiq, 1); */
-	r = pqi_alloc_elements(q->pqiq, 1);
-	/* dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %p\n", r); */
+	r = pqi_alloc_elements(submitq->pqiq, 1);
 	if (IS_ERR(r)) {
 		dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %ld\n", PTR_ERR(r));
 	}
-	request_id = alloc_request(h, q->pqiq->queue_id);
+	request_id = alloc_request(h, submitq->pqiq->queue_id);
 	if (request_id == (u16) -EBUSY)
 		dev_warn(&h->pdev->dev, "Failed to allocate request! Trouble ahead.\n");
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
 	r->compatible_features = 0;
-	/* hard code this to queue 2 for now.  FIXME later. */
-	r->queue_id = cpu_to_le16(h->qinfo[2].pqiq->queue_id);
+	r->queue_id = cpu_to_le16(replyq->pqiq->queue_id);
 	r->work_area = 0;
 	r->request_id = request_id;
-	ser = &q->request[request_id & 0x0ff];
+	ser = &submitq->request[request_id & 0x0ff];
 	ser->xfer_size = 0;
 #if 0
 	dev_warn(&h->pdev->dev, "h%db%dt%dl%d: "
@@ -1744,7 +1754,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	}
 	memset(r->cdb, 0, 16);
 	memcpy(r->cdb, sc->cmnd, sc->cmd_len);
-	if (scsi_express_scatter_gather(h, q, r, sc, &ser->xfer_size)) {
+	if (scsi_express_scatter_gather(h, submitq, r, sc, &ser->xfer_size)) {
 		/* FIXME:  What to do here?  We already allocated a
 		 * slot in the submission ring buffer.  Either make
 		 * it a NULL IU, or unallocate it somehow while avoiding races.
@@ -1754,7 +1764,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 		return SCSI_MLQUEUE_HOST_BUSY;
 	}
 	r->xfer_size = cpu_to_le32(ser->xfer_size);
-	pqi_notify_device_queue_written(q->pqiq);
+	pqi_notify_device_queue_written(submitq->pqiq);
 	return 0;
 }
 
