@@ -284,6 +284,7 @@ static void pqi_device_queue_init(struct pqi_device_queue *q,
 	q->element_size = element_size;
 	q->nelements = nelements;
 	q->dhandle = dhandle;
+	spin_lock_init(&q->index_lock);
 }
 
 static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
@@ -444,10 +445,13 @@ static void print_unsubmitted_commands(struct pqi_device_queue *q)
 	u16 pi;
 	int i;
 	unsigned char *iu;
+	unsigned long flags;
 
+	spin_lock_irqsave(&q->index_lock, flags);
 	pi = q->local_pi;
 	if (pi == q->unposted_index) {
 		printk(KERN_WARNING "submit queue is empty.\n");
+		spin_unlock_irqrestore(&q->index_lock, flags);
 		return;
 	}
 	if (pi < q->unposted_index) {
@@ -465,10 +469,12 @@ static void print_unsubmitted_commands(struct pqi_device_queue *q)
 			print_iu(iu);
 		}
 	}
+	spin_unlock_irqrestore(&q->index_lock, flags);
 }
 
 static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 {
+	unsigned long flags;
 	/*
 	 * Notify the device that the host has produced data for the device
 	 */
@@ -476,9 +482,10 @@ static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 	printk(KERN_WARNING "pqi_notify_device_queue_written, q->unposted index = %hu, q->pi = %p\n",
 				q->unposted_index, q->pi);
 	print_unsubmitted_commands(q);
+	spin_lock_irqsave(&q->index_lock, flags);
 	q->local_pi = q->unposted_index;
-	wmb();
 	writew(q->unposted_index, q->pi);
+	spin_unlock_irqrestore(&q->index_lock, flags);
 }
 
 static void pqi_notify_device_queue_read(struct pqi_device_queue *q)
@@ -1168,8 +1175,9 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 			"Setting up io queue %d Qid = %d from device\n", i,
 			h->io_q_from_dev[i].queue_id);
 		/* Set up i/o queue #i from device */
-	
+
 		q = &h->io_q_from_dev[i];
+		spin_lock_init(&q->index_lock);
 		h->qinfo[h->io_q_from_dev[i].queue_id].pqiq = q;
 		r = pqi_alloc_elements(aq, 1);
 		dev_warn(&h->pdev->dev, "xxx2 i = %d, r = %p, q = %d\n",
@@ -1205,6 +1213,7 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 		/* Set up i/o queue #i to device */
 		r = pqi_alloc_elements(aq, 1);
 		q = &h->io_q_to_dev[i];
+		spin_lock_init(&q->index_lock);
 		h->qinfo[h->io_q_to_dev[i].queue_id].pqiq = q;
 		dev_warn(&h->pdev->dev, "xxx1 i = %d, r = %p, q = %p\n",
 				i, r, q);

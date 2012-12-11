@@ -21,6 +21,7 @@ struct pqi_device_queue {
 	dma_addr_t dhandle;
 	u16 queue_id;
 	u8 direction;
+	spinlock_t index_lock;
 #define PQI_DIR_TO_DEVICE 0
 #define PQI_DIR_FROM_DEVICE 1
 	struct scsi_express_request *request; /* used by oq only */
