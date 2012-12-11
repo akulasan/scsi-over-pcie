@@ -214,6 +214,7 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 	if (!vaddr)
 		goto bailout;
 
+	/* FIXME: I think we only need these on the submit side, not reply side. */
 	dev_warn(&h->pdev->dev, "4 allocating request buffers\n");
 	for (i = 0; i < num_queues; i++) {
 		int q = i + starting_queue_id;
@@ -891,7 +892,7 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 		dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated);
 		if (scsi_express_response_accumulated(r)) {
 			dev_warn(&h->pdev->dev, "accumlated response\n");
-			q->request = NULL;
+			q->pqiq->request = NULL;
 			wmb();
 			WARN_ON((!r->waiting && !r->scmd));
 			if (likely(r->scmd)) {
