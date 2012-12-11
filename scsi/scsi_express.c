@@ -731,6 +731,7 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 			h->admin_q_from_dev.request = NULL;
 			wmb();
 			complete(r->waiting);
+			pqi_notify_device_queue_read(&h->admin_q_from_dev);
 		}
 	} while (1);
 
