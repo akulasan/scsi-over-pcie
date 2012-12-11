@@ -81,19 +81,41 @@ static inline void writeq(__u64 val, volatile void __iomem *addr)
 }
 #endif
 
-static void free_request_data(struct scsi_express_device *h, int start, int end)
+static void free_q_request_buffers(struct queue_info *q)
+{
+	if (q->request_bits) {
+		kfree(q->request_bits);
+		q->request_bits = NULL;
+	}
+	if (q->request) {
+		kfree(q->request);
+		q->request = NULL;
+	}
+}
+
+static int allocate_q_request_buffers(struct queue_info *q,
+	int nbuffers, int buffersize)
+{
+	q->qdepth = nbuffers;
+	q->request_bits = kzalloc((BITS_TO_LONGS(nbuffers) + 1) *
+					sizeof(unsigned long), GFP_KERNEL);
+	if (!q->request_bits)
+		goto bailout;
+	q->request = kzalloc(buffersize * nbuffers, GFP_KERNEL);
+	if (!q->request)
+		goto bailout;
+	return 0;
+
+bailout:
+	free_q_request_buffers(q);
+	return -ENOMEM;
+}
+
+static void free_all_q_request_buffers(struct scsi_express_device *h)
 {
 	int i;
-	for (i = start; i <= end; i++) {
-		if (h->qinfo[i].request_bits) {
-			kfree(h->qinfo[i].request_bits);
-			h->qinfo[i].request_bits = NULL;
-		}
-		if (h->qinfo[i].request) {
-			kfree(h->qinfo[i].request);
-			h->qinfo[i].request = NULL;
-		}
-	}
+	for (i = 0; i < h->nr_queues; i++)
+		free_q_request_buffers(&h->qinfo[i]);
 }
 
 static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
@@ -121,15 +143,8 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 
 	for (i = 0; i < num_queues; i++) {
 		int q = i + starting_queue_id;
-		h->qinfo[q].qdepth = n_q_elements;
-		h->qinfo[q].request_bits =
-			kzalloc((BITS_TO_LONGS(n_q_elements) + 1) *
-					sizeof(unsigned long), GFP_KERNEL);
-		if (!h->qinfo[q].request_bits)
-			goto bailout;
-		h->qinfo[q].request = kzalloc(sizeof(struct scsi_express_request) *
-						n_q_elements, GFP_KERNEL);
-		if (!h->qinfo[q].request)
+		if (allocate_q_request_buffers(&h->qinfo[q], n_q_elements,
+				sizeof(struct scsi_express_request)))
 			goto bailout;
 	}
 
@@ -159,8 +174,7 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 
 bailout:
 	kfree(*xq);
-	free_request_data(h, starting_queue_id,
-				starting_queue_id + num_queues - 1);
+	free_all_q_request_buffers(h);
 	if (vaddr)
 		pci_free_consistent(h->pdev, total_size, vaddr, dhandle);
 	return err;
@@ -494,12 +508,22 @@ static int __devinit scsi_express_create_admin_queues(struct scsi_express_device
 	h->qinfo[0].pqiq = &h->admin_q_from_dev;
 	h->qinfo[1].pqiq = &h->admin_q_to_dev;
 
+	/* Allocate request buffers for admin queues */
+	if (allocate_q_request_buffers(&h->qinfo[0],
+				ADMIN_QUEUE_ELEMENT_COUNT,
+				sizeof(struct scsi_express_request)))
+		goto bailout;
+	if (allocate_q_request_buffers(&h->qinfo[1],
+				ADMIN_QUEUE_ELEMENT_COUNT,
+				sizeof(struct scsi_express_request)))
+		goto bailout;
 	return 0;
 
 bailout:
 	if (admin_iq)
 		pci_free_consistent(h->pdev, total_admin_queue_size,
 					admin_iq, admin_iq_busaddr);
+	free_all_q_request_buffers(h);
 	return -1;	
 	
 
