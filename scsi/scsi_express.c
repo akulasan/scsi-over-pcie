@@ -540,17 +540,34 @@ static int scsi_express_setup_msix(struct scsi_express_device *h)
 {
 	int i, err;
 
-	struct msix_entry msix_entry[TOTAL_QUEUES];
+	struct msix_entry msix_entry[MAX_TOTAL_QUEUES];
 
-	for (i = 0; i < TOTAL_QUEUES; i++) {
+	h->nr_queues = num_online_cpus();
+
+	/* need at least four, 2 admin queues and 2 io queues */
+	/* FIXME, maybe we can use only one for both admin queues */
+	if (h->nr_queues < 4)
+		h->nr_queues = 4;
+
+	if (h->nr_queues > MAX_TOTAL_QUEUES)
+		h->nr_queues = MAX_TOTAL_QUEUES;
+
+	for (i = 0; i < MAX_TOTAL_QUEUES; i++) {
 		msix_entry[i].vector = 0;
 		msix_entry[i].entry = i;
 	}
+
 	if (!pci_find_capability(h->pdev, PCI_CAP_ID_MSIX))
 		goto default_int_mode;
-	err = pci_enable_msix(h->pdev, msix_entry, TOTAL_QUEUES);
-	if (!err) {
-		for (i = 0; i < TOTAL_QUEUES; i++) {
+	err = pci_enable_msix(h->pdev, msix_entry, h->nr_queues);
+	if (err > 0)
+		h->nr_queues = err;
+
+	if (h->nr_queues < 4)
+		goto bail_out;
+
+	if (err >= 0) {
+		for (i = 0; i < h->nr_queues; i++) {
 			h->intr[i] = msix_entry[i].vector;
 			dev_warn(&h->pdev->dev, "msix_entry[%d] = %d\n",
 				i, msix_entry[i].vector);
@@ -563,15 +580,19 @@ static int scsi_express_setup_msix(struct scsi_express_device *h)
 				"only %d MSI-X vectors available\n", err);
 	else
 		dev_warn(&h->pdev->dev, "MSI-X init failed %d\n", err);
-
 default_int_mode:
+	return -1;
+
+bail_out:
+	dev_warn(&h->pdev->dev,
+			"Need 4 MSI-X vectors, only got %d, need 4\n", err);
 	return -1;
 }
 
 /*
  *  * Convert &h->q[x] (passed to interrupt handlers) back to h.
  *   * Relies on (h-q[x] == x) being true for x such that
- *    * 0 <= x < TOTAL_QUEUES.
+ *    * 0 <= x < MAX_TOTAL_QUEUES.
  *     */
 static struct scsi_express_device *queue_to_hba(u8 *queue)
 {
@@ -604,13 +625,13 @@ static int scsi_express_request_irqs(struct scsi_express_device *h,
 	u8 i;
 	int rc;
 
-	for (i = 0; i < TOTAL_QUEUES; i++)
+	for (i = 0; i < MAX_TOTAL_QUEUES; i++)
 		h->q[i] = i;
 
 	rc = request_irq(h->intr[0], msix_adminq_handler, 0,
 					h->devname, &h->q[0]);
 
-	for (i = 1; i < TOTAL_QUEUES; i++) {
+	for (i = 1; i < h->nr_queues; i++) {
 		rc = request_irq(h->intr[i], msix_ioq_handler, 0,
 					h->devname, &h->q[i]);
 		if (rc != 0) {
@@ -631,7 +652,7 @@ static void scsi_express_free_irqs(struct scsi_express_device *h)
 {
 	int i;
 
-	for (i = 0; i < TOTAL_QUEUES; i++)
+	for (i = 0; i < h->nr_queues; i++)
 		free_irq(h->intr[i], &h->q[i]);
 }
 
