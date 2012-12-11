@@ -35,8 +35,8 @@
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_host.h>
 
-#include "scsi_express_kernel_compat.h"
-#include "scsi_express.h"
+#include "sop_kernel_compat.h"
+#include "sop.h"
 
 #define DRIVER_VERSION "1.0.0"
 #define DRIVER_NAME "sop (v " DRIVER_VERSION ")"

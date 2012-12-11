@@ -1,7 +1,7 @@
-#ifndef _SCSI_EXPRESS_H
-#define _SCSI_EXPRESS_H
+#ifndef _SOP_H
+#define _SOP_H
 /*
- *    SCSI Express driver
+ *    SCSI over PCI (SOP) driver
  *    Copyright 2012 Hewlett-Packard Development Company, L.P.
  *    Copyright 2012 SanDisk Inc.
  *

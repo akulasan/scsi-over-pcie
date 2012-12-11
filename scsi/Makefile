@@ -1,7 +1,7 @@
 EXTRA_CFLAGS += -g
 
 ifneq ($(KERNELRELEASE),)
-   obj-m := scsi_express.o
+   obj-m := sop.o
 	 
 else
    KERNELDIR ?= /lib/modules/$(shell uname -r)/build
