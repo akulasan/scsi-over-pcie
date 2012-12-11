@@ -674,7 +674,9 @@ static int scsi_express_response_accumulated(struct scsi_express_request *r)
 	if (r->response_accumulated == 0)
 		return 0;
 	iu_length = le16_to_cpu(*(u16 *) &r->response[2]);
-	return (r->response_accumulated == iu_length);
+	printk(KERN_WARNING "r->response_accumulated = %hu, iu_length = %hu\n", 
+			r->response_accumulated, iu_length);
+	return (r->response_accumulated >= iu_length);
 }
 
 irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
@@ -709,6 +711,7 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 			return IRQ_HANDLED;
 		}
 		r->response_accumulated += h->admin_q_from_dev.element_size;
+		dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated);
 		if (scsi_express_response_accumulated(r)) {
 			dev_warn(&h->pdev->dev, "accumlated response\n");
 			h->admin_q_from_dev.request = NULL;
@@ -973,8 +976,10 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 		return -ENOMEM;
 
 	h->ctlr = controller_num;
-	for (i = 0; i < MAX_TOTAL_QUEUES; i++)
+	for (i = 0; i < MAX_TOTAL_QUEUES; i++) {
 		spin_lock_init(&h->qinfo[i].qlock);
+		h->qinfo[i].h = h;
+	}
 	controller_num++;
 	sprintf(h->devname, "scsi_express-%d\n", h->ctlr);
 
