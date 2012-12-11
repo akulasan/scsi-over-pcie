@@ -1978,7 +1978,8 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(ui_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
 	VERIFY_OFFSET(ui_length, 2);
-	VERIFY_OFFSET(reserved, 4);
+	VERIFY_OFFSET(response_oq, 4);
+	VERIFY_OFFSET(work_area, 6);
 	VERIFY_OFFSET(request_id, 8);
 	VERIFY_OFFSET(function_code, 10);
 	VERIFY_OFFSET(status, 11);
@@ -2019,7 +2020,8 @@ static void __attribute__((unused)) verify_structure_defs(void)
         VERIFY_OFFSET(iu_type, 0);
         VERIFY_OFFSET(compatible_features, 1);
         VERIFY_OFFSET(iu_length, 2);
-        VERIFY_OFFSET(reserved, 4);
+        VERIFY_OFFSET(response_oq, 4);
+        VERIFY_OFFSET(work_area, 6);
         VERIFY_OFFSET(request_id, 8);
         VERIFY_OFFSET(function_code, 10);
         VERIFY_OFFSET(reserved2, 11);
@@ -2033,7 +2035,8 @@ static void __attribute__((unused)) verify_structure_defs(void)
  	VERIFY_OFFSET(ui_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
 	VERIFY_OFFSET(ui_length, 2);
-	VERIFY_OFFSET(reserved, 4);
+	VERIFY_OFFSET(response_oq, 4);
+	VERIFY_OFFSET(work_area, 6);
 	VERIFY_OFFSET(request_id, 8);
 	VERIFY_OFFSET(function_code, 10);
 	VERIFY_OFFSET(status, 11);

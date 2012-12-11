@@ -95,7 +95,8 @@ struct pqi_create_operational_queue_response {
 	u8 ui_type;
 	u8 compatible_features;
 	u16 ui_length;
-	u8 reserved[4];
+	u16 response_oq;
+	u16 work_area;
 	u16 request_id;
 	u8 function_code;
 	u8 status;
@@ -108,7 +109,8 @@ struct pqi_delete_operational_queue_request {
 	u8 iu_type;
 	u8 compatible_features;
 	u16 iu_length;
-	u8 reserved[4];
+	u16 response_oq;
+	u16 work_area;
 	u16 request_id;
 	u8 function_code;
 	u8 reserved2;
@@ -120,7 +122,8 @@ struct pqi_delete_operational_queue_response {
 	u8 ui_type;
 	u8 compatible_features;
 	u16 ui_length;
-	u8 reserved[4];
+	u16 response_oq;
+	u16 work_area;
 	u16 request_id;
 	u8 function_code;
 	u8 status;
