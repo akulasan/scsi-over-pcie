@@ -899,6 +899,59 @@ static int sop_response_accumulated(struct sop_request *r)
 
 static void free_request(struct sop_device *h, u8 q, u16 request_id);
 
+static void main_io_path_decode_response_data(struct sop_device *h,
+					struct sop_cmd_response *scr,
+					struct scsi_cmnd *scmd)
+{
+	char *msg;
+	u8 firmware_bug = 0;
+
+	switch (scr->response[3]) {
+	case SOP_TMF_COMPLETE:
+	case SOP_TMF_REJECTED:
+	case SOP_TMF_FAILED:
+	case SOP_TMF_SUCCEEDED:
+		/*
+		 * There should be no way to submit a Task Management Function
+		 * IU via the main i/o path, so don't expect TMF response data.
+		 */
+		msg = "Received TMF response in main i/o path.\n";
+		firmware_bug = 1;
+		break;
+	case SOP_INCORRECT_LUN:
+		msg = "Incorrect LUN response.\n";
+		break;
+	case SOP_OVERLAPPED_REQUEST_ID_ATTEMPTED:
+		msg = "Overlapped request ID attempted.\n";
+		break;
+	case SOP_INVALID_IU_TYPE:
+		msg = "Invaid IU type";
+		break;
+	case SOP_INVALID_IU_LENGTH:
+		msg = "Invalid IU length";
+		break;
+	case SOP_INVALID_LENGTH_IN_IU:
+		msg = "Invalid length in IU";
+		break;
+	case SOP_MISALIGNED_LENGTH_IN_IU:
+		msg = "Misaligned length in IU";
+		break;
+	case SOP_INVALID_FIELD_IN_IU:
+		msg = "Invalid field in IU";
+		break;
+	case SOP_IU_TOO_LONG:
+		msg = "IU too long";
+		break;
+	default:
+		msg = "Unknown response type";
+	}
+	scmd->result |= (DID_ERROR << 16);
+	dev_warn(&h->pdev->dev,
+		"Unexpected response in main i/o path: %s. Suspect %s bug.\n",
+		msg, firmware_bug ? "firmware" : "driver");
+	return;
+}
+
 static void complete_scsi_cmd(struct sop_device *h,
 				struct sop_request *r)
 {
@@ -952,11 +1005,8 @@ static void complete_scsi_cmd(struct sop_device *h,
 				data_xferred = r->xfer_size;
 		scsi_set_resid(scmd, r->xfer_size - data_xferred);
 
-		if (response_data_len) {
-			/* FIXME need to do something correct here... */
-			scmd->result |= (DID_ERROR << 16);
-			dev_warn(&h->pdev->dev, "Got response data... what to do with it?\n");
-		}
+		if (response_data_len)
+			main_io_path_decode_response_data(h, scr, scmd);
 		scmd->scsi_done(scmd);
 		break;
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
