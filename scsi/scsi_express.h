@@ -75,6 +75,29 @@ struct pqi_create_operational_queue_response {
 	u8 reserved3[40];
 };
 
+struct pqi_delete_operational_queue_request {
+	u8 iu_type;
+	u8 compatible_features;
+	u16 iu_length;
+	u8 reserved[4];
+	u16 request_id;
+	u8 function_code;
+	u8 reserved2;
+	u16 queue_id;
+	u8 reserved3[37];
+};
+
+struct pqi_delete_operational_queue_response {
+	u8 ui_type;
+	u8 compatible_features;
+	u16 ui_length;
+	u8 reserved[4];
+	u16 request_id;
+	u8 function_code;
+	u8 status;
+	u8 reserved2[52];
+};
+
 /*
  * A note about variable names:
  *

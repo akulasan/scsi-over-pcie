@@ -871,6 +871,20 @@ static void fill_create_io_queue_request(struct scsi_express_device *h,
 	}
 }
 
+static void fill_delete_io_queue_request(struct scsi_express_device *h,
+	struct pqi_delete_operational_queue_request *r, u16 queue_id,
+	int to_device, u16 request_id)
+{
+	u8 function_code = to_device ? 0x12 : 0x13; /* FIXME magic */
+
+	memset(r, 0, sizeof(*r));
+	r->iu_type = 0x60; /* FIXME, magic */
+	r->iu_length = cpu_to_le16(0x003c);
+	r->request_id = cpu_to_le16(request_id);
+	r->function_code = function_code;
+	r->queue_id = cpu_to_le16(queue_id);
+}
+
 static void send_admin_command(struct scsi_express_device *h, u16 request_id)
 {
 	struct scsi_express_request *request;
@@ -997,6 +1011,53 @@ bail_out:
 	return -1;
 }
 
+static int scsi_express_delete_io_queues(struct scsi_express_device *h)
+{
+	int i;
+	struct pqi_delete_operational_queue_request *r;
+	struct pqi_device_queue *aq = &h->admin_q_to_dev;
+	u16 request_id;
+
+	for (i = 0; i < h->noqs - 1; i++) {
+		volatile struct pqi_delete_operational_queue_response *resp;
+		u16 qid;
+
+		r = pqi_alloc_elements(aq, 1);
+		request_id = alloc_request(h, aq->queue_id);
+		if (request_id < 0) { /* FIXME: now what? */
+			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
+		}
+		qid = h->io_q_from_dev[i].queue_id;
+		fill_delete_io_queue_request(h, r, qid, 1, request_id);
+		send_admin_command(h, request_id);
+		resp = (volatile struct pqi_delete_operational_queue_response *)
+			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
+		if (resp->status != 0)
+			dev_warn(&h->pdev->dev, "Failed to tear down OQ... now what?\n");
+		free_request(h, aq->queue_id, request_id);
+	}
+	for (i = 0; i < h->niqs - 1; i++) {
+		volatile struct pqi_delete_operational_queue_response *resp;
+		u16 qid;
+
+		r = pqi_alloc_elements(aq, 1);
+		request_id = alloc_request(h, aq->queue_id);
+		if (request_id < 0) { /* FIXME: now what? */
+			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
+		}
+		qid = h->io_q_to_dev[i].queue_id;
+		fill_delete_io_queue_request(h, r, qid, 0, request_id);
+		send_admin_command(h, request_id);
+		resp = (volatile struct pqi_delete_operational_queue_response *)
+			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
+		if (resp->status != 0)
+			dev_warn(&h->pdev->dev, "Failed to tear down IQ... now what?\n");
+		free_request(h, aq->queue_id, request_id);
+	}
+	return 0;
+}
+
+
 static int scsi_express_set_dma_mask(struct pci_dev * pdev)
 {
 	int rc;
@@ -1114,11 +1175,12 @@ static void __devexit scsi_express_remove(struct pci_dev *pdev)
 
 	h = pci_get_drvdata(pdev);
 	dev_warn(&pdev->dev, "remove called.\n");
+	scsi_express_delete_io_queues(h);
 	scsi_express_free_irqs_and_disable_msix(h);
 	dev_warn(&pdev->dev, "irqs freed, msix disabled\n");
+	scsi_express_delete_admin_queues(h);
 	if (h && h->pqireg)
 		iounmap(h->pqireg);
-	scsi_express_delete_admin_queues(h);
 	pci_disable_device(pdev);
 	pci_release_regions(pdev);
 	pci_set_drvdata(pdev, NULL);
@@ -1222,6 +1284,32 @@ static void __attribute__((unused)) verify_structure_defs(void)
 
 #undef VERIFY_OFFSET
 
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct pqi_delete_operational_queue_request, \
+			field) != offset)
+        VERIFY_OFFSET(iu_type, 0);
+        VERIFY_OFFSET(compatible_features, 1);
+        VERIFY_OFFSET(iu_length, 2);
+        VERIFY_OFFSET(reserved, 4);
+        VERIFY_OFFSET(request_id, 8);
+        VERIFY_OFFSET(function_code, 10);
+        VERIFY_OFFSET(reserved2, 11);
+        VERIFY_OFFSET(queue_id, 12);
+        VERIFY_OFFSET(reserved3, 14);
+#undef VERIFY_OFFSET
+
+#define VERIFY_OFFSET(field, offset) \
+	BUILD_BUG_ON(offsetof(struct pqi_delete_operational_queue_response, \
+			field) != offset)
+ 	VERIFY_OFFSET(ui_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(ui_length, 2);
+	VERIFY_OFFSET(reserved, 4);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(function_code, 10);
+	VERIFY_OFFSET(status, 11);
+	VERIFY_OFFSET(reserved2, 12);
+#undef VERIFY_OFFSET
 }
 
 module_init(scsi_express_init);
