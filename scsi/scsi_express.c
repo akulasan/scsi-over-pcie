@@ -1540,7 +1540,7 @@ static inline struct scsi_express_device *sdev_to_hba(struct scsi_device *sdev)
 static struct queue_info *find_submission_queue(struct scsi_express_device *h)
 {
 	/* FIXME: should return iq for this numa node not just the first iq */
-	if (h->noqs + 1 != 8)
+	if (h->noqs + 1 >= 8)
 		return &h->qinfo[8];
 	return &h->qinfo[h->noqs + 1];
 }
