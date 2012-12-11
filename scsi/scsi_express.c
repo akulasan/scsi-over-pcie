@@ -366,12 +366,12 @@ static int pqi_dequeue_from_device(struct pqi_device_queue *q, void *element)
 		return PQI_QUEUE_EMPTY;
 
 	p = q->queue_vaddr + q->unposted_index * q->element_size;
-	printk(KERN_WARNING "DQ: p = %p, q->unposted_index = %hu, n = %hu\n",
-				p, q->unposted_index, q->nelements);
+	/* printk(KERN_WARNING "DQ: p = %p, q->unposted_index = %hu, n = %hu\n",
+				p, q->unposted_index, q->nelements); */
 	memcpy(element, p, q->element_size);
 	q->unposted_index = (q->unposted_index + 1) % q->nelements;
-	printk(KERN_WARNING "After DQ: q->unposted_index = %hu\n",
-				q->unposted_index);
+	/* printk(KERN_WARNING "After DQ: q->unposted_index = %hu\n",
+				q->unposted_index); */
 	return 0;
 }
 
@@ -833,7 +833,7 @@ static void complete_scsi_cmd(struct scsi_express_device *h,
 	/* dev_warn(&h->pdev->dev, "Response IU type is 0x%02x\n", r->response[0]); */
 	switch (r->response[0]) {
 	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
-		dev_warn(&h->pdev->dev, "Completing request id %hu\n", r->request_id);
+		/* dev_warn(&h->pdev->dev, "Completing request id %hu\n", r->request_id); */
                 scmd->scsi_done(scmd);
 		break;
 	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
@@ -858,16 +858,16 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 	int rc;
 	struct queue_info *q = devid;
 	struct scsi_express_device *h = q->h;
-
+#if 0
 	printk(KERN_WARNING "=========> Got ioq interrupt, q = %p (%d) vector = %d\n",
 			q, q->pqiq->queue_id, q->msix_vector);
-
+#endif
 	do {
 		struct scsi_express_request *r = q->pqiq->request;
 
 		if (pqi_from_device_queue_is_empty(q->pqiq)) {
-			dev_warn(&h->pdev->dev, "==== interrupt, ioq %d is empty ====\n",
-					q->pqiq->queue_id);
+			/* dev_warn(&h->pdev->dev, "==== interrupt, ioq %d is empty ====\n",
+					q->pqiq->queue_id); */
 			break;
 		}
 
@@ -889,9 +889,9 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 			return IRQ_HANDLED;
 		}
 		r->response_accumulated += q->pqiq->element_size;
-		dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated);
+		/* dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated); */
 		if (scsi_express_response_accumulated(r)) {
-			dev_warn(&h->pdev->dev, "accumlated response\n");
+			/* dev_warn(&h->pdev->dev, "accumlated response\n"); */
 			q->pqiq->request = NULL;
 			wmb();
 			WARN_ON((!r->waiting && !r->scmd));
@@ -1581,29 +1581,19 @@ static int scsi_express_scatter_gather(struct scsi_express_device *h,
 	}
 
 	sg_block_number = (r->request_id & 0x0ff) * MAX_SGLS;
-	dev_warn(&h->pdev->dev, "use_sg = %d, sg_block_number = %d\n",
-			use_sg, sg_block_number);
 	r->xfer_size = 0;
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * 2);
 	datasg = &r->sg[0];
 	j = 0;
 	scsi_for_each_sg(sc, sg, use_sg, i) {
-		dev_warn(&h->pdev->dev, "j = %d, datasg = %p\n", j, datasg);
 		if (j == 1) {
-			dev_warn(&h->pdev->dev, "filling sg chain element\n");
 			fill_sg_chain_element(datasg, q,
 					sg_block_number, scsi_sg_count(sc) - 1);
-			dev_warn(&h->pdev->dev, "filled sg chain element\n");
 			datasg = &q->sg[sg_block_number];
 			j++;
-			dev_warn(&h->pdev->dev, "j is now %d, datasg = %p\n", j, datasg);
 		}
-		if (j > 1)
-			dev_warn(&h->pdev->dev, "j = %d, fill %p\n", j, datasg);
 		fill_sg_data_element(datasg, sg, &r->xfer_size);
 		datasg++;
-		if (j > 1)
-			dev_warn(&h->pdev->dev, "j = %d, filled, datasg = %p\n", j, datasg);
 		j++;
 	}
 	return 0;
