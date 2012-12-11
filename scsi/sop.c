@@ -771,62 +771,75 @@ bailout:
 	return -1;	
 }
 
+static int wait_for_admin_queues_to_become_idle(struct sop_device *h)
+{
+	int i;
+	u64 paf;
+	u32 status;
+	u8 pqi_device_state, function_and_status;
+	__iomem void *sig = &h->pqireg->signature;
+
+	for (i = 0; i < ADMIN_SLEEP_INTERATIONS; i++) {
+		if (safe_readq(sig, &paf,
+				&h->pqireg->process_admin_function)) {
+			dev_warn(&h->pdev->dev,
+				"Cannot read process admin function register");
+			return -1;
+		}
+		paf &= 0x0ff;
+		if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
+			dev_warn(&h->pdev->dev,
+				"Cannot read device status register");
+			return -1;
+		}
+		function_and_status = paf & 0xff;
+		pqi_device_state = status & 0xff;
+		if (function_and_status == PQI_IDLE &&
+			pqi_device_state == PQI_READY_FOR_IO)
+			return 0;
+		if (i == 0)
+			dev_warn(&h->pdev->dev,
+				"Waiting for admin queues to become idle\n");
+		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+				ADMIN_SLEEP_INTERVAL_MAX);
+	}
+	dev_warn(&h->pdev->dev,
+			"Failed waiting for admin queues to become idle.");
+	return -1;
+}
+
 static int sop_delete_admin_queues(struct sop_device *h)
 {
 	u64 paf;
 	u32 status;
-	int rc;
-	u8 pqi_device_state, function_and_status;
-	char *msg = NULL;
+	u8 function_and_status;
 	__iomem void *sig = &h->pqireg->signature;
 
-	if (safe_readq(sig, &paf, &h->pqireg->process_admin_function)) {
-		msg = "Cannot read process admin function register";
-		goto bailout;
-	}
-	paf &= 0x0ff;
-
-	if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
-		msg = "Cannot read device status register";
-		goto bailout;
-	}
-	function_and_status = paf & 0xff;
-	pqi_device_state = status & 0xff;
-
-	if (function_and_status != PQI_IDLE) {
-		msg = "Cannot remove admin queues, device not idle";
-		goto bailout;
-	}
-
-	if (pqi_device_state != PQI_READY_FOR_IO) {
-		msg = "Cannot remove admin queues, device not ready for i/o";
-		goto bailout;
-	}
+	if (wait_for_admin_queues_to_become_idle(h))
+		return -1;
 	writeq(PQI_DELETE_ADMIN_QUEUES, &h->pqireg->process_admin_function);
-	rc = wait_for_admin_command_ack(h);
-	if (!rc)
+	if (!wait_for_admin_command_ack(h))
 		return 0;
-	dev_warn(&h->pdev->dev, "Failed waiting for admin command acknowledgment\n");
 
+	/* Try to get some clues about why it failed. */
+	dev_warn(&h->pdev->dev, "Failed waiting for admin command acknowledgment\n");
 	if (safe_readq(sig, &paf,  &h->pqireg->process_admin_function)) {
-		msg = "Cannot read process admin function register";
-		goto bailout;
+		dev_warn(&h->pdev->dev,
+			"Cannot read process admin function register");
+		return -1;
 	}
 	function_and_status = paf & 0xff;
 	dev_warn(&h->pdev->dev,
 		"Failed to delete admin queues: function_and_status = 0x%02x\n",
 		function_and_status);
-	if (function_and_status != 0) {
-		if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
-			msg = "Failed to read device status register";
-			goto bailout;
-		}
-		dev_warn(&h->pdev->dev, "Device status = 0x%08x\n",
-				status);
+	if (function_and_status == 0)
+		return -1;
+	if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
+		dev_warn(&h->pdev->dev,
+			"Failed to read device status register");
+		return -1;
 	}
-
-bailout:
-	dev_warn(&h->pdev->dev, "%s\n", msg);
+	dev_warn(&h->pdev->dev, "Device status = 0x%08x\n", status);
 	return -1;
 }
 
