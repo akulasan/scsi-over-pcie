@@ -1447,8 +1447,8 @@ static int sop_register_host(struct sop_device *h)
 	sh->this_id = -1;
 	sh->max_channel = 1;
 	sh->max_cmd_len = MAX_COMMAND_SIZE;
-	sh->max_lun = 255; /* FIXME are these correct? */
-	sh->max_id = 255;
+	sh->max_lun = 1; /* FIXME are these correct? */
+	sh->max_id = 1;
 	sh->can_queue = 32; /* FIXME: get this from device if possible. */
 	sh->cmd_per_lun = 32;
 	sh->sg_tablesize = MAX_SGLS; /* FIXME make this bigger */
