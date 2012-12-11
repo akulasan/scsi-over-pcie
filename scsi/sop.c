@@ -1910,12 +1910,15 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	memset(r->cdb, 0, 16);
 	memcpy(r->cdb, sc->cmnd, sc->cmd_len);
 	if (sop_scatter_gather(h, submitq, r, sc, &sopr->xfer_size)) {
-		/* FIXME:  What to do here?  We already allocated a
-		 * slot in the submission ring buffer.  Either make
-		 * it a NULL IU, or unallocate it somehow while avoiding races.
+		/*
+		 * Scatter gather mapping failed.  Tell midlayer to back off.
+		 * There's no "unallocating" from the submit ring buffer,
+		 * so just make it a null IU and deallocate the corresponding
+		 * request.
 		 */
-		dev_warn(&h->pdev->dev,
-				"Need to implement handling of scsi_dma_map failure.\n");
+		memset(r, 0, 4); /* NULL IU */
+		free_request(h, submitq->pqiq->queue_id, request_id);
+		pqi_notify_device_queue_written(submitq->pqiq);
 		return SCSI_MLQUEUE_HOST_BUSY;
 	}
 	r->xfer_size = cpu_to_le32(sopr->xfer_size);
