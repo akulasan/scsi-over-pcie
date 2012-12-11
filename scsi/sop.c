@@ -63,6 +63,31 @@ DEFINE_PCI_DEVICE_TABLE(sop_id_table) = {
 
 MODULE_DEVICE_TABLE(pci, sop_id_table);
 
+static inline struct sop_device *shost_to_hba(struct Scsi_Host *sh)
+{
+	unsigned long *priv = shost_priv(sh);
+	return (struct sop_device *) *priv;
+}
+
+static ssize_t host_show_sopstats(struct device *dev,
+        struct device_attribute *attr, char *buf)
+{
+        struct sop_device *h;
+        struct Scsi_Host *shost = class_to_shost(dev);
+	int moc;
+
+        h = shost_to_hba(shost);
+	moc = atomic_read(&h->max_outstanding_commands);
+        return snprintf(buf, 20, "%d\n", moc);
+}
+
+static DEVICE_ATTR(sopstats, S_IRUGO, host_show_sopstats, NULL);
+
+static struct device_attribute *sop_host_attrs[] = {
+        &dev_attr_sopstats,
+        NULL,
+};
+
 static int controller_num;
 
 static int sop_queuecommand(struct Scsi_Host *h, struct scsi_cmnd *sc);
@@ -93,8 +118,8 @@ static struct scsi_host_template sop_template = {
 #endif
 #if 0
 	.sdev_attrs			= sop_sdev_attrs,
-	.host_attrs			= sop_host_attrs,
 #endif
+	.shost_attrs			= sop_host_attrs,
 	.max_sectors			= (MAX_SGLS * 8),
 };
 
@@ -522,16 +547,18 @@ static void __attribute__((unused)) print_unsubmitted_commands(struct pqi_device
 	spin_unlock_irqrestore(&q->index_lock, flags);
 }
 
-static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
+static void pqi_notify_device_queue_written(struct sop_device *h, struct pqi_device_queue *q)
 {
 	unsigned long flags;
 	/*
 	 * Notify the device that the host has produced data for the device
 	 */
+
 	spin_lock_irqsave(&q->index_lock, flags);
 	q->local_pi = q->unposted_index;
 	writew(q->unposted_index, q->pi);
 	spin_unlock_irqrestore(&q->index_lock, flags);
+	atomic_inc(&h->max_outstanding_commands);
 }
 
 static void pqi_notify_device_queue_read(struct pqi_device_queue *q)
@@ -1128,6 +1155,7 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 				}
 			}
 			pqi_notify_device_queue_read(q->pqiq);
+			atomic_dec(&h->max_outstanding_commands);
 		}
 	} while (1);
 
@@ -1169,6 +1197,7 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 			wmb();
 			complete(r->waiting);
 			pqi_notify_device_queue_read(&h->admin_q_from_dev);
+			atomic_dec(&h->max_outstanding_commands);
 		}
 	} while (1);
 
@@ -1348,7 +1377,7 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	request = &h->qinfo[aq->queue_id].request[request_idx];
 	request->waiting = &wait;
 	request->response_accumulated = 0;
-	pqi_notify_device_queue_written(aq);
+	pqi_notify_device_queue_written(h, aq);
 	wait_for_completion(&wait);
 }
 
@@ -1363,7 +1392,7 @@ static void send_sop_command(struct sop_device *h, struct queue_info *submitq,
 	sopr->request_id = request_id;
 	sopr->waiting = &wait;
 	sopr->response_accumulated = 0;
-	pqi_notify_device_queue_written(submitq->pqiq);
+	pqi_notify_device_queue_written(h, submitq->pqiq);
 	put_cpu();
 	wait_for_completion(&wait);
 }
@@ -1426,7 +1455,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 		dev_warn(&h->pdev->dev,
 			"Sending NULL IU, this code is untested.\n");
 		free_request(h, aq->queue_id, request_id);
-		pqi_notify_device_queue_written(aq);
+		pqi_notify_device_queue_written(h, aq);
 		goto error;
 	}
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 3\n");
@@ -1820,6 +1849,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (!h)
 		return -ENOMEM;
 
+	atomic_set(&h->max_outstanding_commands, 0);
 	h->ctlr = controller_num;
 	for (i = 0; i < MAX_TOTAL_QUEUES; i++) {
 		spin_lock_init(&h->qinfo[i].qlock);
@@ -2142,11 +2172,11 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 		 */
 		memset(r, 0, 4); /* NULL IU */
 		free_request(h, submitq->pqiq->queue_id, request_id);
-		pqi_notify_device_queue_written(submitq->pqiq);
+		pqi_notify_device_queue_written(h, submitq->pqiq);
 		return SCSI_MLQUEUE_HOST_BUSY;
 	}
 	r->xfer_size = cpu_to_le32(sopr->xfer_size);
-	pqi_notify_device_queue_written(submitq->pqiq);
+	pqi_notify_device_queue_written(h, submitq->pqiq);
 	put_cpu();
 	return 0;
 }
