@@ -392,6 +392,66 @@ static u16 pqi_peek_request_id_from_device(struct pqi_device_queue *q)
 	return *(u16 *) p;
 }
 
+static int xmargin=8;
+static int amargin=60;
+
+static void print_bytes(unsigned char *c, int len, int hex, int ascii)
+{
+
+	int i;
+	unsigned char *x;
+
+	if (hex)
+	{
+		x = c;
+		for (i=0;i<len;i++)
+		{
+			if ((i % xmargin) == 0 && i>0) printk("\n");
+			if ((i % xmargin) == 0) printk("0x%04x:", i);
+			printk(" %02x", *x);
+			x++;
+		}
+		printk("\n");
+	}
+	if (ascii)
+	{
+		x = c;
+		for (i=0;i<len;i++)
+		{
+			if ((i % amargin) == 0 && i>0) printk("\n");
+			if ((i % amargin) == 0) printk("0x%04x:", i);
+			if (*x > 26 && *x < 128) printk("%c", *x);
+			else printk(".");
+			x++;
+		}
+		printk("\n");
+	}
+}
+
+static void print_iu(unsigned char *iu)
+{
+	u16 iu_length;
+
+	memcpy(&iu_length, &iu[2], 2);
+	iu_length = le16_to_cpu(iu_length);
+	printk(KERN_WARNING "***** IU type = 0x%02x, len = %hd, compat_features = %02x *****\n",
+			iu[0], iu_length, iu[1]);
+	print_bytes(iu, (int) iu_length, 1, 0);
+}
+
+static void print_unsubmitted_commands(struct pqi_device_queue *q)
+{
+	u16 pi;
+	int i;
+	unsigned char *iu;
+
+	pi = readw(q->pi);
+	for (i = pi; i < q->unposted_index; i++) {
+		iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
+		print_iu(iu);
+	}
+}
+
 static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 {
 	/*
@@ -400,6 +460,7 @@ static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 	printk(KERN_WARNING "pqi_notify_device_queue_written, q = %p\n", q);
 	printk(KERN_WARNING "pqi_notify_device_queue_written, q->unposted index = %hu, q->pi = %p\n",
 				q->unposted_index, q->pi);
+	print_unsubmitted_commands(q);
 	writew(q->unposted_index, q->pi);
 }
 
