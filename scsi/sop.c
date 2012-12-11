@@ -28,6 +28,7 @@
 #include <linux/io.h>
 #include <linux/sched.h>
 /* #include <asm/byteorder.h> */
+#include <linux/init.h>
 #include <linux/version.h>
 #include <linux/completion.h>
 #include <scsi/scsi.h>
@@ -1617,6 +1618,59 @@ static void sop_figure_request_id_encoding(struct sop_device *h)
 	}
 }
 
+#define PQI_RESET_ACTION_SHIFT 5
+#define PQI_RESET_ACTION_MASK (0x07 << PQI_RESET_ACTION_SHIFT)
+#define PQI_START_RESET (1 << PQI_RESET_ACTION_SHIFT)
+#define PQI_SOFT_RESET (1)
+#define PQI_START_RESET_COMPLETED (2 << PQI_RESET_ACTION_SHIFT)
+static int sop_init_time_host_reset(struct sop_device *h)
+{
+	u64 paf;
+	unsigned char *x;
+	u32 status, reset_register, prev;
+	u8 function_and_status;
+	u8 pqi_device_state;
+	__iomem void *sig = &h->pqireg->signature;
+
+	prev = -1;
+	dev_warn(&h->pdev->dev, "Resetting host\n");
+	writel(PQI_START_RESET | PQI_SOFT_RESET, &h->pqireg->reset);
+	do {
+		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+				ADMIN_SLEEP_INTERVAL_MAX);
+		if (safe_readl(sig, &reset_register, &h->pqireg->reset)) {
+			dev_warn(&h->pdev->dev, "Failed to read reset register.\n");
+			return -1;
+		}
+		if (reset_register != prev)
+			dev_warn(&h->pdev->dev, "Reset register is: 0x%08x\n",
+				reset_register);
+		prev = reset_register;
+	} while ((reset_register & PQI_RESET_ACTION_MASK) !=
+					PQI_START_RESET_COMPLETED);
+
+	dev_warn(&h->pdev->dev, "Host reset initiated.\n");
+	do {
+		if (safe_readq(sig, &paf, &h->pqireg->process_admin_function)) {
+			dev_warn(&h->pdev->dev,
+				"Unable to read process admin function register");
+			return -1;
+		}
+		if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
+			dev_warn(&h->pdev->dev, "Unable to read from device memory");
+			return -1;
+		}
+		x = (unsigned char *) &status;
+		function_and_status = paf & 0xff;
+		pqi_device_state = status & 0xff;
+		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+				ADMIN_SLEEP_INTERVAL_MAX);
+	} while (pqi_device_state != PQI_READY_FOR_ADMIN_FUNCTION ||
+			function_and_status != PQI_IDLE);
+	dev_warn(&h->pdev->dev, "Host reset completed.\n");
+	return 0;
+}
+
 static int __devinit sop_probe(struct pci_dev *pdev,
 			const struct pci_device_id *pci_id)
 {
@@ -1664,6 +1718,11 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (!h->pqireg) {
 		rc = -ENOMEM;
 		goto bail;
+	}
+	if (reset_devices) {
+		rc = sop_init_time_host_reset(h);
+		if (rc)
+			return -1;
 	}
 	sig = &h->pqireg->signature;
 
