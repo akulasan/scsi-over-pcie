@@ -141,6 +141,7 @@ struct queue_info {
 	u16 qdepth;
 	struct scsi_express_request *request;
 	unsigned long *request_bits;
+	struct pqi_device_queue *pqiq;
 };
 
 struct scsi_express_device {
@@ -164,12 +165,6 @@ struct scsi_express_device {
 	u16 current_id;
 	struct queue_info qinfo[MAX_TOTAL_QUEUES];
 };
-
-#define PQI_IQ_ID_FM_INDEX(_i)  (((_i) + 2) * 2)
-#define PQI_OQ_ID_FM_INDEX(_i)  (((_i) + 2) * 2 + 1)
-
-/* Works for both IQ and OQ ID, although valid only for OQ  */
-#define PQI_VECTOR_FM_Q_ID(_q)  (((_q) / 2) - 1)
 
 #pragma pack()
 
