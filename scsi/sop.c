@@ -225,7 +225,6 @@ static void free_all_q_sgl_areas(struct sop_device *h)
 static int allocate_q_request_buffers(struct queue_info *q,
 	int nbuffers, int buffersize)
 {
-	BUG_ON(nbuffers > MAX_CMDS);
 	q->qdepth = nbuffers;
 	q->request_bits = kzalloc((BITS_TO_LONGS(nbuffers) + 1) *
 					sizeof(unsigned long), GFP_KERNEL);
@@ -1202,7 +1201,7 @@ static int alloc_request(struct sop_device *h, u8 q)
 	int rc;
 	unsigned long flags;
 
-	BUG_ON(h->qinfo[q].qdepth > MAX_CMDS);
+	BUG_ON(h->qinfo[q].qdepth > h->elements_per_io_queue);
 	BUG_ON(q > 127); /* high bit reserved for error reporting */
 
 	spin_lock_irqsave(&h->qinfo[q].qlock, flags);
