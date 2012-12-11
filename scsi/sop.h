@@ -298,7 +298,9 @@ struct sop_device {
 	u8 oq_pi_alignment_exponent;
 	u32 protocol_support_bitmask;
 	u16 admin_sgl_support_bitmask;
-	
+
+	u16 qid_shift;
+	u16 qid_mask;
 	u16 current_id;
 	struct queue_info qinfo[MAX_TOTAL_QUEUES];
 	struct Scsi_Host *sh;

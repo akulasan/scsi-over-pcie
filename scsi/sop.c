@@ -403,7 +403,7 @@ static u16 pqi_peek_request_id_from_device(struct pqi_device_queue *q)
 	u8 *p;
 
 	p = q->queue_vaddr + q->unposted_index * q->element_size + 8;
-	return *(u16 *) p;
+	return le16_to_cpu(*(u16 *) p);
 }
 
 static int xmargin=8;
@@ -840,7 +840,7 @@ static void complete_scsi_cmd(struct sop_device *h,
 
         scmd->result = (DID_OK << 16);           /* host byte */
         scmd->result |= (COMMAND_COMPLETE << 8); /* msg byte */
-	free_request(h, r->request_id >> 8, r->request_id);
+	free_request(h, r->request_id >> h->qid_shift, r->request_id);
 
 	/* dev_warn(&h->pdev->dev, "Response IU type is 0x%02x\n", r->response[0]); */
 	switch (r->response[0]) {
@@ -902,7 +902,7 @@ static void complete_scsi_cmd(struct sop_device *h,
 
 irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 {
-	u16 request_id;
+	u16 request_id, request_idx;
 	u8 iu_type;
 	u8 sq;
 	int rc;
@@ -925,8 +925,10 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(q->pqiq);
 			request_id = pqi_peek_request_id_from_device(q->pqiq);
-			sq = request_id >> 8; /* queue that request was submitted on */
-			r = q->pqiq->request = &h->qinfo[sq].request[request_id & 0x00ff];
+			request_idx = request_id & h->qid_mask;
+			sq = request_id >> h->qid_shift; /* find submit queue */
+			r = q->pqiq->request =
+				&h->qinfo[sq].request[request_idx];
 			r->request_id = request_id;
 			r->response_accumulated = 0;
 		}
@@ -966,7 +968,7 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 {
 	struct queue_info *q = devid;
 	u8 iu_type;
-	u16 request_id;
+	u16 request_id, request_idx;
 	int rc;
 	struct sop_device *h = q->h;
 	u8 sq;
@@ -988,10 +990,12 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(&h->admin_q_from_dev);
 			request_id = pqi_peek_request_id_from_device(&h->admin_q_from_dev);
-			sq = request_id >> 8; /* queue that request was submitted on */
+			request_idx = request_id & request_id;
+			sq = request_id >> h->qid_shift; /* find submit queue */
 			dev_warn(&h->pdev->dev, "new completion, iu type: %hhu, id = %hu\n",
 					iu_type, request_id);
-			r = h->admin_q_from_dev.request = &h->qinfo[sq].request[request_id & 0x00ff];
+			r = h->admin_q_from_dev.request =
+				&h->qinfo[sq].request[request_idx];
 			dev_warn(&h->pdev->dev, "intr: r = %p\n", r);
 			r->response_accumulated = 0;
 		}
@@ -1091,16 +1095,19 @@ static void sop_free_irqs_and_disable_msix(
 }
 
 /* FIXME: maybe there's a better way to do this */
-static u16 alloc_request(struct sop_device *h, u8 q)
+static int alloc_request(struct sop_device *h, u8 q)
 {
-	u16 rc;
+	int rc;
 	unsigned long flags;
 
-	/* I am encoding q number in high bight of request id */
 	BUG_ON(h->qinfo[q].qdepth > MAX_CMDS);
 	BUG_ON(q > 127); /* high bit reserved for error reporting */
 
-	/* FIXME, may be able to get rid of these spin locks */
+	/* FIXME: spinlock_irqsave is too strong. access to this data
+	 * occurs only here, and in the interrupt handler, and only ever
+	 * on the same cpu, so locally disabling interrupts should be
+	 * sufficient.
+	 */
 	spin_lock_irqsave(&h->qinfo[q].qlock, flags);
         do {
                 rc = (u16) find_first_zero_bit(h->qinfo[q].request_bits,
@@ -1108,17 +1115,17 @@ static u16 alloc_request(struct sop_device *h, u8 q)
                 if (rc >= h->qinfo[q].qdepth) {
 			spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
 			dev_warn(&h->pdev->dev, "alloc_request failed.\n");
-                        return (u16) -EBUSY;
+			return -EBUSY;
 		}
         } while (test_and_set_bit((int) rc, h->qinfo[q].request_bits));
 	spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
-	return rc | (q << 8);
+	return rc | (((int) q) << h->qid_shift);
 }
 
 static void free_request(struct sop_device *h, u8 q, u16 request_id)
 {
-	BUG_ON((request_id >> 8) != q);
-	clear_bit(request_id & 0x00ff, h->qinfo[q].request_bits);
+	BUG_ON((request_id >> h->qid_shift) != q);
+	clear_bit(request_id & h->qid_mask, h->qinfo[q].request_bits);
 }
 
 static void fill_create_io_queue_request(struct sop_device *h,
@@ -1172,8 +1179,9 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	struct sop_request *request;
 	struct pqi_device_queue *aq = &h->admin_q_to_dev;
 	DECLARE_COMPLETION_ONSTACK(wait);
+	u16 request_idx = request_id & h->qid_mask;
 
-	request = &h->qinfo[aq->queue_id].request[request_id & 0x00ff];
+	request = &h->qinfo[aq->queue_id].request[request_idx];
 	dev_warn(&h->pdev->dev, "Sending request %p\n", request);
 	request->waiting = &wait;
 	request->response_accumulated = 0;
@@ -1218,7 +1226,8 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	volatile struct report_pqi_device_capability_response *resp;
 	struct pqi_device_queue *aq = &h->admin_q_to_dev;
 	struct pqi_device_capabilities *buffer;
-	u16 request_id;
+	int request_id;
+	u16 request_idx;
 	u64 busaddr;
 
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities\n");
@@ -1228,6 +1237,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 2\n");
 	r = pqi_alloc_elements(aq, 1);
 	request_id = alloc_request(h, aq->queue_id);
+	request_idx = request_id & h->qid_mask;
 	fill_get_pqi_device_capabilities(h, r, request_id, buffer,
 						(u32) sizeof(*buffer));
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 3\n");
@@ -1238,7 +1248,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 						PCI_DMA_FROMDEVICE);
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 5\n");
 	resp = (volatile struct report_pqi_device_capability_response *)
-			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
+			h->qinfo[aq->queue_id].request[request_idx].response;
 	if (resp->status != 0)
 		return -1;
 
@@ -1290,7 +1300,8 @@ static int sop_setup_io_queues(struct sop_device *h)
 	int i, niqs, noqs;
 	struct pqi_create_operational_queue_request *r;
 	struct pqi_device_queue *aq = &h->admin_q_to_dev;
-	u16 request_id;
+	int request_id;
+	u16 request_idx;
 
 	dev_warn(&h->pdev->dev,
 		"sizeof struct pqi_create_operational_queue_request is %lu\n",
@@ -1338,15 +1349,16 @@ static int sop_setup_io_queues(struct sop_device *h)
 		dev_warn(&h->pdev->dev, "xxx2 i = %d, r = %p, q = %d\n",
 				i, r, h->io_q_from_dev[i].queue_id);
 		request_id = alloc_request(h, aq->queue_id);
+		request_idx = request_id & h->qid_mask;
 		dev_warn(&h->pdev->dev, "Allocated request %hu, %p\n", request_id,
-				&h->qinfo[aq->queue_id].request[request_id & 0x00ff]);
+				&h->qinfo[aq->queue_id].request[request_idx]);
 		if (request_id < 0) { /* FIXME: now what? */
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
 		}
 		fill_create_io_queue_request(h, r, q, 0, request_id, q->queue_id - 1);
 		send_admin_command(h, request_id);
 		resp = (volatile struct pqi_create_operational_queue_response *)
-			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
+			h->qinfo[aq->queue_id].request[request_idx].response;
 		dev_warn(&h->pdev->dev, "resp.status = %hhu, resp.index_offset = %llu\n",
 			resp->status, le64_to_cpu(resp->index_offset));
 		if (resp->status != 0)
@@ -1373,15 +1385,16 @@ static int sop_setup_io_queues(struct sop_device *h)
 		dev_warn(&h->pdev->dev, "xxx1 i = %d, r = %p, q = %p\n",
 				i, r, q);
 		request_id = alloc_request(h, aq->queue_id);
+		request_idx = request_id & h->qid_mask;
 		if (request_id < 0) { /* FIXME: now what? */
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted 2\n");
 		}
 		dev_warn(&h->pdev->dev, "Allocated request %hu, %p\n", request_id,
-				&h->qinfo[aq->queue_id].request[request_id & 0x00ff]);
+				&h->qinfo[aq->queue_id].request[request_idx]);
 		fill_create_io_queue_request(h, r, q, 1, request_id, (u16) -1);
 		send_admin_command(h, request_id);
 		resp = (volatile struct pqi_create_operational_queue_response *)
-			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
+			h->qinfo[aq->queue_id].request[request_idx].response;
 		dev_warn(&h->pdev->dev, "resp.status = %hhu, resp.index_offset = %llu\n",
 			resp->status, le64_to_cpu(resp->index_offset));
 		if (resp->status != 0)
@@ -1436,7 +1449,8 @@ static int sop_delete_io_queues(struct sop_device *h)
 	int i;
 	struct pqi_delete_operational_queue_request *r;
 	struct pqi_device_queue *aq = &h->admin_q_to_dev;
-	u16 request_id;
+	int request_id;
+	u16 request_idx;
 
 	for (i = 0; i < h->noqs - 1; i++) {
 		volatile struct pqi_delete_operational_queue_response *resp;
@@ -1447,11 +1461,12 @@ static int sop_delete_io_queues(struct sop_device *h)
 		if (request_id < 0) { /* FIXME: now what? */
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
 		}
+		request_idx = request_id & h->qid_mask;
 		qid = h->io_q_from_dev[i].queue_id;
 		fill_delete_io_queue_request(h, r, qid, 1, request_id);
 		send_admin_command(h, request_id);
 		resp = (volatile struct pqi_delete_operational_queue_response *)
-			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
+			h->qinfo[aq->queue_id].request[request_idx].response;
 		if (resp->status != 0)
 			dev_warn(&h->pdev->dev, "Failed to tear down OQ... now what?\n");
 		free_request(h, aq->queue_id, request_id);
@@ -1465,11 +1480,12 @@ static int sop_delete_io_queues(struct sop_device *h)
 		if (request_id < 0) { /* FIXME: now what? */
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
 		}
+		request_idx = request_id & h->qid_mask;
 		qid = h->io_q_to_dev[i].queue_id;
 		fill_delete_io_queue_request(h, r, qid, 0, request_id);
 		send_admin_command(h, request_id);
 		resp = (volatile struct pqi_delete_operational_queue_response *)
-			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
+			h->qinfo[aq->queue_id].request[request_idx].response;
 		if (resp->status != 0)
 			dev_warn(&h->pdev->dev, "Failed to tear down IQ... now what?\n");
 		free_request(h, aq->queue_id, request_id);
@@ -1531,6 +1547,36 @@ add_host_failed:
 bail:
 	dev_err(&h->pdev->dev, "scsi_host_alloc failed.\n");
 	return -ENOMEM;
+}
+
+/*
+ * sop_figure_request_id_encoding figures how many bits of the
+ * request ID to use for queue ID and how many for request ID.
+ *
+ * The Requst ID field of all the IUs is 2 bytes.  Part of this
+ * must include the queue ID, so we know on completion which queue
+ * the associated request resides with, and to keep request IDs unique
+ * across all queues.   Depending on how many queues there are, the
+ * different numbers of bits are used for the queue ID and the request ID.
+ * With 256 queues, maximum queue depth is 256, with 128 queues,
+ * max queue depth is 512, with 64 queues, max qdepth is 1024, etc.
+ *
+ * The device may have further limitations on queue depth besides what
+ * is imposed by the driver design here.
+ */
+static void sop_figure_request_id_encoding(struct sop_device *h)
+{
+	int i;
+
+	BUG_ON(h->noqs > 256 || h->noqs < 2);
+
+	for (i = 7; i >= 0; i--) {
+		if (h->noqs <= (1 << i))
+			continue;
+		h->qid_shift = 16 - (i + 2);
+		h->qid_mask = (1 << h->qid_shift) - 1;
+		return;
+	}
 }
 
 static int __devinit sop_probe(struct pci_dev *pdev,
@@ -1598,6 +1644,8 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	rc = sop_setup_msix(h);
 	if (rc != 0)
 		goto bail;
+
+	sop_figure_request_id_encoding(h);
 
 	rc = sop_create_admin_queues(h);
 	if (rc)
@@ -1777,7 +1825,7 @@ static int sop_scatter_gather(struct sop_device *h,
 		return 0;
 	}
 
-	sg_block_number = (r->request_id & 0x0ff) * MAX_SGLS;
+	sg_block_number = (r->request_id & h->qid_mask) * MAX_SGLS;
 	*xfer_size = 0;
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * 2);
 	datasg = &r->sg[0];
@@ -1804,7 +1852,7 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	struct queue_info *submitq, *replyq;
 	struct sop_limited_cmd_iu *r;
 	struct sop_request *ser;
-	u16 request_id;
+	int request_id;
 
 	h = sdev_to_hba(sc->device);
 
@@ -1828,15 +1876,15 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 		dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %ld\n", PTR_ERR(r));
 	}
 	request_id = alloc_request(h, submitq->pqiq->queue_id);
-	if (request_id == (u16) -EBUSY)
+	if (request_id < 0)
 		dev_warn(&h->pdev->dev, "Failed to allocate request! Trouble ahead.\n");
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
 	r->compatible_features = 0;
 	r->queue_id = cpu_to_le16(replyq->pqiq->queue_id);
 	r->work_area = 0;
-	r->request_id = request_id;
-	ser = &submitq->request[request_id & 0x0ff];
+	r->request_id = cpu_to_le16(request_id);
+	ser = &submitq->request[request_id & h->qid_mask];
 	ser->xfer_size = 0;
 #if 0
 	dev_warn(&h->pdev->dev, "h%db%dt%dl%d: "
