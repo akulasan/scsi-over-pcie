@@ -1,5 +1,5 @@
-#ifndef SCSI_EXPRESS_KERNEL_COMPAT_H
-#define SCSI_EXPRESS_KERNEL_COMPAT_H
+#ifndef SOP_KERNEL_COMPAT_H
+#define SOP_KERNEL_COMPAT_H
 
 #include <linux/version.h>
 

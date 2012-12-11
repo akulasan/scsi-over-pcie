@@ -1,5 +1,5 @@
 /*
- *    SCSI Express driver
+ *    SCSI over PCI (SoP) driver
  *    Copyright 2012 Hewlett-Packard Development Company, L.P.
  *    Copyright 2012 SanDisk Inc.
  *
@@ -39,13 +39,13 @@
 #include "scsi_express.h"
 
 #define DRIVER_VERSION "1.0.0"
-#define DRIVER_NAME "SCSI Express (v " DRIVER_VERSION ")"
-#define SCSI_EXPRESS "SCSI Express"
+#define DRIVER_NAME "sop (v " DRIVER_VERSION ")"
+#define SOP "sop"
 
 MODULE_AUTHOR("Hewlett-Packard Company");
 MODULE_AUTHOR("SanDisk Inc.");
-MODULE_DESCRIPTION("SCSI Express driver" DRIVER_VERSION);
-MODULE_SUPPORTED_DEVICE("SCSI Express devices");
+MODULE_DESCRIPTION("sop driver" DRIVER_VERSION);
+MODULE_SUPPORTED_DEVICE("sop devices");
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
 
@@ -1437,7 +1437,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	u64 signature;
 	int i, rc;
 
-	dev_warn(&pdev->dev, SCSI_EXPRESS "found device: %04x:%04x/%04x:%04x\n",
+	dev_warn(&pdev->dev, SOP "found device: %04x:%04x/%04x:%04x\n",
 			pdev->vendor, pdev->device,
 			pdev->subsystem_vendor, pdev->subsystem_device);
 
@@ -1465,7 +1465,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	/* Enable bus mastering (pci_disable_device may disable this) */
 	pci_set_master(h->pdev);
 
-	rc = pci_request_regions(h->pdev, SCSI_EXPRESS);
+	rc = pci_request_regions(h->pdev, SOP);
 	if (rc) {
 		dev_err(&h->pdev->dev,
 			"cannot obtain PCI resources, aborting\n");
@@ -1557,7 +1557,7 @@ static void sop_shutdown(struct pci_dev *pdev)
 }
 
 static struct pci_driver sop_pci_driver = {
-	.name = SCSI_EXPRESS,
+	.name = SOP,
 	.probe = sop_probe,
 	.remove = __devexit_p(sop_remove),
 	.id_table = sop_id_table,
