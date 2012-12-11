@@ -166,7 +166,7 @@ static void free_all_q_sgl_areas(struct scsi_express_device *h)
 static int allocate_q_request_buffers(struct queue_info *q,
 	int nbuffers, int buffersize)
 {
-	BUG_ON(nbuffers > 256);
+	BUG_ON(nbuffers > MAX_CMDS);
 	q->qdepth = nbuffers;
 	q->request_bits = kzalloc((BITS_TO_LONGS(nbuffers) + 1) *
 					sizeof(unsigned long), GFP_KERNEL);
@@ -867,7 +867,7 @@ static u16 alloc_request(struct scsi_express_device *h, u8 q)
 	unsigned long flags;
 
 	/* I am encoding q number in high bight of request id */
-	BUG_ON(h->qinfo[q].qdepth > 256);
+	BUG_ON(h->qinfo[q].qdepth > MAX_CMDS);
 	BUG_ON(q > 127); /* high bit reserved for error reporting */
 
 	/* FIXME, may be able to get rid of these spin locks */

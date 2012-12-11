@@ -2,6 +2,7 @@
 #define _SCSI_EXPRESS_H
 
 #define MAX_SGLS (1024)
+#define MAX_CMDS (256)
 
 struct scsi_express_request;
 
