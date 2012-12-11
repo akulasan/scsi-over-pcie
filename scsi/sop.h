@@ -28,6 +28,51 @@
 
 struct sop_request;
 
+#pragma pack(1)
+/*
+ * A note about variable names:
+ *
+ * "iq" == "inbound queue"
+ * "oq" == "outbound queue"
+ * "pi" == "producer index"
+ * "ci" == "consumer index"
+ *
+ * "inbound" and "outbound" are from the point of view of the device,
+ * so "inbound" means "from the host to the device" and "outbound"
+ * means "from the device to the host".
+ *
+ */
+
+struct pqi_device_register_set {
+	u64 signature;
+	u64 process_admin_function;
+#define PQI_IDLE 0
+#define PQI_CREATE_ADMIN_QUEUES 0x01ULL
+#define PQI_DELETE_ADMIN_QUEUES 0x02ULL
+	u64 capability;
+	u32 legacy_intx_status;
+	u32 legacy_intx_mask_set;
+	u32 legacy_intx_mask_clear;
+	u8  reserved1[28];
+	u32 pqi_device_status;
+#define PQI_READY_FOR_ADMIN_FUNCTION 0x02
+#define PQI_READY_FOR_IO 0x03
+	u8 reserved2[4];
+	u64 admin_iq_pi_offset;
+	u64 admin_oq_ci_offset;
+	u64 admin_iq_addr;
+	u64 admin_oq_addr;
+	u64 admin_iq_ci_addr;
+	u64 admin_oq_pi_addr;
+	u32 admin_queue_param;
+	u8  reserved3[4];
+	u64 error_data;
+	u32 reset;
+	u8  reserved4[4];
+	u32 power_action;
+};
+#pragma pack()
+
 struct pqi_device_queue {
 	__iomem void *queue_vaddr;
 	__iomem u16 *pi;		/* producer index */
@@ -47,6 +92,7 @@ struct pqi_device_queue {
 #define PQI_DIR_TO_DEVICE 0
 #define PQI_DIR_FROM_DEVICE 1
 	struct sop_request *request; /* used by oq only */
+	struct pqi_device_register_set *registers;
 };
 
 #define PQI_QUEUE_FULL (-1)
@@ -133,49 +179,6 @@ struct pqi_delete_operational_queue_response {
 	u8 function_code;
 	u8 status;
 	u8 reserved2[52];
-};
-
-/*
- * A note about variable names:
- *
- * "iq" == "inbound queue"
- * "oq" == "outbound queue"
- * "pi" == "producer index"
- * "ci" == "consumer index"
- *
- * "inbound" and "outbound" are from the point of view of the device,
- * so "inbound" means "from the host to the device" and "outbound"
- * means "from the device to the host".
- *
- */
-
-struct pqi_device_register_set {
-	u64 signature;
-	u64 process_admin_function;
-#define PQI_IDLE 0
-#define PQI_CREATE_ADMIN_QUEUES 0x01ULL
-#define PQI_DELETE_ADMIN_QUEUES 0x02ULL
-	u64 capability;
-	u32 legacy_intx_status;
-	u32 legacy_intx_mask_set;
-	u32 legacy_intx_mask_clear;
-	u8  reserved1[28];
-	u32 pqi_device_status;
-#define PQI_READY_FOR_ADMIN_FUNCTION 0x02
-#define PQI_READY_FOR_IO 0x03
-	u8 reserved2[4];
-	u64 admin_iq_pi_offset;
-	u64 admin_oq_ci_offset;
-	u64 admin_iq_addr;
-	u64 admin_oq_addr;
-	u64 admin_iq_ci_addr;
-	u64 admin_oq_pi_addr;
-	u32 admin_queue_param;
-	u8  reserved3[4];
-	u64 error_data;
-	u32 reset;
-	u8  reserved4[4];
-	u32 power_action;
 };
 
 struct pqi_capability {
