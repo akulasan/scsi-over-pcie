@@ -952,11 +952,48 @@ static void main_io_path_decode_response_data(struct sop_device *h,
 	return;
 }
 
+static void handle_management_response(struct sop_device *h, 
+					struct management_response_iu * mr,
+					struct scsi_cmnd *scmd)
+{
+	switch (mr->result) {
+	case MGMT_RSP_RSLT_GOOD:
+		scsi_set_resid(scmd, 0); /* right??? */
+		dev_warn(&h->pdev->dev,
+			"Management IU response: good result\n");
+		return;
+	case MGMT_RSP_RSLT_UNKNOWN_ERROR:
+		dev_warn(&h->pdev->dev,
+			"Management IU response: unknown error\n");
+		break;
+	case MGMT_RSP_RSLT_INVALID_FIELD_IN_REQUEST_IU:
+		dev_warn(&h->pdev->dev,
+			"Management IU response: Invalid field in request IU\n");
+		break;
+	case MGMT_RSP_RSLT_INVALID_FIELD_IN_DATA_OUT_BUFFER:
+		dev_warn(&h->pdev->dev,
+			"Management IU response: Invalid field in data out buffer\n");
+		break;
+	case MGMT_RSP_RSLT_VENDOR_SPECIFIC_ERROR:
+	case MGMT_RSP_RSLT_VENDOR_SPECIFIC_ERROR2:
+		dev_warn(&h->pdev->dev,
+			"Management IU response: vendor specific error\n");
+		break;
+	default:
+		dev_warn(&h->pdev->dev,
+			"Management IU response: unknown response: %02x\n",
+				mr->result);
+		break;
+	}
+	scmd->result |= (DID_ERROR << 16);
+}
+
 static void complete_scsi_cmd(struct sop_device *h,
 				struct sop_request *r)
 {
 	struct scsi_cmnd *scmd;
 	struct sop_cmd_response *scr;
+	struct management_response_iu *mr;
 	u16 sense_data_len;
 	u16 response_data_len;
 	u32 data_xferred;
@@ -1010,6 +1047,11 @@ static void complete_scsi_cmd(struct sop_device *h,
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 		scmd->result |= (DID_ERROR << 16);
 		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
+		break;
+	case SOP_RESPONSE_MANAGEMENT_RESPONSE_IU_TYPE:
+		/* FIXME: how the heck are we even getting in here? */
+		mr = (struct management_response_iu *) r->response;
+		handle_management_response(h, mr, scmd);
 		break;
 	default:
 		scmd->result |= (DID_ERROR << 16);

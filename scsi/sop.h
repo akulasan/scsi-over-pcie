@@ -356,6 +356,7 @@ struct sop_limited_cmd_iu {
 #define SOP_RESPONSE_CMD_SUCCESS_IU_TYPE 0x90
 #define SOP_RESPONSE_CMD_RESPONSE_IU_TYPE 0x91
 #define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
+#define SOP_RESPONSE_MANAGEMENT_RESPONSE_IU_TYPE 0x81
 
 #pragma pack(1)
 struct sop_cmd_response {
@@ -510,6 +511,36 @@ struct report_general_response_iu {
 	u16 queuing_layer_specific_data_len;
 	u16 incoming_sgl_support_bitmask;
 	u8 reserved6[2];
+};
+#pragma pack()
+
+#pragma pack(1)
+struct management_response_iu {
+	u8 iu_type;
+	u8 compatible_features;
+	u16 iu_length;
+	u16 queue_id;
+	u16 work_area;
+	u16 request_id;
+	u8 result;
+#define MGMT_RSP_RSLT_GOOD 0
+#define MGMT_RSP_RSLT_UNKNOWN_ERROR 0x40
+#define MGMT_RSP_RSLT_INVALID_FIELD_IN_REQUEST_IU 0x41
+#define MGMT_RSP_RSLT_INVALID_FIELD_IN_DATA_OUT_BUFFER 0x42
+#define MGMT_RSP_RSLT_VENDOR_SPECIFIC_ERROR 0x7f
+#define MGMT_RSP_RSLT_VENDOR_SPECIFIC_ERROR2 0xff
+	u8 reserved[5];
+	union {
+		struct {
+			u16 byte_ptr;
+			u8 reserved;
+			u8 bit_ptr;
+		} invalid_field_in_request_ui;
+		struct {
+			u32 byte_ptr;
+			u8 bit_ptr;
+		} invalid_field_in_data_out;
+	};
 };
 #pragma pack()
 
