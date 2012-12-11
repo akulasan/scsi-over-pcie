@@ -759,20 +759,18 @@ static int scsi_express_setup_msix(struct scsi_express_device *h)
 
 	struct msix_entry msix_entry[MAX_TOTAL_QUEUES];
 
-	h->nr_queues = num_online_cpus();
+	h->nr_queues = num_online_cpus() * 2;
+	BUILD_BUG_ON((MAX_TOTAL_QUEUES % 2) != 0);
 	if (h->nr_queues > MAX_TOTAL_QUEUES)
 		h->nr_queues = MAX_TOTAL_QUEUES;
 
-	for (i = 0; i < MAX_TOTAL_QUEUES; i++) {
+	h->niqs = h->noqs = h->nr_queues / 2;
+	h->niqs = h->noqs;
+
+	for (i = 0; i < h->noqs; i++) {
 		msix_entry[i].vector = 0;
 		msix_entry[i].entry = i;
 	}
-
-	/* this needs work */
-	h->noqs = h->nr_queues - 2;
-	if (h->noqs < 1)
-		h->noqs = 1;
-	h->niqs = 2;
 
 	if (!pci_find_capability(h->pdev, PCI_CAP_ID_MSIX))
 		goto default_int_mode;
@@ -1032,7 +1030,7 @@ static int scsi_express_request_irqs(struct scsi_express_device *h,
 	}
 		
 
-	/* for loop starts at 1 to skip over the admin iq */
+	/* for loop starts at 2 to skip over the admin queues */
 	for (i = 2; i < h->noqs + 1; i++) {
 		dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (oq)\n",
 				h->qinfo[i].msix_vector, i - 1);
@@ -1539,10 +1537,9 @@ static inline struct scsi_express_device *sdev_to_hba(struct scsi_device *sdev)
 
 static struct queue_info *find_submission_queue(struct scsi_express_device *h)
 {
-	/* FIXME: should return iq for this numa node not just the first iq */
-	if (h->noqs + 1 >= 8)
-		return &h->qinfo[8];
-	return &h->qinfo[h->noqs + 1];
+	int q = h->noqs + 1 + (smp_processor_id() % (h->niqs - 1));
+
+	return &h->qinfo[q];
 }
 
 static void fill_sg_data_element(struct pqi_sgl_descriptor *sgld,

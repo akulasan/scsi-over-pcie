@@ -204,10 +204,10 @@ struct scsi_express_device {
 	struct pci_dev *pdev;
 	struct pqi_capability pqicap;
 	__iomem struct pqi_device_register_set *pqireg;
-#define MAX_IO_QUEUES 6
-#define MAX_TO_DEVICE_QUEUES 1
+#define MAX_TO_DEVICE_QUEUES 6
 #define MAX_FROM_DEVICE_QUEUES 6
-#define MAX_TOTAL_QUEUES (MAX_TO_DEVICE_QUEUES + MAX_FROM_DEVICE_QUEUES + 2)
+#define MAX_IO_QUEUES (MAX_TO_DEVICE_QUEUES + MAX_FROM_DEVICE_QUEUES)
+#define MAX_TOTAL_QUEUES (MAX_IO_QUEUES + 2)
 	int nr_queues, niqs, noqs; /* total, inbound and outbound queues */
 #define INTR_MODE_MSIX 1
 #define INTR_MODE_MSI  2
