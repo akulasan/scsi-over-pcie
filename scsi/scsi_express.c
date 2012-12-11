@@ -53,44 +53,44 @@ MODULE_LICENSE("GPL");
 #define PCI_VENDOR_SANDISK 0x15b7
 #endif
 
-DEFINE_PCI_DEVICE_TABLE(scsi_express_id_table) = {
+DEFINE_PCI_DEVICE_TABLE(sop_id_table) = {
 	{ PCI_VENDOR_SANDISK, 0x0012, PCI_VENDOR_SANDISK, 0x0000 },
 	{ 0, },
 };
 
-MODULE_DEVICE_TABLE(pci, scsi_express_id_table);
+MODULE_DEVICE_TABLE(pci, sop_id_table);
 
 static int controller_num;
 
-static int scsi_express_queuecommand(struct Scsi_Host *h, struct scsi_cmnd *sc);
-static int scsi_express_change_queue_depth(struct scsi_device *sdev,
+static int sop_queuecommand(struct Scsi_Host *h, struct scsi_cmnd *sc);
+static int sop_change_queue_depth(struct scsi_device *sdev,
         int qdepth, int reason);
-static int scsi_express_abort_handler(struct scsi_cmnd *sc);
-static int scsi_express_device_reset_handler(struct scsi_cmnd *sc);
-static int scsi_express_slave_alloc(struct scsi_device *sdev);
-static void scsi_express_slave_destroy(struct scsi_device *sdev);
-static int scsi_express_compat_ioctl(struct scsi_device *dev, int cmd, void *arg);
-static int scsi_express_ioctl(struct scsi_device *dev, int cmd, void *arg);
+static int sop_abort_handler(struct scsi_cmnd *sc);
+static int sop_device_reset_handler(struct scsi_cmnd *sc);
+static int sop_slave_alloc(struct scsi_device *sdev);
+static void sop_slave_destroy(struct scsi_device *sdev);
+static int sop_compat_ioctl(struct scsi_device *dev, int cmd, void *arg);
+static int sop_ioctl(struct scsi_device *dev, int cmd, void *arg);
 
-static struct scsi_host_template scsi_express_template = {
+static struct scsi_host_template sop_template = {
 	.module				= THIS_MODULE,
 	.name				= DRIVER_NAME,
 	.proc_name			= DRIVER_NAME,
-	.queuecommand			= scsi_express_queuecommand,
-	.change_queue_depth		= scsi_express_change_queue_depth,
+	.queuecommand			= sop_queuecommand,
+	.change_queue_depth		= sop_change_queue_depth,
 	.this_id			= -1,
 	.use_clustering			= ENABLE_CLUSTERING,
-	.eh_abort_handler		= scsi_express_abort_handler,
-	.eh_device_reset_handler	= scsi_express_device_reset_handler,
-	.ioctl				= scsi_express_ioctl,
-	.slave_alloc			= scsi_express_slave_alloc,
-	.slave_destroy			= scsi_express_slave_destroy,
+	.eh_abort_handler		= sop_abort_handler,
+	.eh_device_reset_handler	= sop_device_reset_handler,
+	.ioctl				= sop_ioctl,
+	.slave_alloc			= sop_slave_alloc,
+	.slave_destroy			= sop_slave_destroy,
 #ifdef CONFIG_COMPAT
-	.compat_ioctl			= scsi_express_compat_ioctl,
+	.compat_ioctl			= sop_compat_ioctl,
 #endif
 #if 0
-	.sdev_attrs			= scsi_express_sdev_attrs,
-	.host_attrs			= scsi_express_host_attrs,
+	.sdev_attrs			= sop_sdev_attrs,
+	.host_attrs			= sop_host_attrs,
 #endif
 	.max_sectors			= (MAX_SGLS * 8), /* FIXME: is this correct? */
 };
@@ -1396,7 +1396,7 @@ static int scsi_express_register_host(struct scsi_express_device *h)
 
 	dev_warn(&h->pdev->dev, "zzz scsi_express_register_host 1\n");
 
-	sh = scsi_host_alloc(&scsi_express_template, sizeof(h));
+	sh = scsi_host_alloc(&sop_template, sizeof(h));
 	if (!sh)
 		goto bail;
 	sh->io_port = 0;
@@ -1560,7 +1560,7 @@ static struct pci_driver scsi_express_pci_driver = {
 	.name = SCSI_EXPRESS,
 	.probe = scsi_express_probe,
 	.remove = __devexit_p(scsi_express_remove),
-	.id_table = scsi_express_id_table,
+	.id_table = sop_id_table,
 	.shutdown = scsi_express_shutdown,
 	.suspend = scsi_express_suspend,
 	.resume = scsi_express_resume,
@@ -1683,7 +1683,7 @@ static int scsi_express_scatter_gather(struct scsi_express_device *h,
 	return 0;
 }
 
-static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
+static int sop_queuecommand_lck(struct scsi_cmnd *sc,
         void (*done)(struct scsi_cmnd *))
 {
 	struct scsi_express_device *h;
@@ -1768,65 +1768,65 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	return 0;
 }
 
-static DEF_SCSI_QCMD(scsi_express_queuecommand);
+static DEF_SCSI_QCMD(sop_queuecommand);
 
-static int scsi_express_change_queue_depth(struct scsi_device *sdev,
+static int sop_change_queue_depth(struct scsi_device *sdev,
         int qdepth, int reason)
 {
 	struct scsi_express_device *h = sdev_to_hba(sdev);
 
-	dev_warn(&h->pdev->dev, "scsi_express_change_queue_depth called but not implemented\n");
+	dev_warn(&h->pdev->dev, "sop_change_queue_depth called but not implemented\n");
 	return 0;
 }
 
-static int scsi_express_abort_handler(struct scsi_cmnd *sc)
+static int sop_abort_handler(struct scsi_cmnd *sc)
 {
 	struct scsi_express_device *h;
 
 	h = sdev_to_hba(sc->device);
-	dev_warn(&h->pdev->dev, "scsi_express_abort_handler called but not implemented\n");
+	dev_warn(&h->pdev->dev, "sop_abort_handler called but not implemented\n");
 	return 0;
 }
 
-static int scsi_express_device_reset_handler(struct scsi_cmnd *sc)
+static int sop_device_reset_handler(struct scsi_cmnd *sc)
 {
 	struct scsi_express_device *h;
 
 	h = sdev_to_hba(sc->device);
-	dev_warn(&h->pdev->dev, "scsi_express_device_reset_handler called but not implemented\n");
+	dev_warn(&h->pdev->dev, "sop_device_reset_handler called but not implemented\n");
 	return 0;
 }
 
-static int scsi_express_slave_alloc(struct scsi_device *sdev)
+static int sop_slave_alloc(struct scsi_device *sdev)
 {
 	/* struct scsi_express_device *h = sdev_to_hba(sdev); */
 
-	/* dev_warn(&h->pdev->dev, "scsi_express_slave_alloc called but not implemented\n"); */
+	/* dev_warn(&h->pdev->dev, "sop_slave_alloc called but not implemented\n"); */
 	return 0;
 }
 
-static void scsi_express_slave_destroy(struct scsi_device *sdev)
+static void sop_slave_destroy(struct scsi_device *sdev)
 {
 	/* struct scsi_express_device *h = sdev_to_hba(sdev); */
 
-	/* dev_warn(&h->pdev->dev, "scsi_express_slave_destroy called but not implemented\n"); */
+	/* dev_warn(&h->pdev->dev, "sop_slave_destroy called but not implemented\n"); */
 	return;
 }
 
-static int scsi_express_compat_ioctl(struct scsi_device *sdev,
+static int sop_compat_ioctl(struct scsi_device *sdev,
 						int cmd, void *arg)
 {
 	struct scsi_express_device *h = sdev_to_hba(sdev);
 
-	dev_warn(&h->pdev->dev, "scsi_express_compat_ioctl called but not implemented\n");
+	dev_warn(&h->pdev->dev, "sop_compat_ioctl called but not implemented\n");
 	return 0;
 }
 
-static int scsi_express_ioctl(struct scsi_device *sdev, int cmd, void *arg)
+static int sop_ioctl(struct scsi_device *sdev, int cmd, void *arg)
 {
 	struct scsi_express_device *h = sdev_to_hba(sdev);
 
-	dev_warn(&h->pdev->dev, "scsi_express_ioctl called but not implemented\n");
+	dev_warn(&h->pdev->dev, "sop_ioctl called but not implemented\n");
 	return 0;
 }
 
