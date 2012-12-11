@@ -241,8 +241,8 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 	err = 0;
 
 	for (i = 0; i < num_queues; i++) {
-		(*xq)[i].queue_vaddr = vaddr;
-		(*xq)[i].dhandle = dhandle;
+		(*xq)[i].queue_vaddr = vaddr + (i * total_size);
+		(*xq)[i].dhandle = dhandle + (i * total_size);
 		if (queue_direction == PQI_DIR_TO_DEVICE) {
 			(*xq)[i].ci = vaddr + (i * total_size) +
 					q_element_size_over_16 * 16 * n_q_elements;
@@ -1131,7 +1131,7 @@ static void fill_create_io_queue_request(struct scsi_express_device *h,
 	r->function_code = function_code;
 	r->queue_id = cpu_to_le16(q->queue_id);
 	r->element_array_addr = cpu_to_le64(q->dhandle);
-	r->index_addr = cpu_to_le64(r->element_array_addr +
+	r->index_addr = cpu_to_le64(q->dhandle +
 			q->nelements * q->element_size);
 	r->nelements = cpu_to_le16((u16) q->nelements);
 	r->element_length = cpu_to_le16((u16) (q->element_size/16));
