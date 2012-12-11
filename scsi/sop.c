@@ -1187,12 +1187,13 @@ static void fill_get_pqi_device_capabilities(struct sop_device *h,
 			u16 request_id, void *buffer, u32 buffersize)
 {
 	u64 busaddr;
+	struct pqi_device_queue *response_queue = &h->admin_q_from_dev;
 
 	memset(r, 0, sizeof(*r));
 	r->iu_type = REPORT_PQI_DEVICE_CAPABILITY;
 	r->compatible_features = 0;
 	r->iu_length = cpu_to_le16(0x003C);
-	r->response_oq = 0;
+	r->response_oq = cpu_to_le16(response_queue->queue_id);
 	r->work_area = 0;
 	r->request_id = cpu_to_le16(request_id);
 	r->function_code = 0;
@@ -1204,6 +1205,9 @@ static void fill_get_pqi_device_capabilities(struct sop_device *h,
 	r->sg.address = cpu_to_le64(busaddr);
 	r->sg.length = cpu_to_le32(buffersize);
 	r->sg.descriptor_type = PQI_SGL_DATA_BLOCK;
+
+	dev_warn(&h->pdev->dev, "Here is the request:\n");
+	print_bytes((unsigned char *) r, sizeof(*r), 1, 0);
 }
 
 static int sop_get_pqi_device_capabilities(struct sop_device *h)
@@ -1215,22 +1219,28 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	u16 request_id;
 	u64 busaddr;
 
+	dev_warn(&h->pdev->dev, "Getting pqi device capabilities\n");
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
+	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 2\n");
 	r = pqi_alloc_elements(aq, 1);
 	request_id = alloc_request(h, aq->queue_id);
 	fill_get_pqi_device_capabilities(h, r, request_id, buffer,
 						(u32) sizeof(*buffer));
+	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 3\n");
 	send_admin_command(h, request_id);
+	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 4\n");
 	busaddr = le64_to_cpu(r->sg.address);
 	pci_unmap_single(h->pdev, busaddr, sizeof(*buffer),
 						PCI_DMA_FROMDEVICE);
+	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 5\n");
 	resp = (volatile struct report_pqi_device_capability_response *)
 			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
 	if (resp->status != 0)
 		return -1;
 
+	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 6\n");
 	h->max_iqs = le16_to_cpu(buffer->max_iqs);
 	h->max_iq_elements = le16_to_cpu(buffer->max_iq_elements);
 	h->max_iq_element_length = le16_to_cpu(buffer->max_iq_element_length);
@@ -1249,6 +1259,25 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 		le32_to_cpu(buffer->protocol_support_bitmask);
 	h->admin_sgl_support_bitmask =
 		le16_to_cpu(buffer->admin_sgl_support_bitmask);
+
+	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 7:\n");
+
+	dev_warn(&h->pdev->dev, "max iqs = %hu\n", h->max_iqs);
+	dev_warn(&h->pdev->dev, "max iq_elements = %hu\n", h->max_iq_elements);
+	dev_warn(&h->pdev->dev, "max iq_element_length = %hu\n", h->max_iq_element_length);
+	dev_warn(&h->pdev->dev, "min iq_element_length = %hu\n", h->min_iq_element_length);
+	dev_warn(&h->pdev->dev, "max oqs = %hu\n", h->max_oqs);
+	dev_warn(&h->pdev->dev, "max oq_elements = %hu\n", h->max_oq_elements);
+	dev_warn(&h->pdev->dev, "max oq_element_length = %hu\n", h->max_oq_element_length);
+	dev_warn(&h->pdev->dev, "min oq_element_length = %hu\n", h->min_oq_element_length);
+	dev_warn(&h->pdev->dev, "intr_coalescing_time_granularity = %hu\n", h->intr_coalescing_time_granularity);
+	dev_warn(&h->pdev->dev, "iq_alignment_exponent = %hhu\n", h->iq_alignment_exponent);
+	dev_warn(&h->pdev->dev, "oq_alignment_exponent = %hhu\n", h->oq_alignment_exponent);
+	dev_warn(&h->pdev->dev, "iq_ci_alignment_exponent = %hhu\n", h->iq_ci_alignment_exponent);
+	dev_warn(&h->pdev->dev, "oq_pi_alignment_exponent = %hhu\n", h->oq_pi_alignment_exponent);
+	dev_warn(&h->pdev->dev, "protocol support bitmask = 0x%08x\n", h->protocol_support_bitmask);
+	dev_warn(&h->pdev->dev, "admin_sgl_support_bitmask = 0x%04x\n", h->admin_sgl_support_bitmask);
+	
 
 	return 0;
 }
