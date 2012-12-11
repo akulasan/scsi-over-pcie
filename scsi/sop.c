@@ -546,13 +546,8 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	/* Check that device is ready to be set up */
 	for (count = 0; count < 10; count++) {
 		paf = readq(&h->pqireg->process_admin_function);
-		pr_warn("paf = %02x %02x %02x %02x %02x %02x %02x %02x\n",
-			x[0], x[1], x[2], x[3],
-			x[4], x[5], x[6], x[7]);
 		status = readl(&h->pqireg->pqi_device_status);
 		x = (unsigned char *) &status;
-		pr_warn("pqi device status = %02x %02x %02x %02x\n",
-			x[0], x[1], x[2], x[3]);
 		function_and_status = paf & 0xff;
 		pqi_device_state = status & 0xff;
 	
@@ -567,22 +562,12 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 				"Device not ready during initialization.\n");
 			/* return -1; */
 		}
-		pr_warn("fas = %d, device_state = %d\n",
-			function_and_status, pqi_device_state);
-			usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
-					ADMIN_SLEEP_INTERVAL_MAX);
+		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+				ADMIN_SLEEP_INTERVAL_MAX);
 	}
 
 	pqicap = readq(&h->pqireg->capability);
 	memcpy(&h->pqicap, &pqicap, sizeof(h->pqicap));
-	dev_warn(&h->pdev->dev, "PQI max admin IQ elements: %hhu\n",
-		h->pqicap.max_admin_iq_elements);
-	dev_warn(&h->pdev->dev, "PQI max admin OQ elements: %hhu\n",
-		h->pqicap.max_admin_oq_elements);
-	dev_warn(&h->pdev->dev, "PQI admin IQ element length: %hhu\n",
-		h->pqicap.admin_iq_element_length);
-	dev_warn(&h->pdev->dev, "PQI admin OQ element length: %hhu\n",
-		h->pqicap.admin_oq_element_length);
 
 #define ADMIN_QUEUE_ELEMENT_COUNT ((MAX_IO_QUEUES + 1) * 2)
 
@@ -672,26 +657,13 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	/* Get the offsets of the hardware updated producer/consumer indices */
 	admin_iq_pi_offset = readq(&h->pqireg->admin_iq_pi_offset);
 	admin_oq_ci_offset = readq(&h->pqireg->admin_oq_ci_offset);
-	dev_warn(&h->pdev->dev, "admin_iq_pi_offset = %p\n",
-			(void *) admin_iq_pi_offset);
-	dev_warn(&h->pdev->dev, "admin_oq_ci_offset = %p\n",
-			(void *) admin_oq_ci_offset);
 	admin_iq_pi = ((void *) h->pqireg) + admin_iq_pi_offset;
-	dev_warn(&h->pdev->dev,
-		"zzz ----> h->pqireg = %p, admin_iq_pi_offset = %llu, admin_iq_pi = %p\n",
-		h->pqireg, (unsigned long long) admin_iq_pi_offset, admin_iq_pi);
 	admin_oq_ci = ((void *) h->pqireg) + admin_oq_ci_offset;
 
 	status = readl(&h->pqireg->pqi_device_status);
 	x = (unsigned char *) &status;
-	printk(KERN_WARNING "pqi device status = %02x %02x %02x %02x\n",
-		x[0], x[1], x[2], x[3]);
 	function_and_status = paf & 0xff;
 	pqi_device_state = status & 0xff;
-
-	dev_warn(&h->pdev->dev, "device status = %d\n", pqi_device_state);
-
-	dev_warn(&h->pdev->dev, "Successfully created admin queues\n");
 
 	pqi_device_queue_init(&h->admin_q_from_dev,
 		admin_oq, admin_oq_pi, admin_oq_ci,
@@ -794,8 +766,6 @@ static int sop_setup_msix(struct sop_device *h)
 		for (i = 0; i < h->noqs; i++) {
 			int idx = i ? i + 1 : i;
 			h->qinfo[idx].msix_vector = msix_entry[i].vector;
-			dev_warn(&h->pdev->dev, "q[%d] msix_entry[%d] = %d\n",
-				idx, i, msix_entry[i].vector);
 		}
 		h->intr_mode = INTR_MODE_MSIX;
 		return 0;
@@ -1021,8 +991,6 @@ static int sop_request_irqs(struct sop_device *h,
 	u8 i;
 	int rc;
 
-	dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (admin)\n",
-			h->qinfo[0].msix_vector, 0);
 	rc = request_irq(h->qinfo[0].msix_vector, msix_adminq_handler, 0,
 					h->devname, &h->qinfo[0]);
 	if (rc != 0) {
@@ -1032,8 +1000,6 @@ static int sop_request_irqs(struct sop_device *h,
 
 	/* for loop starts at 2 to skip over the admin queues */
 	for (i = 2; i < h->noqs + 1; i++) {
-		dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (oq)\n",
-				h->qinfo[i].msix_vector, i - 1);
 		rc = request_irq(h->qinfo[i].msix_vector, msix_ioq_handler, 0,
 					h->devname, &h->qinfo[i]);
 		if (rc != 0) {
