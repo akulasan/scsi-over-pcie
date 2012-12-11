@@ -553,6 +553,8 @@ static int wait_for_admin_command_ack(struct sop_device *h)
 #define ADMIN_SLEEP_INTERATIONS 1000 /* total of 100 milliseconds */
 
 	do {
+		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+				ADMIN_SLEEP_INTERVAL_MAX);
 		if (safe_readq(sig, &paf, &h->pqireg->process_admin_function)) {
 			dev_warn(&h->pdev->dev,
 				"%s: Failed to read device memory\n", __func__);
@@ -562,8 +564,6 @@ static int wait_for_admin_command_ack(struct sop_device *h)
 		if (function_and_status == 0x00)
 			return 0;
 		count++;
-		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
-				ADMIN_SLEEP_INTERVAL_MAX);
 	} while (count < ADMIN_SLEEP_INTERATIONS);
 	return -1;
 }
