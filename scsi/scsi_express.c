@@ -96,6 +96,7 @@ static void free_q_request_buffers(struct queue_info *q)
 static int allocate_q_request_buffers(struct queue_info *q,
 	int nbuffers, int buffersize)
 {
+	BUG_ON(nbuffers > 256);
 	q->qdepth = nbuffers;
 	q->request_bits = kzalloc((BITS_TO_LONGS(nbuffers) + 1) *
 					sizeof(unsigned long), GFP_KERNEL);
@@ -690,6 +691,7 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 	u16 request_id;
 	int rc;
 	struct scsi_express_device *h = q->h;
+	u8 sq;
 
 	printk(KERN_WARNING "Got admin oq interrupt, q = %p\n", q);
 	printk(KERN_WARNING "Got admin oq interrupt, q = %p (%d)\n", q, q->pqiq->queue_id);
@@ -708,9 +710,11 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(&h->admin_q_from_dev);
 			request_id = pqi_peek_request_id_from_device(&h->admin_q_from_dev);
+			sq = request_id >> 8; /* queue that request was submitted on */
 			dev_warn(&h->pdev->dev, "new completion, iu type: %hhu, id = %hu\n",
 					iu_type, request_id);
-			r = h->admin_q_from_dev.request = &q->request[request_id];
+			r = h->admin_q_from_dev.request = &h->qinfo[sq].request[request_id & 0x00ff];
+			dev_warn(&h->pdev->dev, "intr: r = %p\n", r);
 			r->response_accumulated = 0;
 		}
 		rc = pqi_dequeue_from_device(&h->admin_q_from_dev,
@@ -725,6 +729,7 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 		if (scsi_express_response_accumulated(r)) {
 			dev_warn(&h->pdev->dev, "accumlated response\n");
 			h->admin_q_from_dev.request = NULL;
+			wmb();
 			complete(r->waiting);
 		}
 	} while (1);
@@ -808,21 +813,26 @@ static u16 alloc_request(struct scsi_express_device *h, u8 q)
 	u16 rc;
 	unsigned long flags;
 
+	/* I am encoding q number in high bight of request id */
+	BUG_ON(h->qinfo[q].qdepth > 256);
+	BUG_ON(q > 127); /* high bit reserved for error reporting */
+
 	/* FIXME, may be able to get rid of these spin locks */
 	spin_lock_irqsave(&h->qinfo[q].qlock, flags);
         do {
                 rc = (u16) find_first_zero_bit(h->qinfo[q].request_bits,
 						h->qinfo[q].qdepth);
                 if (rc >= h->qinfo[q].qdepth)
-                        return -EBUSY;
+                        return (u16) -EBUSY;
         } while (test_and_set_bit((int) rc, h->qinfo[q].request_bits));
 	spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
-	return (u16) rc;
+	return rc | (q << 8);
 }
 
 static void free_request(struct scsi_express_device *h, u8 q, u16 request_id)
 {
-	clear_bit(request_id, h->qinfo[q].request_bits);
+	BUG_ON((request_id >> 8) != q);
+	clear_bit(request_id & 0x00ff, h->qinfo[q].request_bits);
 }
 
 static void fill_create_io_queue_request(struct scsi_express_device *h,
@@ -863,7 +873,8 @@ static void send_admin_command(struct scsi_express_device *h, u16 request_id)
 	struct pqi_device_queue *aq = &h->admin_q_to_dev;
 	DECLARE_COMPLETION_ONSTACK(wait);
 
-	request = &h->qinfo[aq->queue_id].request[request_id];
+	request = &h->qinfo[aq->queue_id].request[request_id & 0x00ff];
+	dev_warn(&h->pdev->dev, "Sending request %p\n", request);
 	request->waiting = &wait;
 	request->response_accumulated = 0;
 	dev_warn(&h->pdev->dev, "sending request %hu\n", request_id);
@@ -913,6 +924,7 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 
 	for (i = 0; i < h->noqs - 1; i++) {
 		struct pqi_device_queue *q;
+		volatile struct pqi_create_operational_queue_response *resp;
 
 		dev_warn(&h->pdev->dev,
 			"Setting up io queue %d Qid = %d from device\n", i,
@@ -925,17 +937,27 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 		dev_warn(&h->pdev->dev, "xxx2 i = %d, r = %p, q = %d\n",
 				i, r, h->io_q_from_dev[i].queue_id);
 		request_id = alloc_request(h, aq->queue_id);
-		dev_warn(&h->pdev->dev, "Allocated request %hu\n", request_id);
+		dev_warn(&h->pdev->dev, "Allocated request %hu, %p\n", request_id,
+				&h->qinfo[aq->queue_id].request[request_id & 0x00ff]);
 		if (request_id < 0) { /* FIXME: now what? */
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
 		}
 		fill_create_io_queue_request(h, r, q, 0, request_id, q->queue_id - 1);
 		send_admin_command(h, request_id);
+		resp = (volatile struct pqi_create_operational_queue_response *)
+			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
+		dev_warn(&h->pdev->dev, "resp.status = %hhu, resp.index_offset = %llu\n",
+			resp->status, le64_to_cpu(resp->index_offset));
+		if (resp->status != 0)
+			dev_warn(&h->pdev->dev, "Failed to set up OQ... now what?\n");
+		h->io_q_from_dev[i].pi = h->io_q_from_dev[i].queue_vaddr +
+						le64_to_cpu(resp->index_offset);
 		free_request(h, aq->queue_id, request_id);
 	}
 
 	for (i = 0; i < h->niqs - 1; i++) {
 		struct pqi_device_queue *q;
+		volatile struct pqi_create_operational_queue_response *resp;
 		
 		dev_warn(&h->pdev->dev,
 			"Setting up io queue %d Qid = %d to device\n", i,
@@ -950,8 +972,18 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 		if (request_id < 0) { /* FIXME: now what? */
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted 2\n");
 		}
+		dev_warn(&h->pdev->dev, "Allocated request %hu, %p\n", request_id,
+				&h->qinfo[aq->queue_id].request[request_id & 0x00ff]);
 		fill_create_io_queue_request(h, r, q, 1, request_id, (u16) -1);
 		send_admin_command(h, request_id);
+		resp = (volatile struct pqi_create_operational_queue_response *)
+			h->qinfo[aq->queue_id].request[request_id & 0x00ff].response;	
+		dev_warn(&h->pdev->dev, "resp.status = %hhu, resp.index_offset = %llu\n",
+			resp->status, le64_to_cpu(resp->index_offset));
+		if (resp->status != 0)
+			dev_warn(&h->pdev->dev, "Failed to set up IQ... now what?\n");
+		h->io_q_to_dev[i].ci = h->io_q_to_dev[i].queue_vaddr +
+						le64_to_cpu(resp->index_offset);
 		free_request(h, aq->queue_id, request_id);
 	}
 
