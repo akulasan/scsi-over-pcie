@@ -28,6 +28,7 @@
 #include <linux/sched.h>
 /* #include <asm/byteorder.h> */
 #include <linux/version.h>
+#include <linux/completion.h>
 
 #include "scsi_express_kernel_compat.h"
 #include "scsi_express.h"
@@ -110,22 +111,19 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 		num_queues,
 		queue_direction == PQI_DIR_TO_DEVICE ? "TO" : "FROM");
 
+	err = -ENOMEM;
 	*xq = kzalloc(sizeof(**xq) * num_queues, GFP_KERNEL);
-	if (!*xq) {
-		err = -ENOMEM;
+	if (!*xq)
 		goto bailout;
-	}
 	vaddr = pci_alloc_consistent(h->pdev, total_size * num_queues, &dhandle);
-	if (!vaddr) {
-		err = -ENOMEM;
+	if (!vaddr)
 		goto bailout;
-	}
 
 	for (i = 0; i < num_queues; i++) {
 		int q = i + starting_queue_id;
 		h->qdepth[q] = n_q_elements;
 		h->request_bits[q] =
-			kzalloc(BITS_TO_LONGS(n_q_elements) *
+			kzalloc((BITS_TO_LONGS(n_q_elements) + 1) *
 					sizeof(unsigned long), GFP_KERNEL);
 		if (!h->request_bits[q])
 			goto bailout;
@@ -136,6 +134,7 @@ static int pqi_device_queue_array_alloc(struct scsi_express_device *h,
 	}
 
 	dev_warn(&h->pdev->dev, "Memory alloc'ed.\n");
+	err = 0;
 
 	for (i = 0; i < num_queues; i++) {
 		(*xq)[i].queue_vaddr = vaddr;
@@ -204,7 +203,7 @@ static int pqi_from_device_queue_is_empty(struct pqi_device_queue *q)
 	u16 qpi;
 
 	/* FIXME: shouldn't have to read this every time. */
-	qpi = readw(q->pi);
+	qpi = le32_to_cpu(readw(q->pi));
 	return qpi == q->unposted_index;
 }
 
@@ -262,6 +261,21 @@ static int pqi_dequeue_from_device(struct pqi_device_queue *q, void *element)
 	return 0;
 }
 
+static u8 pqi_peek_ui_type_from_device(struct pqi_device_queue *q)
+{
+	u8 *p;
+
+	p = q->queue_vaddr + q->unposted_index * q->element_size;
+	return *p;
+}
+static u16 pqi_peek_request_id_from_device(struct pqi_device_queue *q)
+{
+	u8 *p;
+
+	p = q->queue_vaddr + q->unposted_index * q->element_size + 8;
+	return *(u16 *) p;
+}
+
 static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 {
 	/*
@@ -315,10 +329,6 @@ static int __devinit scsi_express_create_admin_queues(struct scsi_express_device
 	int rc, count;
 	unsigned char *x = (unsigned char *) &paf;
 	dma_addr_t admin_q_dhandle;
-        DECLARE_COMPLETION_ONSTACK(wait);
-
-        /* c->waiting = &wait;
-        wait_for_completion(&wait); */
 
 	/* Check that device is ready to be set up */
 	for (count = 0; count < 10; count++) {
@@ -579,12 +589,6 @@ static int scsi_express_setup_msix(struct scsi_express_device *h)
 	struct msix_entry msix_entry[MAX_TOTAL_QUEUES];
 
 	h->nr_queues = num_online_cpus();
-
-	/* need at least four, 2 admin queues and 2 io queues */
-	/* FIXME, maybe we can use only one for both admin queues */
-	if (h->nr_queues < 4)
-		h->nr_queues = 4;
-
 	if (h->nr_queues > MAX_TOTAL_QUEUES)
 		h->nr_queues = MAX_TOTAL_QUEUES;
 
@@ -593,17 +597,20 @@ static int scsi_express_setup_msix(struct scsi_express_device *h)
 		msix_entry[i].entry = i;
 	}
 
+	/* this needs work */
+	h->noqs = h->nr_queues - 2;
+	if (h->noqs < 1)
+		h->noqs = 1;
+	h->niqs = 2;
+
 	if (!pci_find_capability(h->pdev, PCI_CAP_ID_MSIX))
 		goto default_int_mode;
-	err = pci_enable_msix(h->pdev, msix_entry, h->nr_queues);
+	err = pci_enable_msix(h->pdev, msix_entry, h->noqs);
 	if (err > 0)
-		h->nr_queues = err;
-
-	if (h->nr_queues < 4)
-		goto bail_out;
+		h->noqs = err;
 
 	if (err >= 0) {
-		for (i = 0; i < h->nr_queues; i++) {
+		for (i = 0; i < h->noqs; i++) {
 			h->intr[i] = msix_entry[i].vector;
 			dev_warn(&h->pdev->dev, "msix_entry[%d] = %d\n",
 				i, msix_entry[i].vector);
@@ -617,11 +624,6 @@ static int scsi_express_setup_msix(struct scsi_express_device *h)
 	else
 		dev_warn(&h->pdev->dev, "MSI-X init failed %d\n", err);
 default_int_mode:
-	return -1;
-
-bail_out:
-	dev_warn(&h->pdev->dev,
-			"Need 4 MSI-X vectors, only got %d, need 4\n", err);
 	return -1;
 }
 
@@ -645,12 +647,52 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 	return IRQ_HANDLED;
 }
 
+/* function to determine whether a complete response has been accumulated */
+static int scsi_express_response_accumulated(struct scsi_express_request *r)
+{
+	u16 iu_length;
+
+	if (r->response_accumulated == 0)
+		return 0;
+	iu_length = le16_to_cpu(*(u16 *) &r->response[2]);
+	return (r->response_accumulated == iu_length);
+}
+
 irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 {
-	u8 *q = devid;
+	u8 iu_type, *q = devid;
+	u16 request_id;
+	int rc;
 	struct scsi_express_device __attribute__((unused)) *h = queue_to_hba(q);
 
-	printk(KERN_WARNING "Got interrupt, q = %hhu\n", *q);
+	printk(KERN_WARNING "Got admin oq interrupt, q = %hhu\n", *q);
+
+	do {
+		struct scsi_express_request *r = h->admin_q_from_dev.request;
+		if (r == NULL) {
+			/* Receiving completion of a new request */ 
+			iu_type = pqi_peek_ui_type_from_device(&h->admin_q_from_dev);
+			request_id = pqi_peek_request_id_from_device(&h->admin_q_from_dev);
+			dev_warn(&h->pdev->dev, "new completion, q=%hhu, iu type: %hhu, id = %hu\n",
+					*q, iu_type, request_id);
+			r = h->admin_q_from_dev.request = &h->request[*q][request_id];
+			r->response_accumulated = 0;
+		}
+		rc = pqi_dequeue_from_device(&h->admin_q_from_dev,
+			&r->response[r->response_accumulated]); 
+		dev_warn(&h->pdev->dev, "dequeued from q %d\n", *q);
+		if (rc) { /* queue is empty */
+			dev_warn(&h->pdev->dev, "admin OQ %d is empty\n", *q);
+			return IRQ_HANDLED;
+		}
+		r->response_accumulated += h->admin_q_from_dev.element_size;
+		if (scsi_express_response_accumulated(r)) {
+			dev_warn(&h->pdev->dev, "accumlated response\n");
+			h->admin_q_from_dev.request = NULL;
+			complete(r->waiting);
+		}
+	} while (1);
+
 	return IRQ_HANDLED;
 }
 
@@ -678,7 +720,7 @@ static int scsi_express_request_irqs(struct scsi_express_device *h,
 	rc = request_irq(h->intr[0], msix_adminq_handler, 0,
 					h->devname, &h->q[0]);
 
-	for (i = 1; i < h->nr_queues; i++) {
+	for (i = 1; i < h->noqs; i++) {
 		rc = request_irq(h->intr[i], msix_ioq_handler, 0,
 					h->devname, &h->q[i]);
 		if (rc != 0) {
@@ -732,9 +774,14 @@ static u16 alloc_request(struct scsi_express_device *h, u8 q)
 	return (u16) rc;
 }
 
+static void free_request(struct scsi_express_device *h, u8 q, u16 request_id)
+{
+	clear_bit(request_id, h->request_bits[q]);
+}
+
 static void fill_create_io_queue_request(struct scsi_express_device *h,
 	struct pqi_create_operational_queue_request *r,
-	struct pqi_device_queue *q, int to_device)
+	struct pqi_device_queue *q, int to_device, u16 request_id)
 {
 	u8 function_code = to_device ? 0x10 : 0x11; /* FIXME magic */
 
@@ -742,7 +789,8 @@ static void fill_create_io_queue_request(struct scsi_express_device *h,
 	r->iu_type = 0x60; /* FIXME, magic */
 	r->iu_length = cpu_to_le16(0x003c);
 	r->response_oq = 0;
-	r->request_id = cpu_to_le16(alloc_request(h, q->queue_id));
+	/* r->request_id = cpu_to_le16(alloc_request(h, q->queue_id)); */
+	r->request_id = cpu_to_le16(request_id);
 	r->function_code = function_code;
 	r->queue_id = cpu_to_le16(q->queue_id);
 	r->element_array_addr = cpu_to_le64(q->dhandle);
@@ -767,28 +815,34 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 
 	int i, niqs, noqs;
 	struct pqi_create_operational_queue_request *r;
+	u16 request_id;
 
 	dev_warn(&h->pdev->dev,
 		"sizeof struct pqi_create_operational_queue_request is %lu\n",
 		(unsigned long) sizeof(struct pqi_create_operational_queue_request));
 
-	niqs = pqi_device_queue_array_alloc(h, &h->io_q_to_dev,
-			MAX_TO_DEVICE_QUEUES, IQ_NELEMENTS, IQ_IU_SIZE / 16,
+	niqs = noqs = (h->nr_queues - 2) / 2;
+	if (niqs > MAX_TO_DEVICE_QUEUES)
+		niqs = MAX_TO_DEVICE_QUEUES;
+	h->niqs = pqi_device_queue_array_alloc(h, &h->io_q_to_dev,
+			niqs, IQ_NELEMENTS, IQ_IU_SIZE / 16,
 			PQI_DIR_TO_DEVICE, 2);
-	if (niqs < 0)
+	if (h->niqs < 0)
 		goto bail_out;
-	noqs = pqi_device_queue_array_alloc(h, &h->io_q_from_dev,
-			MAX_FROM_DEVICE_QUEUES, OQ_NELEMENTS, OQ_IU_SIZE / 16,
+	h->noqs = pqi_device_queue_array_alloc(h, &h->io_q_from_dev,
+			noqs, OQ_NELEMENTS, OQ_IU_SIZE / 16,
 			PQI_DIR_FROM_DEVICE, 2 + niqs);
-	if (noqs < 0)
+	if (h->noqs < 0)
 		goto bail_out;
 
 	dev_warn(&h->pdev->dev,
 		"Setting up %d submission queues and %d reply queues\n",
-			niqs, noqs);
+			h->niqs, h->noqs);
 
-	for (i = 0; i < noqs; i++) {
+	for (i = 0; i < h->noqs; i++) {
 		struct pqi_device_queue *q;
+		struct scsi_express_request *request;
+		DECLARE_COMPLETION_ONSTACK(wait);
 
 		dev_warn(&h->pdev->dev,
 			"Setting up io queue %d Qid = %d from device\n", i,
@@ -798,12 +852,24 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 		r = pqi_alloc_elements(&h->admin_q_to_dev, 1);
 		dev_warn(&h->pdev->dev, "xxx2 i = %d, r = %p, q = %p\n",
 				i, r, q);
-		fill_create_io_queue_request(h, r, q, 0);
+		request_id = alloc_request(h, q->queue_id);
+		dev_warn(&h->pdev->dev, "Allocated request %hu\n", request_id);
+		if (request_id < 0) { /* FIXME: now what? */
+			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
+		}
+		fill_create_io_queue_request(h, r, q, 0, request_id);
+		request = &h->request[q->queue_id][request_id];
+		request->waiting = &wait;
+		request->response_accumulated = 0;
+		dev_warn(&h->pdev->dev, "sending request %hu\n", request_id);
 		pqi_notify_device_queue_written(&h->admin_q_to_dev);
+		wait_for_completion(&wait);
 	}
 
-	for (i = 0; i < niqs; i++) {
+	for (i = 0; i < h->niqs; i++) {
 		struct pqi_device_queue *q;
+		struct scsi_express_request *request;
+		DECLARE_COMPLETION_ONSTACK(wait);
 
 		dev_warn(&h->pdev->dev,
 			"Setting up io queue %d Qid = %d to device\n", i,
@@ -813,8 +879,16 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 		q = &h->io_q_to_dev[i];
 		dev_warn(&h->pdev->dev, "xxx1 i = %d, r = %p, q = %p\n",
 				i, r, q);
-		fill_create_io_queue_request(h, r, q, 1);
+		request_id = alloc_request(h, q->queue_id);
+		if (request_id < 0) { /* FIXME: now what? */
+			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted 2\n");
+		}
+		fill_create_io_queue_request(h, r, q, 1, request_id);
+		request = &h->request[q->queue_id][request_id];
+		request->waiting = &wait;
+		request->response_accumulated = 0;
 		pqi_notify_device_queue_written(&h->admin_q_to_dev);
+		wait_for_completion(&wait);
 	}
 
 	return 0;
@@ -937,6 +1011,7 @@ static void __devexit scsi_express_remove(struct pci_dev *pdev)
 	h = pci_get_drvdata(pdev);
 	dev_warn(&pdev->dev, "remove called.\n");
 	scsi_express_free_irqs_and_disable_msix(h);
+	dev_warn(&pdev->dev, "irqs freed, msix disabled\n");
 	if (h && h->pqireg)
 		iounmap(h->pqireg);
 	scsi_express_delete_admin_queues(h);

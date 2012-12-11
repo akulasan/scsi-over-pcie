@@ -1,6 +1,8 @@
 #ifndef _SCSI_EXPRESS_H
 #define _SCSI_EXPRESS_H
 
+struct scsi_express_request;
+
 struct pqi_device_queue {
 	__iomem void *queue_vaddr;
 	__iomem u16 *pi;		/* producer index */
@@ -15,6 +17,7 @@ struct pqi_device_queue {
 	u8 direction;
 #define PQI_DIR_TO_DEVICE 0
 #define PQI_DIR_FROM_DEVICE 1
+	struct scsi_express_request *request; /* used by oq only */
 };
 
 #define PQI_QUEUE_FULL (-1)
@@ -129,8 +132,6 @@ struct pqi_capability {
 #define IQ_NELEMENTS 64
 #define OQ_NELEMENTS 64
 
-struct scsi_express_request;
-
 struct scsi_express_device {
 	struct pci_dev *pdev;
 	struct pqi_capability pqicap;
@@ -167,9 +168,12 @@ struct scsi_express_device {
 
 #pragma pack()
 
+#define MAX_RESPONSE_SIZE 64
 struct scsi_express_request {
 	u8 q;
 	struct completion *waiting;
+	u16 response_accumulated;
+	u8 response[MAX_RESPONSE_SIZE];
 };
 
 #endif
