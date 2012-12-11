@@ -60,11 +60,11 @@ MODULE_DEVICE_TABLE(pci, scsi_express_id_table);
 
 static int controller_num;
 
-static int scsi_express_queuecommand(struct Scsi_Host *h, struct scsi_cmnd *cmd);
+static int scsi_express_queuecommand(struct Scsi_Host *h, struct scsi_cmnd *sc);
 static int scsi_express_change_queue_depth(struct scsi_device *sdev,
         int qdepth, int reason);
 static int scsi_express_abort_handler(struct scsi_cmnd *sc);
-static int scsi_express_device_reset_handler(struct scsi_cmnd *scsicmd);
+static int scsi_express_device_reset_handler(struct scsi_cmnd *sc);
 static int scsi_express_slave_alloc(struct scsi_device *sdev);
 static void scsi_express_slave_destroy(struct scsi_device *sdev);
 static int scsi_express_compat_ioctl(struct scsi_device *dev, int cmd, void *arg);
@@ -1294,46 +1294,92 @@ static void __exit scsi_express_exit(void)
 	pci_unregister_driver(&scsi_express_pci_driver);
 }
 
-static int scsi_express_queuecommand_lck(struct scsi_cmnd *cmd,
+static inline struct scsi_express_device *sdev_to_hba(struct scsi_device *sdev)
+{
+	unsigned long *priv = shost_priv(sdev->host);
+	return (struct scsi_express_device *) *priv;
+}
+
+static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
         void (*done)(struct scsi_cmnd *))
 {
+	struct scsi_express_device *h;
+	struct scsi_device *sdev = sc->device;
+
+	h = sdev_to_hba(sc->device);
+
+	dev_warn(&h->pdev->dev, "scsi_express_queuecommand called\n");
+
+	dev_warn(&h->pdev->dev, "h%db%dt%dl%d: "
+		"CDB = 0x%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+		sdev->host->host_no, sdev_channel(sc->device), sdev_id(sc->device), sdev->lun,
+		sc->cmnd[0], sc->cmnd[1], sc->cmnd[2], sc->cmnd[3],
+		sc->cmnd[4], sc->cmnd[5], sc->cmnd[6], sc->cmnd[7],
+		sc->cmnd[8], sc->cmnd[9], sc->cmnd[10], sc->cmnd[11],
+		sc->cmnd[12], sc->cmnd[13], sc->cmnd[14], sc->cmnd[15]);
+
 	return 0;
 }
+
 static DEF_SCSI_QCMD(scsi_express_queuecommand);
 
 static int scsi_express_change_queue_depth(struct scsi_device *sdev,
         int qdepth, int reason)
 {
+	struct scsi_express_device *h = sdev_to_hba(sdev);
+
+	dev_warn(&h->pdev->dev, "scsi_express_change_queue_depth called but not implemented\n");
 	return 0;
 }
 
 static int scsi_express_abort_handler(struct scsi_cmnd *sc)
 {
+	struct scsi_express_device *h;
+
+	h = sdev_to_hba(sc->device);
+	dev_warn(&h->pdev->dev, "scsi_express_abort_handler called but not implemented\n");
 	return 0;
 }
 
-static int scsi_express_device_reset_handler(struct scsi_cmnd *scsicmd)
+static int scsi_express_device_reset_handler(struct scsi_cmnd *sc)
 {
+	struct scsi_express_device *h;
+
+	h = sdev_to_hba(sc->device);
+	dev_warn(&h->pdev->dev, "scsi_express_device_reset_handler called but not implemented\n");
 	return 0;
 }
 
 static int scsi_express_slave_alloc(struct scsi_device *sdev)
 {
+	struct scsi_express_device *h = sdev_to_hba(sdev);
+
+	dev_warn(&h->pdev->dev, "scsi_express_slave_alloc called but not implemented\n");
 	return 0;
 }
 
 static void scsi_express_slave_destroy(struct scsi_device *sdev)
 {
+	struct scsi_express_device *h = sdev_to_hba(sdev);
+
+	dev_warn(&h->pdev->dev, "scsi_express_slave_destroy called but not implemented\n");
 	return;
 }
 
-static int scsi_express_compat_ioctl(struct scsi_device *dev, int cmd, void *arg)
+static int scsi_express_compat_ioctl(struct scsi_device *sdev,
+						int cmd, void *arg)
 {
+	struct scsi_express_device *h = sdev_to_hba(sdev);
+
+	dev_warn(&h->pdev->dev, "scsi_express_compat_ioctl called but not implemented\n");
 	return 0;
 }
 
-static int scsi_express_ioctl(struct scsi_device *dev, int cmd, void *arg)
+static int scsi_express_ioctl(struct scsi_device *sdev, int cmd, void *arg)
 {
+	struct scsi_express_device *h = sdev_to_hba(sdev);
+
+	dev_warn(&h->pdev->dev, "scsi_express_ioctl called but not implemented\n");
 	return 0;
 }
 
