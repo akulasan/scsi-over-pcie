@@ -579,7 +579,16 @@ static struct scsi_express_device *queue_to_hba(u8 *queue)
 				struct scsi_express_device, q[0]);
 }
 
-irqreturn_t scsi_express_msix_handler(int irq, void *devid)
+irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
+{
+	u8 *q = devid;
+	struct scsi_express_device __attribute__((unused)) *h = queue_to_hba(q);
+
+	printk(KERN_WARNING "Got interrupt, q = %hhu\n", *q);
+	return IRQ_HANDLED;
+}
+
+irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 {
 	u8 *q = devid;
 	struct scsi_express_device __attribute__((unused)) *h = queue_to_hba(q);
@@ -589,15 +598,20 @@ irqreturn_t scsi_express_msix_handler(int irq, void *devid)
 }
 
 static int scsi_express_request_irqs(struct scsi_express_device *h,
-					irq_handler_t msix_handler)
+					irq_handler_t msix_ioq_handler,
+					irq_handler_t msix_adminq_handler)
 {
 	u8 i;
 	int rc;
 
 	for (i = 0; i < TOTAL_QUEUES; i++)
 		h->q[i] = i;
-	for (i = 0; i < TOTAL_QUEUES; i++) {
-		rc = request_irq(h->intr[i], msix_handler, 0,
+
+	rc = request_irq(h->intr[0], msix_adminq_handler, 0,
+					h->devname, &h->q[0]);
+
+	for (i = 1; i < TOTAL_QUEUES; i++) {
+		rc = request_irq(h->intr[i], msix_ioq_handler, 0,
 					h->devname, &h->q[i]);
 		if (rc != 0) {
 			dev_warn(&h->pdev->dev,
@@ -810,7 +824,8 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 	if (rc != 0)
 		goto bail;
 
-	rc = scsi_express_request_irqs(h, scsi_express_msix_handler);
+	rc = scsi_express_request_irqs(h, scsi_express_adminq_msix_handler,
+					scsi_express_ioq_msix_handler);
 	if (rc != 0)
 		goto bail;
 
