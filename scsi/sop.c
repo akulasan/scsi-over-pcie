@@ -562,8 +562,10 @@ static void pqi_notify_device_queue_written(struct sop_device *h, struct pqi_dev
 	atomic_inc(&h->curr_outstanding_commands);
 	spin_lock_irqsave(&h->stat_lock, flags);
 	curr = atomic_read(&h->curr_outstanding_commands);
-	if (curr > h->max_outstanding_commands)
+	if (curr > h->max_outstanding_commands) {
+		dev_warn(&h->pdev->dev, "boosted max commands to %d\n", curr);
 		h->max_outstanding_commands = curr;
+	}
 	spin_unlock_irqrestore(&h->stat_lock, flags);
 }
 
