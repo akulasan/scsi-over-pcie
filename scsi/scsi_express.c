@@ -1478,7 +1478,8 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 		r->flags = SOP_DATA_DIR_RESERVED;
 		break;
 	}
-
+	memset(r->cdb, 0, 16);
+	memcpy(r->cdb, sc->cmnd, sc->cmd_len);
 	dev_warn(&h->pdev->dev, "queuecommand D\n");
 	if (scsi_express_scatter_gather(h, r, sc)) {
 		/* FIXME:  What to do here?  We already allocated a
