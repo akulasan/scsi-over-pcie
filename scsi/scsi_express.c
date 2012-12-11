@@ -478,10 +478,9 @@ static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 	/*
 	 * Notify the device that the host has produced data for the device
 	 */
-	printk(KERN_WARNING "pqi_notify_device_queue_written, q = %p\n", q);
 	printk(KERN_WARNING "pqi_notify_device_queue_written, q->unposted index = %hu, q->pi = %p\n",
 				q->unposted_index, q->pi);
-	print_unsubmitted_commands(q);
+	/* print_unsubmitted_commands(q); */
 	spin_lock_irqsave(&q->index_lock, flags);
 	q->local_pi = q->unposted_index;
 	writew(q->unposted_index, q->pi);
@@ -834,7 +833,7 @@ static void complete_scsi_cmd(struct scsi_express_device *h,
 
 	free_request(h, r->request_id >> 8, r->request_id);
 
-	dev_warn(&h->pdev->dev, "Response UI type is 0x%02x\n", r->response[0]);
+	dev_warn(&h->pdev->dev, "Response IU type is 0x%02x\n", r->response[0]);
 	switch (r->response[0]) {
 	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
                 scmd->scsi_done(scmd);
@@ -842,6 +841,9 @@ static void complete_scsi_cmd(struct scsi_express_device *h,
 	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
+		break;
+	default:
+		dev_warn(&h->pdev->dev, "got UNKNOWN response type...\n");
 		break;
 	}
 }
@@ -862,7 +864,7 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 		struct scsi_express_request *r = q->pqiq->request;
 
 		if (pqi_from_device_queue_is_empty(q->pqiq)) {
-			dev_warn(&h->pdev->dev, "interrupt, but ioq %d is empty\n",
+			dev_warn(&h->pdev->dev, "interrupt, ioq %d is empty\n",
 					q->pqiq->queue_id);
 			break;
 		}
@@ -898,6 +900,7 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 				complete_scsi_cmd(h, r);
 			} else {
 				if (likely(r->waiting)) {
+					dev_warn(&h->pdev->dev, "Unexpected, waiting != NULL\n");
 					complete(r->waiting);
 				} else {
 					dev_warn(&h->pdev->dev, "r->scmd and r->waiting both null\n");
@@ -1602,21 +1605,8 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	struct scsi_express_request *ser;
 	u16 request_id;
 
-	printk(KERN_WARNING "top of queuecommand\n");
 	h = sdev_to_hba(sc->device);
-	printk(KERN_WARNING "queuecommand, h = %p\n", h);
 
-	dev_warn(&h->pdev->dev, "scsi_express_queuecommand called\n");
-
-	dev_warn(&h->pdev->dev, "h%db%dt%dl%d: "
-		"CDB = 0x%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-		sdev->host->host_no, sdev_channel(sc->device), sdev_id(sc->device), sdev->lun,
-		sc->cmnd[0], sc->cmnd[1], sc->cmnd[2], sc->cmnd[3],
-		sc->cmnd[4], sc->cmnd[5], sc->cmnd[6], sc->cmnd[7],
-		sc->cmnd[8], sc->cmnd[9], sc->cmnd[10], sc->cmnd[11],
-		sc->cmnd[12], sc->cmnd[13], sc->cmnd[14], sc->cmnd[15]);
-	dev_warn(&h->pdev->dev, "device = bus %d, target %d, lun %d\n",
-		sc->device->channel, sc->device->id, sc->device->lun);
 
 	/* reject io to devices other than b0t0l0 */
 	if (sc->device->channel != 0 || sc->device->id != 0 || 
@@ -1626,20 +1616,26 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
                 return 0;
 	}
 
+	dev_warn(&h->pdev->dev, "h%db%dt%dl%d: "
+		"CDB = 0x%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+		sdev->host->host_no, sdev_channel(sc->device), sdev_id(sc->device), sdev->lun,
+		sc->cmnd[0], sc->cmnd[1], sc->cmnd[2], sc->cmnd[3],
+		sc->cmnd[4], sc->cmnd[5], sc->cmnd[6], sc->cmnd[7],
+		sc->cmnd[8], sc->cmnd[9], sc->cmnd[10], sc->cmnd[11],
+		sc->cmnd[12], sc->cmnd[13], sc->cmnd[14], sc->cmnd[15]);
+
 	q = find_submission_queue(h);
 	if (!q)
 		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
 	if (!q->pqiq)
 		dev_warn(&h->pdev->dev, "queuecommand: q->pqiq is null!\n");
-	dev_warn(&h->pdev->dev, "Calling pqi_alloc_elements(%p, %d)\n", q->pqiq, 1);
+	/* dev_warn(&h->pdev->dev, "Calling pqi_alloc_elements(%p, %d)\n", q->pqiq, 1); */
 	r = pqi_alloc_elements(q->pqiq, 1);
-	dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %p\n", r);
+	/* dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %p\n", r); */
 	if (IS_ERR(r)) {
 		dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %ld\n", PTR_ERR(r));
 	}
-	dev_warn(&h->pdev->dev, "queuecommand A\n");
 	request_id = alloc_request(h, q->pqiq->queue_id);
-	dev_warn(&h->pdev->dev, "queuecommand B\n");
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
 	r->compatible_features = 0;
@@ -1653,7 +1649,6 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	ser->scmd = sc;
 	ser->waiting = NULL;
 
-	dev_warn(&h->pdev->dev, "queuecommand C\n");
 	switch (sc->sc_data_direction) {
 	case DMA_TO_DEVICE:
 		r->flags = SOP_DATA_DIR_TO_DEVICE;
@@ -1670,7 +1665,6 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	}
 	memset(r->cdb, 0, 16);
 	memcpy(r->cdb, sc->cmnd, sc->cmd_len);
-	dev_warn(&h->pdev->dev, "queuecommand D\n");
 	if (scsi_express_scatter_gather(h, r, sc)) {
 		/* FIXME:  What to do here?  We already allocated a
 		 * slot in the submission ring buffer.  Either make
@@ -1680,9 +1674,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 				"Need to implement handling of scsi_dma_map failure.\n");
 		return SCSI_MLQUEUE_HOST_BUSY;
 	}
-	dev_warn(&h->pdev->dev, "queuecommand E\n");
 	pqi_notify_device_queue_written(q->pqiq);
-	dev_warn(&h->pdev->dev, "queuecommand F\n");
 	return 0;
 }
 
