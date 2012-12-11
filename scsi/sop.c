@@ -78,7 +78,7 @@ static ssize_t host_show_sopstats(struct device *dev,
 
         h = shost_to_hba(shost);
 	curr = atomic_read(&h->curr_outstanding_commands);
-        return snprintf(buf, 20, "max out: %d curr out: %d\n", h->max_outstanding_commands, curr);
+        return snprintf(buf, 40, "max out: %d curr out: %d\n", h->max_outstanding_commands, curr);
 }
 
 static DEVICE_ATTR(sopstats, S_IRUGO, host_show_sopstats, NULL);
@@ -1292,22 +1292,18 @@ static void sop_free_irqs_and_disable_msix(
 static int alloc_request(struct sop_device *h, u8 q)
 {
 	int rc;
-	unsigned long flags;
 
 	BUG_ON(h->qinfo[q].qdepth > h->elements_per_io_queue);
 	BUG_ON(q > 127); /* high bit reserved for error reporting */
 
-	spin_lock_irqsave(&h->qinfo[q].qlock, flags);
         do {
                 rc = (u16) find_first_zero_bit(h->qinfo[q].request_bits,
 						h->qinfo[q].qdepth);
                 if (rc >= h->qinfo[q].qdepth - 1) {
-			spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
 			dev_warn(&h->pdev->dev, "alloc_request failed.\n");
 			return -EBUSY;
 		}
         } while (test_and_set_bit((int) rc, h->qinfo[q].request_bits));
-	spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
 	return rc | (((int) q) << h->qid_shift);
 }
 
@@ -2130,6 +2126,7 @@ static int sop_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *sc)
 
 	cpu = get_cpu();
 	submitq = find_submission_queue(h, cpu);
+	spin_lock_irq(&submitq->qlock);
 	replyq = find_reply_queue(h, cpu);
 	if (!submitq)
 		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
@@ -2180,10 +2177,13 @@ static int sop_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *sc)
 		memset(r, 0, 4); /* NULL IU */
 		free_request(h, submitq->pqiq->queue_id, request_id);
 		pqi_notify_device_queue_written(h, submitq->pqiq);
+		spin_unlock_irq(&submitq->qlock);
+		put_cpu();
 		return SCSI_MLQUEUE_HOST_BUSY;
 	}
 	r->xfer_size = cpu_to_le32(sopr->xfer_size);
 	pqi_notify_device_queue_written(h, submitq->pqiq);
+	spin_unlock_irq(&submitq->qlock);
 	put_cpu();
 	return 0;
 }
@@ -2248,11 +2248,14 @@ static int sop_abort_handler(struct scsi_cmnd *sc)
 	dev_warn(&h->pdev->dev, "sop_abort_handler: this code is UNTESTED.\n");
 	cpu = get_cpu();
 	submitq = find_submission_queue(h, cpu);
+	spin_lock_irq(&submitq->qlock);
 	replyq = find_reply_queue(h, cpu);
 	abort_cmd = pqi_alloc_elements(submitq->pqiq, 1);
 	if (IS_ERR(abort_cmd)) {
 		dev_warn(&h->pdev->dev, "%s: pqi_alloc_elements returned %ld\n",
 				__func__, PTR_ERR(abort_cmd));
+		spin_unlock_irq(&submitq->qlock);
+		put_cpu();
 		return FAILED;
 	}
 	request_id = alloc_request(h, submitq->pqiq->queue_id);
@@ -2260,11 +2263,14 @@ static int sop_abort_handler(struct scsi_cmnd *sc)
 		dev_warn(&h->pdev->dev, "%s: Failed to allocate request\n",
 					__func__);
 		/* don't free it, just let it be a NULL IU */
+		spin_unlock_irq(&submitq->qlock);
+		put_cpu();
 		return FAILED;
 	}
 	fill_task_mgmt_request(abort_cmd, replyq, request_id,
 				sopr_to_abort->request_id, SOP_ABORT_TASK);
 	send_sop_command(h, submitq, request_id);
+	spin_unlock_irq(&submitq->qlock);
 	return process_task_mgmt_response(h, submitq, request_id);
 }
 
