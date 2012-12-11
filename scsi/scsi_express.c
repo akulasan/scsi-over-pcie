@@ -317,8 +317,10 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 {
 	void *p;
 
+	printk(KERN_WARNING "pqi_alloc_elements 1\n");
 	if (pqi_to_device_queue_is_full(q, nelements))
 		return ERR_PTR(-ENOMEM);
+	printk(KERN_WARNING "pqi_alloc_elements 2\n");
 
 	/* If the requested number of elements would wrap around the
 	 * end of the ring buffer, insert NULL IUs to the end of the
@@ -327,6 +329,7 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 	 */
 	if (q->nelements - q->unposted_index < nelements) {
 		int extra_elements = q->nelements - q->unposted_index;
+		printk(KERN_WARNING "pqi_alloc_elements 3\n");
 		if (pqi_to_device_queue_is_full(q, nelements + extra_elements))
 			return ERR_PTR(-ENOMEM);
 		p = q->queue_vaddr + q->unposted_index * q->element_size;
@@ -334,8 +337,12 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 						q->element_size);
 		q->unposted_index = 0;
 	}
+	printk(KERN_WARNING "pqi_alloc_elements 4, vaddr = %p, ui=%hu\n",
+			q->queue_vaddr, q->unposted_index);
 	p = q->queue_vaddr + q->unposted_index * q->element_size;
 	q->unposted_index = (q->unposted_index + nelements) % q->nelements;
+	printk(KERN_WARNING "pqi_alloc_elements 5, returning %p, ui = %hu\n",
+					p, q->unposted_index);
 	return p;
 }
 
@@ -390,6 +397,9 @@ static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 	/*
 	 * Notify the device that the host has produced data for the device
 	 */
+	printk(KERN_WARNING "pqi_notify_device_queue_written, q = %p\n", q);
+	printk(KERN_WARNING "pqi_notify_device_queue_written, q->unposted index = %hu, q->pi = %p\n",
+				q->unposted_index, q->pi);
 	writew(q->unposted_index, q->pi);
 }
 
@@ -1017,7 +1027,9 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 			resp->status, le64_to_cpu(resp->index_offset));
 		if (resp->status != 0)
 			dev_warn(&h->pdev->dev, "Failed to set up OQ... now what?\n");
-		h->io_q_from_dev[i].pi = h->io_q_from_dev[i].queue_vaddr +
+		/* h->io_q_from_dev[i].pi = h->io_q_from_dev[i].queue_vaddr +
+						le64_to_cpu(resp->index_offset); */
+		h->io_q_from_dev[i].ci = ((void *) h->pqireg) +
 						le64_to_cpu(resp->index_offset);
 		free_request(h, aq->queue_id, request_id);
 	}
@@ -1049,8 +1061,10 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 			resp->status, le64_to_cpu(resp->index_offset));
 		if (resp->status != 0)
 			dev_warn(&h->pdev->dev, "Failed to set up IQ... now what?\n");
-		h->io_q_to_dev[i].ci = h->io_q_to_dev[i].queue_vaddr +
-						le64_to_cpu(resp->index_offset);
+		/* h->io_q_to_dev[i].ci = h->io_q_to_dev[i].queue_vaddr +
+						le64_to_cpu(resp->index_offset); */
+		h->io_q_to_dev[i].pi = ((void *) h->pqireg) +
+					le64_to_cpu(resp->index_offset);
 		free_request(h, aq->queue_id, request_id);
 	}
 
@@ -1315,10 +1329,10 @@ static struct queue_info *find_submission_queue(struct scsi_express_device *h)
 {
 	/* FIXME: should return iq for this numa node not just the first iq */
 	dev_warn(&h->pdev->dev, "h->noqs = %d, queue to device = %d\n",
-				h->noqs, h->noqs + 2);
-	if (h->noqs + 2 != 8)
+				h->noqs, h->noqs + 1);
+	if (h->noqs + 1 != 8)
 		return &h->qinfo[8];
-	return &h->qinfo[h->noqs + 2];
+	return &h->qinfo[h->noqs + 1];
 }
 
 static int scsi_express_scatter_gather(struct scsi_express_device *h,
@@ -1386,8 +1400,15 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
 	if (!q->pqiq)
 		dev_warn(&h->pdev->dev, "queuecommand: q->pqiq is null!\n");
+	dev_warn(&h->pdev->dev, "Calling pqi_alloc_elements(%p, %d)\n", q->pqiq, 1);
 	r = pqi_alloc_elements(q->pqiq, 1);
+	dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %p\n", r);
+	if (IS_ERR(r)) {
+		dev_warn(&h->pdev->dev, "pqi_alloc_elements returned %ld\n", PTR_ERR(r));
+	}
+	dev_warn(&h->pdev->dev, "queuecommand A\n");
 	request_id = alloc_request(h, q->pqiq->queue_id);
+	dev_warn(&h->pdev->dev, "queuecommand B\n");
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
 	r->compatible_features = 0;
@@ -1396,6 +1417,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 	r->work_area = 0;
 	r->request_id = request_id;
 
+	dev_warn(&h->pdev->dev, "queuecommand C\n");
 	switch (sc->sc_data_direction) {
 	case DMA_TO_DEVICE:
 		r->flags = SOP_DATA_DIR_TO_DEVICE;
@@ -1411,6 +1433,7 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 		break;
 	}
 
+	dev_warn(&h->pdev->dev, "queuecommand D\n");
 	if (scsi_express_scatter_gather(h, r, sc)) {
 		/* FIXME:  What to do here?  We already allocated a
 		 * slot in the submission ring buffer.  Either make
@@ -1420,7 +1443,9 @@ static int scsi_express_queuecommand_lck(struct scsi_cmnd *sc,
 				"Need to implement handling of scsi_dma_map failure.\n");
 		return SCSI_MLQUEUE_HOST_BUSY;
 	}
+	dev_warn(&h->pdev->dev, "queuecommand E\n");
 	pqi_notify_device_queue_written(q->pqiq);
+	dev_warn(&h->pdev->dev, "queuecommand F\n");
 	return 0;
 }
 
