@@ -132,6 +132,17 @@ struct pqi_capability {
 #define IQ_NELEMENTS 64
 #define OQ_NELEMENTS 64
 
+struct scsi_express_device;
+struct queue_info {
+	struct scsi_express_device *h;
+	int irq;
+	int msix_vector;
+	spinlock_t qlock;
+	u16 qdepth;
+	struct scsi_express_request *request;
+	unsigned long *request_bits;
+};
+
 struct scsi_express_device {
 	struct pci_dev *pdev;
 	struct pqi_capability pqicap;
@@ -140,9 +151,6 @@ struct scsi_express_device {
 #define MAX_TO_DEVICE_QUEUES 1
 #define MAX_FROM_DEVICE_QUEUES 6
 #define MAX_TOTAL_QUEUES (MAX_TO_DEVICE_QUEUES + MAX_FROM_DEVICE_QUEUES + 2)
-	u8 q[MAX_TOTAL_QUEUES];
-	int intr[MAX_TOTAL_QUEUES];
-	int msix_vector[MAX_TOTAL_QUEUES];
 	int nr_queues, niqs, noqs; /* total, inbound and outbound queues */
 #define INTR_MODE_MSIX 1
 #define INTR_MODE_MSI  2
@@ -154,10 +162,7 @@ struct scsi_express_device {
 	struct pqi_device_queue *io_q_to_dev;
 	struct pqi_device_queue *io_q_from_dev;
 	u16 current_id;
-	spinlock_t qlock[MAX_TOTAL_QUEUES];
-	u16 qdepth[MAX_TOTAL_QUEUES];
-	struct scsi_express_request *request[MAX_TOTAL_QUEUES];
-	unsigned long *request_bits[MAX_TOTAL_QUEUES];
+	struct queue_info qinfo[MAX_TOTAL_QUEUES];
 };
 
 #define PQI_IQ_ID_FM_INDEX(_i)  (((_i) + 2) * 2)
