@@ -898,10 +898,12 @@ irqreturn_t scsi_express_ioq_msix_handler(int irq, void *devid)
 			WARN_ON((!r->waiting && !r->scmd));
 			if (likely(r->scmd)) {
 				complete_scsi_cmd(h, r);
+				r = NULL;
 			} else {
 				if (likely(r->waiting)) {
 					dev_warn(&h->pdev->dev, "Unexpected, waiting != NULL\n");
 					complete(r->waiting);
+					r = NULL;
 				} else {
 					dev_warn(&h->pdev->dev, "r->scmd and r->waiting both null\n");
 				}
