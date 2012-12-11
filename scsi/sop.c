@@ -2100,8 +2100,7 @@ static int sop_scatter_gather(struct sop_device *h,
 	return 0;
 }
 
-static int sop_queuecommand_lck(struct scsi_cmnd *sc,
-        void (*done)(struct scsi_cmnd *))
+static int sop_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *sc)
 {
 	struct sop_device *h;
 	/* struct scsi_device *sdev = sc->device; */
@@ -2117,7 +2116,7 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	if (sc->device->channel != 0 || sc->device->id != 0 || 
 		sc->device->lun != 0) {
                 sc->result = DID_NO_CONNECT << 16;
-                done(sc);
+                sc->scsi_done(sc);
                 return 0;
 	}
 
@@ -2180,8 +2179,6 @@ static int sop_queuecommand_lck(struct scsi_cmnd *sc,
 	put_cpu();
 	return 0;
 }
-
-static DEF_SCSI_QCMD(sop_queuecommand);
 
 static int sop_change_queue_depth(struct scsi_device *sdev,
         int qdepth, int reason)
