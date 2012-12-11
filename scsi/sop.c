@@ -1310,7 +1310,7 @@ static void send_sop_command(struct sop_device *h, struct queue_info *submitq,
 	wait_for_completion(&wait);
 }
 
-static void fill_get_pqi_device_capabilities(struct sop_device *h,
+static int fill_get_pqi_device_capabilities(struct sop_device *h,
 			struct report_pqi_device_capability_iu *r,
 			u16 request_id, void *buffer, u32 buffersize)
 {
@@ -1329,13 +1329,14 @@ static void fill_get_pqi_device_capabilities(struct sop_device *h,
 
         busaddr = pci_map_single(h->pdev, buffer, buffersize,
                                 PCI_DMA_FROMDEVICE);
-	/* FIXME: what if pci_map_single fails. */
 	r->sg.address = cpu_to_le64(busaddr);
 	r->sg.length = cpu_to_le32(buffersize);
 	r->sg.descriptor_type = PQI_SGL_DATA_BLOCK;
-
-	dev_warn(&h->pdev->dev, "Here is the request:\n");
-	print_bytes((unsigned char *) r, sizeof(*r), 1, 0);
+	if (!busaddr) {
+		memset(r, 0, 4); /* NULL IU */
+		return -1;
+	}
+	return 0;
 }
 
 static int sop_get_pqi_device_capabilities(struct sop_device *h)
@@ -1356,8 +1357,19 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	r = pqi_alloc_elements(aq, 1);
 	request_id = alloc_request(h, aq->queue_id);
 	request_idx = request_id & h->qid_mask;
-	fill_get_pqi_device_capabilities(h, r, request_id, buffer,
-						(u32) sizeof(*buffer));
+	if (fill_get_pqi_device_capabilities(h, r, request_id, buffer,
+						(u32) sizeof(*buffer))) {
+		/* we have to submit request (already in queue) but it
+		 * is now a NULL IU, and will be ignored by hardware.
+		 */
+		dev_warn(&h->pdev->dev,
+			"pci_map_single failed in fill_get_pqi_device_capabilities\n");
+		dev_warn(&h->pdev->dev,
+			"Sending NULL IU, this code is untested.\n");
+		free_request(h, aq->queue_id, request_id);
+		pqi_notify_device_queue_written(aq);
+		goto error;
+	}
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 3\n");
 	send_admin_command(h, request_id);
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 4\n");
@@ -1367,11 +1379,8 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 5\n");
 	resp = (volatile struct report_pqi_device_capability_response *)
 			h->qinfo[aq->queue_id].request[request_idx].response;
-	if (resp->status != 0) {
-		kfree(buffer);
-		return -1;
-	}
-
+	if (resp->status != 0)
+		goto error;
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 6\n");
 	h->max_iqs = le16_to_cpu(buffer->max_iqs);
 	h->max_iq_elements = le16_to_cpu(buffer->max_iq_elements);
@@ -1409,10 +1418,13 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	dev_warn(&h->pdev->dev, "oq_pi_alignment_exponent = %hhu\n", h->oq_pi_alignment_exponent);
 	dev_warn(&h->pdev->dev, "protocol support bitmask = 0x%08x\n", h->protocol_support_bitmask);
 	dev_warn(&h->pdev->dev, "admin_sgl_support_bitmask = 0x%04x\n", h->admin_sgl_support_bitmask);
-	
 
 	kfree(buffer);
 	return 0;
+
+error:
+	kfree(buffer);
+	return -1;
 }
 
 static int sop_setup_io_queues(struct sop_device *h)
