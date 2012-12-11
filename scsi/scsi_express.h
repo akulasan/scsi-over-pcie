@@ -12,6 +12,9 @@ struct pqi_device_queue {
 	u8 nelements;
 	dma_addr_t dhandle;
 	u16 queue_id;
+	u8 direction;
+#define PQI_DIR_TO_DEVICE 0
+#define PQI_DIR_FROM_DEVICE 1
 };
 
 #define PQI_QUEUE_FULL (-1)
@@ -131,7 +134,9 @@ struct scsi_express_device {
 	struct pqi_capability pqicap;
 	__iomem struct pqi_device_register_set *pqireg;
 #define MAX_IO_QUEUES 6
-#define TOTAL_QUEUES (MAX_IO_QUEUES + 2)
+#define MAX_TO_DEVICE_QUEUES 1
+#define MAX_FROM_DEVICE_QUEUES 6
+#define TOTAL_QUEUES (MAX_TO_DEVICE_QUEUES + MAX_FROM_DEVICE_QUEUES + 2)
 	u8 q[TOTAL_QUEUES];
 	int intr[TOTAL_QUEUES];
 	int msix_vector[TOTAL_QUEUES];

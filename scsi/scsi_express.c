@@ -80,6 +80,61 @@ static inline void writeq(__u64 val, volatile void __iomem *addr)
 }
 #endif
 
+static int pqi_device_queue_array_alloc(struct pci_dev *pdev,
+		struct pqi_device_queue **xq, int num_queues,
+		u16 n_q_elements, u8 q_element_size_over_16,
+		int queue_direction, int starting_queue_id)
+{
+	void *vaddr = NULL;
+	dma_addr_t dhandle;
+	int i, nqs_alloced = 0, err = 0;
+	int total_size = (n_q_elements * q_element_size_over_16 * 16) +
+				sizeof(u64);
+
+	dev_warn(&pdev->dev, "Allocating %d queues %s device...\n", 
+		num_queues,
+		queue_direction == PQI_DIR_TO_DEVICE ? "TO" : "FROM");
+
+	*xq = kzalloc(sizeof(**xq) * num_queues, GFP_KERNEL);
+	if (!*xq) {
+		err = -ENOMEM;
+		goto bailout;
+	}
+	vaddr = pci_alloc_consistent(pdev, total_size * num_queues, &dhandle);
+	if (!vaddr) {
+		err = -ENOMEM;
+		goto bailout;
+	}
+	dev_warn(&pdev->dev, "Memory alloc'ed.\n");
+
+	for (i = 0; i < num_queues; i++) {
+		(*xq)[i].queue_vaddr = vaddr;
+		(*xq)[i].dhandle = dhandle;
+		if (queue_direction == PQI_DIR_TO_DEVICE) {
+			(*xq)[i].ci = vaddr + (i * total_size) +
+					q_element_size_over_16 * 16 * n_q_elements;
+			/* (*xq)[i].pi is unknown now, hardware will tell us later */
+		} else {
+			(*xq)[i].pi = vaddr + (i * total_size) +
+					q_element_size_over_16 * 16 * n_q_elements;
+			/* (*xq)[i].ci is unknown now, hardware will tell us later */
+		}
+		(*xq)[i].unposted_index = 0;
+		(*xq)[i].element_size = q_element_size_over_16 * 16;
+		(*xq)[i].nelements = n_q_elements;
+		(*xq)[i].queue_id = i + starting_queue_id;
+		nqs_alloced++;
+		dev_warn(&pdev->dev, "zzz bottom of loop, i = %d\n", i);
+	}
+	return nqs_alloced;
+
+bailout:
+	kfree(*xq);
+	if (vaddr)
+		pci_free_consistent(pdev, total_size, vaddr, dhandle);
+	return err;
+}
+
 static int pqi_device_queue_pair_array_alloc(struct pci_dev *pdev,
 			struct pqi_device_queue **iq,
 			struct pqi_device_queue **oq, int num_queue_pairs,
@@ -688,6 +743,7 @@ static void fill_create_io_queue_request(struct scsi_express_device *h,
 	}
 }
 
+#if 0
 static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 {
 
@@ -731,6 +787,68 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 
 		dev_warn(&h->pdev->dev,
 			"Set up io queue %d Qid(%d) to device\n", i,
+			h->io_q_to_dev[i].queue_id);
+		/* Set up i/o queue #i to device */
+		r = pqi_alloc_elements(&h->admin_q_to_dev, 1);
+		q = &h->io_q_to_dev[i];
+		dev_warn(&h->pdev->dev, "xxx1 i = %d, r = %p, q = %p\n",
+				i, r, q);
+		fill_create_io_queue_request(h, r, q, 1);
+		pqi_notify_device_queue_written(&h->admin_q_to_dev);
+	}
+
+	return 0;
+
+bail_out:
+	return -1;
+}
+#endif
+
+static int scsi_express_setup_io_queues(struct scsi_express_device *h)
+{
+
+	int i, niqs, noqs;
+	struct pqi_create_operational_queue_request *r;
+
+	dev_warn(&h->pdev->dev,
+		"sizeof struct pqi_create_operational_queue_request is %lu\n",
+		(unsigned long) sizeof(struct pqi_create_operational_queue_request));
+
+	niqs = pqi_device_queue_array_alloc(h->pdev, &h->io_q_to_dev,
+			MAX_TO_DEVICE_QUEUES, IQ_NELEMENTS, IQ_IU_SIZE / 16,
+			PQI_DIR_TO_DEVICE, 2);
+	if (niqs < 0)
+		goto bail_out;
+	noqs = pqi_device_queue_array_alloc(h->pdev, &h->io_q_from_dev,
+			MAX_FROM_DEVICE_QUEUES, OQ_NELEMENTS, OQ_IU_SIZE / 16,
+			PQI_DIR_FROM_DEVICE, 2 + niqs);
+	if (noqs < 0)
+		goto bail_out;
+
+	dev_warn(&h->pdev->dev,
+		"Setting up %d submission queues and %d reply queues\n",
+			niqs, noqs);
+
+	for (i = 0; i < noqs; i++) {
+		struct pqi_device_queue *q;
+
+		dev_warn(&h->pdev->dev,
+			"Setting up io queue %d Qid = %d from device\n", i,
+			h->io_q_from_dev[i].queue_id);
+		/* Set up i/o queue #i from device */
+		q = &h->io_q_from_dev[i];
+		r = pqi_alloc_elements(&h->admin_q_to_dev, 1);
+		dev_warn(&h->pdev->dev, "xxx2 i = %d, r = %p, q = %p\n",
+				i, r, q);
+		fill_create_io_queue_request(h, r, q, 0);
+		pqi_notify_device_queue_written(&h->admin_q_to_dev);
+	}
+
+	for (i = 0; i < niqs; i++) {
+		struct pqi_device_queue *q;
+
+		dev_warn(&h->pdev->dev,
+			"Setting up io queue %d Qid = %d to device\n", i,
 			h->io_q_to_dev[i].queue_id);
 		/* Set up i/o queue #i to device */
 		r = pqi_alloc_elements(&h->admin_q_to_dev, 1);
