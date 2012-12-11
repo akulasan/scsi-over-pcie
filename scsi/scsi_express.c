@@ -270,8 +270,12 @@ static int pqi_dequeue_from_device(struct pqi_device_queue *q, void *element)
 		return PQI_QUEUE_EMPTY;
 
 	p = q->queue_vaddr + q->unposted_index * q->element_size;
+	printk(KERN_WARNING "DQ: p = %p, q->unposted_index = %hu, n = %hu\n",
+				p, q->unposted_index, q->nelements);
 	memcpy(element, p, q->element_size);
 	q->unposted_index = (q->unposted_index + 1) % q->nelements;
+	printk(KERN_WARNING "After DQ: q->unposted_index = %hu\n",
+				q->unposted_index);
 	return 0;
 }
 
@@ -694,6 +698,12 @@ irqreturn_t scsi_express_adminq_msix_handler(int irq, void *devid)
 		struct scsi_express_request *r = h->admin_q_from_dev.request;
 
 		dev_warn(&h->pdev->dev, "admin intr, r = %p\n", r);
+
+		if (pqi_from_device_queue_is_empty(&h->admin_q_from_dev)) {
+			dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q);
+			break;
+		}
+
 		if (r == NULL) {
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(&h->admin_q_from_dev);
@@ -847,6 +857,22 @@ static void fill_create_io_queue_request(struct scsi_express_device *h,
 	}
 }
 
+static void send_admin_command(struct scsi_express_device *h, u16 request_id)
+{
+	struct scsi_express_request *request;
+	struct pqi_device_queue *aq = &h->admin_q_to_dev;
+	DECLARE_COMPLETION_ONSTACK(wait);
+
+	request = &h->qinfo[aq->queue_id].request[request_id];
+	request->waiting = &wait;
+	request->response_accumulated = 0;
+	dev_warn(&h->pdev->dev, "sending request %hu\n", request_id);
+	pqi_notify_device_queue_written(aq);
+	dev_warn(&h->pdev->dev, "waiting for completion\n");
+	wait_for_completion(&wait);
+	dev_warn(&h->pdev->dev, "wait_for_completion returned\n");
+}
+
 static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 {
 
@@ -887,8 +913,6 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 
 	for (i = 0; i < h->noqs - 1; i++) {
 		struct pqi_device_queue *q;
-		struct scsi_express_request *request;
-		DECLARE_COMPLETION_ONSTACK(wait);
 
 		dev_warn(&h->pdev->dev,
 			"Setting up io queue %d Qid = %d from device\n", i,
@@ -906,19 +930,12 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
 		}
 		fill_create_io_queue_request(h, r, q, 0, request_id, q->queue_id - 1);
-		request = &h->qinfo[aq->queue_id].request[request_id];
-		request->waiting = &wait;
-		request->response_accumulated = 0;
-		dev_warn(&h->pdev->dev, "sending request %hu\n", request_id);
-		pqi_notify_device_queue_written(aq);
-		wait_for_completion(&wait);
+		send_admin_command(h, request_id);
+		free_request(h, aq->queue_id, request_id);
 	}
 
 	for (i = 0; i < h->niqs - 1; i++) {
 		struct pqi_device_queue *q;
-		struct scsi_express_request *request;
-		DECLARE_COMPLETION_ONSTACK(wait);
-
 		
 		dev_warn(&h->pdev->dev,
 			"Setting up io queue %d Qid = %d to device\n", i,
@@ -934,11 +951,8 @@ static int scsi_express_setup_io_queues(struct scsi_express_device *h)
 			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted 2\n");
 		}
 		fill_create_io_queue_request(h, r, q, 1, request_id, (u16) -1);
-		request = &h->qinfo[aq->queue_id].request[request_id];
-		request->waiting = &wait;
-		request->response_accumulated = 0;
-		pqi_notify_device_queue_written(aq);
-		wait_for_completion(&wait);
+		send_admin_command(h, request_id);
+		free_request(h, aq->queue_id, request_id);
 	}
 
 	return 0;
@@ -1033,7 +1047,9 @@ static int __devinit scsi_express_probe(struct pci_dev *pdev,
 	if (rc != 0)
 		goto bail;
 
+	dev_warn(&h->pdev->dev, "Setting up i/o queues\n");
 	rc = scsi_express_setup_io_queues(h);
+	dev_warn(&h->pdev->dev, "Finished Setting up i/o queues, rc = %d\n", rc);
 	if (rc)
 		goto bail;
 
