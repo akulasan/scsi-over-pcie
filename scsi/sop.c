@@ -95,6 +95,21 @@ static struct scsi_host_template sop_template = {
 	.max_sectors			= (MAX_SGLS * 8), /* FIXME: is this correct? */
 };
 
+static pci_ers_result_t sop_pci_error_detected(struct pci_dev *dev,
+				enum pci_channel_state error);
+static pci_ers_result_t sop_pci_mmio_enabled(struct pci_dev *dev);
+static pci_ers_result_t sop_pci_link_reset(struct pci_dev *dev);
+static pci_ers_result_t sop_pci_slot_reset(struct pci_dev *dev);
+static void sop_pci_resume(struct pci_dev *dev);
+
+static struct pci_error_handlers sop_pci_error_handlers = {
+	.error_detected = sop_pci_error_detected,
+	.mmio_enabled = sop_pci_mmio_enabled,
+	.link_reset = sop_pci_link_reset,
+	.slot_reset = sop_pci_slot_reset,
+	.resume = sop_pci_resume,
+};
+
 /* 
  * 32-bit readq and writeq implementations taken from old
  * version of arch/x86/include/asm/io.h 
@@ -1724,6 +1739,7 @@ static struct pci_driver sop_pci_driver = {
 	.shutdown = sop_shutdown,
 	.suspend = sop_suspend,
 	.resume = sop_resume,
+	.err_handler = &sop_pci_error_handlers,
 };
 
 static int __init sop_init(void)
@@ -1988,6 +2004,46 @@ static int sop_ioctl(struct scsi_device *sdev, int cmd, void *arg)
 
 	dev_warn(&h->pdev->dev, "sop_ioctl called but not implemented, cmd = 0x%08x\n", cmd);
 	return -ENOTTY;
+}
+
+static pci_ers_result_t sop_pci_error_detected(struct pci_dev *dev,
+				enum pci_channel_state error)
+{
+	dev_warn(&dev->dev,
+		"sop_pci_error_detected called but not implemented\n");
+	/* FIXME: implement this. */
+	return PCI_ERS_RESULT_NONE;
+}
+
+static pci_ers_result_t sop_pci_mmio_enabled(struct pci_dev *dev)
+{
+	dev_warn(&dev->dev,
+		"sop_pci_error_mmio_enabled called but not implemented\n");
+	/* FIXME: implement this. */
+	return PCI_ERS_RESULT_NONE;
+}
+
+static pci_ers_result_t sop_pci_link_reset(struct pci_dev *dev)
+{
+	dev_warn(&dev->dev,
+		"sop_pci_error_link_reset called but not implemented\n");
+	/* FIXME: implement this. */
+	return PCI_ERS_RESULT_NONE;
+}
+
+static pci_ers_result_t sop_pci_slot_reset(struct pci_dev *dev)
+{
+	dev_warn(&dev->dev,
+		"sop_pci_error_slot_reset called but not implemented\n");
+	/* FIXME: implement this. */
+	return PCI_ERS_RESULT_NONE;
+}
+
+static void sop_pci_resume(struct pci_dev *dev)
+{
+	dev_warn(&dev->dev, "sop_pci_resume called but not implemented\n");
+	/* FIXME: implement this. */
+	return;
 }
 
 /* This gets optimized away, but will fail to compile if we mess up
