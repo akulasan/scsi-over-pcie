@@ -305,6 +305,7 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 		goto bailout;
 	(*xq)->dhandle = dhandle;
 	(*xq)->vaddr = vaddr;
+	(*xq)->queue_vaddr = vaddr;
 
 	if (queue_direction == PQI_DIR_TO_DEVICE) {
 		dev_warn(&h->pdev->dev, "4 allocating request buffers\n");
@@ -844,6 +845,21 @@ static int sop_delete_admin_queues(struct sop_device *h)
 		return -1;
 	writeq(PQI_DELETE_ADMIN_QUEUES, &h->pqireg->process_admin_function);
 	if (!wait_for_admin_command_ack(h)) {
+		int total_admin_queue_size;
+		void *admin_iq;
+		dma_addr_t admin_iq_busaddr;
+
+		/* Free the queue HW buffer first */
+		total_admin_queue_size = ((h->pqicap.admin_iq_element_length * 16) +
+					(h->pqicap.admin_oq_element_length * 16)) *
+					ADMIN_QUEUE_ELEMENT_COUNT + 32;
+		admin_iq = (void *)(h->qinfo[0].iq->queue_vaddr);
+		admin_iq_busaddr = h->qinfo[0].iq->dhandle;
+		if (h->qinfo[0].iq->queue_vaddr)
+			pci_free_consistent(h->pdev, total_admin_queue_size,
+						admin_iq, admin_iq_busaddr);
+
+		/* Free the queue structure next */
 		kfree(h->qinfo[0].iq);
 		kfree(h->qinfo[0].oq);
 		return 0;
