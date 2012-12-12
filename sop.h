@@ -303,7 +303,6 @@ struct sop_device {
 	int intr_mode;
 	char devname[20];
 	int ctlr;
-	struct pqi_device_queue admin_q_to_dev, admin_q_from_dev;
 	struct pqi_device_queue *io_q_to_dev;
 	struct pqi_device_queue *io_q_from_dev;
 	u16 current_id;
@@ -312,6 +311,7 @@ struct sop_device {
 	struct queue_info qinfo[MAX_TOTAL_QUEUE_PAIRS];
 #define qpindex_from_pqiq(pqiq) (pqiq->queue_id / 2)
 #define qinfo_to_qid(qinfo) (qpindex_from_pqiq(qinfo->oq))
+#define qpindex_to_qid(qpindex, to_device) (((qpindex) * 2) + (!to_device))
 	int instance;
 	sector_t capacity;
 	int block_size;
