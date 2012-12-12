@@ -311,7 +311,7 @@ struct sop_device {
 	struct queue_info qinfo[MAX_TOTAL_QUEUE_PAIRS];
 #define qpindex_from_pqiq(pqiq) (pqiq->queue_id / 2)
 #define qinfo_to_qid(qinfo) (qpindex_from_pqiq(qinfo->oq))
-#define qpindex_to_qid(qpindex, to_device) (((qpindex) * 2) + (!to_device))
+#define qpindex_to_qid(qpindex, to_device) (((qpindex) * 2) + (!!to_device))
 	int instance;
 	sector_t capacity;
 	int block_size;
