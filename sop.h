@@ -94,6 +94,8 @@ struct pqi_device_queue {
 	struct sop_request *request; /* used by oq only */
 	struct pqi_device_register_set *registers;
 	spinlock_t qlock;
+	dma_addr_t dhandle;
+	void *vaddr;
 };
 
 #define PQI_QUEUE_FULL (-1)
@@ -309,14 +311,14 @@ struct sop_device {
 	atomic_t cmd_pending;
 	u32  max_cmd_pending;
 	struct queue_info qinfo[MAX_TOTAL_QUEUES];
+#define qpindex_from_pqiq(pqiq) (pqiq->queue_id / 2)
+#define qinfo_to_qid(qinfo) (qpindex_from_pqiq(qinfo->oq))
 	int instance;
 	sector_t capacity;
 	int block_size;
 	struct request_queue *rq;
 	struct gendisk *disk;
 	int max_hw_sectors;
-	dma_addr_t iq_dhandle, oq_dhandle;
-	void *iq_vaddr, *oq_vaddr;
 };
 
 #pragma pack()
