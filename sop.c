@@ -1413,7 +1413,7 @@ static int sop_setup_io_queue_pairs(struct sop_device *h)
 
 	/* from 1, not 0, to skip admin oq, which was already set up */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
-		if (pqi_device_queue_alloc(h, &h->qinfo[i].iq,
+		if (pqi_device_queue_alloc(h, &h->qinfo[i].oq,
 				IQ_NELEMENTS, IQ_IU_SIZE / 16, PQI_DIR_FROM_DEVICE, i))
 			goto bail_out;
 		if (pqi_device_queue_alloc(h, &h->qinfo[i].iq,
