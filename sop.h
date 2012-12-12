@@ -273,7 +273,7 @@ struct sop_device;
 struct pqi_sgl_descriptor;
 struct queue_info {
 	struct sop_device *h;
-	int irq;
+	int msix_entry;
 	int msix_vector;
 	u16 qdepth;
 	atomic_t cur_qdepth;
