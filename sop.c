@@ -780,28 +780,21 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 
 	dev_warn(&h->pdev->dev, "Successfully created admin queues\n");
 
-	pqi_device_queue_init(&h->admin_q_from_dev,
+	pqi_device_queue_init(&h->qinfo[0].oq,
 		admin_oq, admin_oq_pi, admin_oq_ci,
 		(u16) h->pqicap.admin_oq_element_length * 16,
 		ADMIN_QUEUE_ELEMENT_COUNT, admin_oq_busaddr);
 
-	pqi_device_queue_init(&h->admin_q_to_dev,
+	pqi_device_queue_init(&h->qinfo[0].iq,
 		admin_iq, admin_iq_pi, admin_iq_ci,
 		(u16) h->pqicap.admin_iq_element_length * 16,
 		ADMIN_QUEUE_ELEMENT_COUNT, admin_iq_busaddr);
 
-	h->qinfo[0].pqiq = &h->admin_q_from_dev;
-	h->qinfo[1].pqiq = &h->admin_q_to_dev;
-
-	spin_lock_init(&h->qinfo[0].pqiq->qlock);
-	spin_lock_init(&h->qinfo[1].pqiq->qlock);
+	spin_lock_init(&h->qinfo[0].iq->qlock);
+	spin_lock_init(&h->qinfo[0].oq->qlock);
 
 	/* Allocate request buffers for admin queues */
 	if (allocate_q_request_buffers(&h->qinfo[0],
-				ADMIN_QUEUE_ELEMENT_COUNT,
-				sizeof(struct sop_request)))
-		goto bailout;
-	if (allocate_q_request_buffers(&h->qinfo[1],
 				ADMIN_QUEUE_ELEMENT_COUNT,
 				sizeof(struct sop_request)))
 		goto bailout;
@@ -887,31 +880,33 @@ static int sop_setup_msix(struct sop_device *h)
 
 	struct msix_entry msix_entry[MAX_TOTAL_QUEUES];
 
-	h->nr_queues = (num_online_cpus() + 1) * 2;
-	BUILD_BUG_ON((MAX_TOTAL_QUEUES % 2) != 0);
-	if (h->nr_queues > MAX_TOTAL_QUEUES)
-		h->nr_queues = MAX_TOTAL_QUEUES;
+	h->nr_queue_pairs = (num_online_cpus() + 1);
+	if (h->nr_queue_pairs > MAX_TOTAL_QUEUE_PAIRS)
+		h->nr_queue_pairs = MAX_TOTAL_QUEUE_PAIRS;
 
-	h->niqs = h->noqs = h->nr_queues / 2;
-
-	for (i = 0; i < h->noqs-1; i++) {
+	/*
+	 * Set up (h->nr_queue_pairs - 1) msix vectors. -1 because
+	 * outbound admin queue shares with io queue 0
+	 */
+	for (i = 0; i < h->nr_queue_pairs - 1; i++) {
 		msix_entry[i].vector = 0;
 		msix_entry[i].entry = i;
 	}
 
 	if (!pci_find_capability(h->pdev, PCI_CAP_ID_MSIX))
 		goto default_int_mode;
-	err = pci_enable_msix(h->pdev, msix_entry, h->noqs-1);
+	/* TODO: fall back if we get fewer msix vectors */
+	err = pci_enable_msix(h->pdev, msix_entry, h->nr_queue_pairs - 1);
 	if (err > 0)
 		h->noqs = err;
 
 	if (err == 0) {
-		for (i = 0; i < h->noqs; i++) {
-			int idx = i ? i + 1 : 0;
-			int vid = i ? i - 1 : 0;
-			h->qinfo[idx].msix_vector = msix_entry[vid].vector;
+		for (i = 0; i < h->nr_queue_pairs; i++) {
+			/* vid makes admin q share with io q 0 */
+			int vid = i ? i - 1 : 0; 
+			h->qinfo[i].msix_vector = msix_entry[vid].vector;
 			dev_warn(&h->pdev->dev, "q[%d] msix_entry[%d] = %d\n",
-				idx, vid, msix_entry[vid].vector);
+				i, vid, msix_entry[vid].vector);
 		}
 		h->intr_mode = INTR_MODE_MSIX;
 		return 0;
@@ -1196,43 +1191,34 @@ static void sop_irq_affinity_hints(struct sop_device *h)
 	}
 }
 
-static int sop_request_irqs(struct sop_device *h, int intr_type, 
-					irq_handler_t msix_handler)
+static int sop_request_irq(struct sop_device *h, int queue_index,
+				irq_handler_t msix_handler)
 {
-	u8 i;
 	int rc;
 
-	if (intr_type == PQI_ADMIN_INTR) {
-		dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (admin)\n",
-				h->qinfo[0].msix_vector, 0);
-		rc = request_irq(h->qinfo[0].msix_vector, msix_handler,
-						IRQF_SHARED, h->devname, &h->qinfo[0]);
-		if (rc != 0) {
-			dev_warn(&h->pdev->dev, "request_irq failed, i = %d\n", 0);
-			goto default_int_mode;
-		}
-	}
+	dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d for queue %d\n",
+			msix_vector, queue_index);
+	rc = request_irq(h->qinfo[queue_index].msix_vector, msix_handler,
+				IRQF_SHARED, h->devname, &h->qinfo[queue_index]);
+	if (rc != 0)
+		dev_warn(&h->pdev->dev, "request_irq failed, queue_index = %d\n",
+				queue_index);
+	return rc;
+}
 
-	else {
-		/* for loop starts at 2 to skip over the admin queues */
-		for (i = 2; i < h->noqs + 1; i++) {
-			dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d (oq)\n",
-					h->qinfo[i].msix_vector, i - 1);
-			rc = request_irq(h->qinfo[i].msix_vector, msix_handler, 
-					IRQF_SHARED, h->devname, &h->qinfo[i]);
-			if (rc != 0) {
-				dev_warn(&h->pdev->dev,
-						"request_irq failed, i = %d\n", i);
-				/* FIXME release irq's 0 through i - 1 */
-				goto default_int_mode;
-			}
-		}
-		sop_irq_affinity_hints(h);
+static int sop_request_io_irqs(struct sop_device *h,
+				irq_handler_t msix_handler)
+{
+	int i;
+
+	for (i = 1; i < h->nr_queue_pairs; i++) {
+		if (sop_request_irq(h, i, msix_handler))
+			goto default_int;
 	}
+	sop_irq_affinity_hints(h);
 	return 0;
-
-default_int_mode:
-	dev_warn(&h->pdev->dev, "intx mode not implemented.\n");
+default_int:
+	/* TODO: free all the irqs, fix this */
 	return -1;
 }
 
@@ -1761,7 +1747,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (rc)
 		goto bail;
 
-	rc = sop_request_irqs(h, PQI_ADMIN_INTR, sop_adminq_msix_handler);
+	rc = sop_request_irq(h, 0, sop_adminq_msix_handler);
 	if (rc != 0)
 		goto bail;
 
@@ -1771,7 +1757,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail;
 	dev_warn(&h->pdev->dev, "Finished Setting up i/o queues, rc = %d\n", rc);
 
-	rc = sop_request_irqs(h, PQI_IOQ_INTR, sop_ioq_msix_handler);
+	rc = sop_request_io_irqs(h, sop_ioq_msix_handler);
 	if (rc)
 		goto bail;
 
