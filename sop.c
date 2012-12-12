@@ -793,6 +793,9 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	h->qinfo[0].pqiq = &h->admin_q_from_dev;
 	h->qinfo[1].pqiq = &h->admin_q_to_dev;
 
+	spin_lock_init(&h->qinfo[0].pqiq->qlock);
+	spin_lock_init(&h->qinfo[1].pqiq->qlock);
+
 	/* Allocate request buffers for admin queues */
 	if (allocate_q_request_buffers(&h->qinfo[0],
 				ADMIN_QUEUE_ELEMENT_COUNT,
@@ -1156,9 +1159,9 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 	struct queue_info *q = devid;
 	int ret;
 
-	spin_lock(&q->qlock);
+	spin_lock(&q->pqiq->qlock);
 	ret = sop_msix_handle_ioq(q);
-	spin_unlock(&q->qlock);
+	spin_unlock(&q->pqiq->qlock);
 
 	return ret;
 }
@@ -1168,9 +1171,9 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 	struct queue_info *q = devid;
 	int ret;
 
-	spin_lock(&q->qlock);
+	spin_lock(&q->pqiq->qlock);
 	ret = sop_msix_handle_adminq(q);
-	spin_unlock(&q->qlock);
+	spin_unlock(&q->pqiq->qlock);
 
 	return ret;
 }
@@ -1435,6 +1438,7 @@ static int sop_setup_io_queues(struct sop_device *h)
 
 		q = &h->io_q_from_dev[i];
 		spin_lock_init(&q->index_lock);
+		spin_lock_init(&q->qlock);
 		h->qinfo[h->io_q_from_dev[i].queue_id].pqiq = q;
 		r = pqi_alloc_elements(aq, 1);
 		dev_warn(&h->pdev->dev, "xxx2 i = %d, r = %p, q = %d\n",
@@ -1474,6 +1478,7 @@ static int sop_setup_io_queues(struct sop_device *h)
 		r = pqi_alloc_elements(aq, 1);
 		q = &h->io_q_to_dev[i];
 		spin_lock_init(&q->index_lock);
+		spin_lock_init(&q->qlock);
 		h->qinfo[h->io_q_to_dev[i].queue_id].pqiq = q;
 		dev_warn(&h->pdev->dev, "xxx1 i = %d, r = %p, q = %p\n",
 				i, r, q);
@@ -1699,10 +1704,8 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		return -ENOMEM;
 
 	h->ctlr = controller_num;
-	for (i = 0; i < MAX_TOTAL_QUEUES; i++) {
-		spin_lock_init(&h->qinfo[i].qlock);
+	for (i = 0; i < MAX_TOTAL_QUEUES; i++)
 		h->qinfo[i].h = h;
-	}
 	controller_num++;
 	sprintf(h->devname, "sop-%d\n", h->ctlr);
 
@@ -2265,7 +2268,7 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 		goto make_request_fail;
 	}
 
-	spin_lock_irq(&submitq->qlock);
+	spin_lock_irq(&submitq->pqiq->qlock);
 
 	result = -EBUSY;
 	if (bio_list_empty(&wq->iq_cong))
@@ -2278,7 +2281,7 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 		bio_list_add(&wq->iq_cong, bio);
 	}
 
-	spin_unlock_irq(&submitq->qlock);
+	spin_unlock_irq(&submitq->pqiq->qlock);
 
 make_request_fail:
 	put_cpu();
@@ -2593,7 +2596,7 @@ static void sop_resubmit_waitq(struct queue_info *rq)
 		return;
 	}
 
-	spin_lock_irq(&sq->qlock);
+	spin_lock_irq(&sq->pqiq->qlock);
 	while (bio_list_peek(&wq->iq_cong)) {
 		struct bio *bio = bio_list_pop(&wq->iq_cong);
 
@@ -2612,7 +2615,7 @@ static void sop_resubmit_waitq(struct queue_info *rq)
 		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: done bio %p Q[%d], PI %d CI %d!\n",
 			bio, sq->pqiq->queue_id, sq->pqiq->unposted_index, *(sq->pqiq->ci)); */
 	}
-	spin_unlock_irq(&sq->qlock);
+	spin_unlock_irq(&sq->pqiq->qlock);
 }
 
 static int sop_thread_proc(void *data)
@@ -2627,10 +2630,10 @@ static int sop_thread_proc(void *data)
 			struct queue_info *q = &h->qinfo[0];
 
 			/* Admin queue */
-			spin_lock_irq(&q->qlock);
+			spin_lock_irq(&q->pqiq->qlock);
 			sop_msix_handle_adminq(q);
 			sop_timeout_admin(h);
-			spin_unlock_irq(&q->qlock);
+			spin_unlock_irq(&q->pqiq->qlock);
 
 			/* Io Queue */
 			for (i = 2; i < h->noqs+1; i++) {
@@ -2639,14 +2642,14 @@ static int sop_thread_proc(void *data)
 				if (!q)
 					continue;
 				
-				spin_lock_irq(&q->qlock);
+				spin_lock_irq(&q->pqiq->qlock);
 
 				/* Process any pending ISR */
 				sop_msix_handle_ioq(q);
 
 				/* Handle errors */
 				sop_timeout_ios(q, true);
-				spin_unlock_irq(&q->qlock);
+				spin_unlock_irq(&q->pqiq->qlock);
 
 				/* Process wait queue */
 				sop_resubmit_waitq(q);
