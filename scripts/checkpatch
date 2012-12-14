@@ -1,0 +1,47 @@
+#!/bin/sh
+
+usage()
+{
+	echo "checkpatch: set LINUXSRC to point to your linux kernel source directory." 1>&2
+	echo "checkpatch: For example: export LINUXSRC=~/linux-3.7" 1>&2
+	echo 1>&2
+	echo "Usage:" 1>&2
+	echo 1>&2
+	echo "	           ./checkpatch < mypatch" 1>&2
+	echo "or" 1>&2
+	echo "             stg show | ./checkpatch" 1>&2
+	echo "or" 1>&2
+	echo "             git show commithash | ./checkpatch" 1>&2
+	echo "or" 1>&2
+	exit 1
+}
+
+if [ "$LINUXSRC" = "" ]
+then
+	usage;
+fi
+
+if [ ! -x "$LINUXSRC"/scripts/checkpatch.pl ]
+then
+	echo "checkpatch: Cannot find executable "$LINUXSRC"/scripts/checkpatch.pl" 1>&2
+	usage
+	exit 1
+fi
+
+currentdir=`pwd`
+cd "$LINUXSRC"
+if [ "$?" != "0" ]
+then
+	echo "Cannot cd to $LINUXSRC" 1>&2
+	exit 1
+fi
+
+cd "$currentdir"
+if [ "$?" != "0" ]
+then
+	echo "Cannot cd to $currentdir" 1>&2
+	exit 1
+fi
+
+(cd $LINUXDIR ; scripts/checkpatch.pl -  )
+
