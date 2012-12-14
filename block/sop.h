@@ -301,7 +301,8 @@ struct sop_device {
 #define INTR_MODE_MSI  2
 #define INTR_MODE_INTX 3
 	int intr_mode;
-	char devname[20];
+#define	SOP_MAXNAME_LEN	16
+	char devname[SOP_MAXNAME_LEN];
 	int ctlr;
 	struct pqi_device_queue *io_q_to_dev;
 	struct pqi_device_queue *io_q_from_dev;

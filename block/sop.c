@@ -59,7 +59,6 @@ DEFINE_PCI_DEVICE_TABLE(sop_id_table) = {
 MODULE_DEVICE_TABLE(pci, sop_id_table);
 
 static int sop_major;
-static int controller_num;
 
 static DEFINE_SPINLOCK(dev_list_lock);
 static LIST_HEAD(dev_list);
@@ -913,8 +912,10 @@ static int sop_setup_msix(struct sop_device *h)
 			int vid = i ? i - 1 : 0; 
 			h->qinfo[i].msix_entry = msix_entry[vid].entry;
 			h->qinfo[i].msix_vector = msix_entry[vid].vector;
+			/*
 			dev_warn(&h->pdev->dev, "q[%d] msix_entry[%d] = %d\n",
 				i, vid, msix_entry[vid].vector);
+			*/
 		}
 		h->intr_mode = INTR_MODE_MSIX;
 		return 0;
@@ -1749,7 +1750,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	u64 signature;
 	int i, rc;
 
-	dev_warn(&pdev->dev, SOP "found device: %04x:%04x/%04x:%04x\n",
+	dev_warn(&pdev->dev, SOP ": Found device: %04x:%04x/%04x:%04x\n",
 			pdev->vendor, pdev->device,
 			pdev->subsystem_vendor, pdev->subsystem_device);
 
@@ -1757,11 +1758,15 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (!h)
 		return -ENOMEM;
 
-	h->ctlr = controller_num;
+	rc = sop_set_instance(h);
+	if (rc) {
+		dev_warn(&h->pdev->dev, "Cannot set driver instance\n");
+		goto bail_alloc_drvdata;
+	}
+
 	for (i = 0; i < MAX_TOTAL_QUEUE_PAIRS; i++)
 		h->qinfo[i].h = h;
-	controller_num++;
-	sprintf(h->devname, "sop-%d\n", h->ctlr);
+	sprintf(h->devname, SOP"%d", h->instance);
 
 	h->pdev = pdev;
 	pci_set_drvdata(pdev, h);
@@ -1782,8 +1787,6 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail_pci_enable;
 	}
 
-	dev_warn(&pdev->dev, "pci_resource_len = %llu\n",
-			(unsigned long long) pci_resource_len(pdev, 0));
 	h->pqireg = pci_ioremap_bar(pdev, 0);
 	if (!h->pqireg) {
 		rc = -ENOMEM;
@@ -1803,7 +1806,6 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		dev_warn(&pdev->dev, "device does not appear to be a PQI device\n");
 		goto bail_remap_bar;
 	}
-	dev_warn(&pdev->dev, "device does appear to be a PQI device\n");
 
 	rc = sop_setup_msix(h);
 	if (rc != 0)
@@ -1824,10 +1826,6 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	dev_warn(&h->pdev->dev, "Finished Setting up i/o queues, rc = %d\n", rc);
 
 	rc = sop_request_io_irqs(h, sop_ioq_msix_handler);
-	if (rc)
-		goto bail;
-
-	rc = sop_set_instance(h);
 	if (rc)
 		goto bail;
 
@@ -1862,6 +1860,8 @@ bail_pci_enable:
 	pci_disable_device(pdev);
 bail_set_drvdata:
 	pci_set_drvdata(pdev, NULL);
+	sop_release_instance(h);
+bail_alloc_drvdata:
 	kfree(h);
 	return -1;
 }
@@ -1884,7 +1884,6 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	dev_warn(&pdev->dev, "remove called.\n");
 	h = pci_get_drvdata(pdev);
 	sop_remove_disk(h);
-	sop_release_instance(h);
 	sop_delete_io_queues(h);
 	sop_free_irqs_and_disable_msix(h);
 	dev_warn(&pdev->dev, "irqs freed, msix disabled\n");
@@ -1896,6 +1895,7 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 	pci_set_drvdata(pdev, NULL);
+	sop_release_instance(h);
 	kfree(h);
 }
 
@@ -2542,7 +2542,7 @@ static int sop_add_disk(struct sop_device *h)
 	disk->private_data = h;
 	disk->queue = rq;
 	disk->driverfs_dev = &h->pdev->dev;
-	sprintf(disk->disk_name, SOP"%d", h->instance);
+	strcpy(disk->disk_name, h->devname);
 	set_capacity(disk, h->capacity);
 	dev_warn(&h->pdev->dev, "Creating SOP drive '%s'- Capacity %d sectors\n", 
 		disk->disk_name, (int)(h->capacity));
