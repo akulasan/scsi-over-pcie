@@ -1722,6 +1722,8 @@ static int sop_init_time_host_reset(struct sop_device *h)
 
 	dev_warn(&h->pdev->dev, "Host reset initiated.\n");
 	do {
+		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
+				ADMIN_SLEEP_INTERVAL_MAX);
 		if (safe_readq(sig, &paf, &h->pqireg->process_admin_function)) {
 			dev_warn(&h->pdev->dev,
 				"Unable to read process admin function register");
@@ -1734,8 +1736,6 @@ static int sop_init_time_host_reset(struct sop_device *h)
 		x = (unsigned char *) &status;
 		function_and_status = paf & 0xff;
 		pqi_device_state = status & 0xff;
-		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
-				ADMIN_SLEEP_INTERVAL_MAX);
 	} while (pqi_device_state != PQI_READY_FOR_ADMIN_FUNCTION ||
 			function_and_status != PQI_IDLE);
 	dev_warn(&h->pdev->dev, "Host reset completed.\n");
@@ -1789,11 +1789,9 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		rc = -ENOMEM;
 		goto bail_request_regions;
 	}
-	/*
 	rc = sop_init_time_host_reset(h);
 	if (rc)
 		return -1;
-	*/
 
 	if (sop_set_dma_mask(pdev)) {
 		dev_err(&pdev->dev, "failed to set DMA mask\n");
@@ -2781,9 +2779,10 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(admin_iq_ci_addr, 0x68);
 	VERIFY_OFFSET(admin_oq_pi_addr, 0x70);
 	VERIFY_OFFSET(admin_queue_param, 0x78);
-	VERIFY_OFFSET(error_data, 0x80);
-	VERIFY_OFFSET(reset, 0x88);
-	VERIFY_OFFSET(power_action, 0x90);
+	VERIFY_OFFSET(device_error, 0x80);
+	VERIFY_OFFSET(error_data, 0x88);
+	VERIFY_OFFSET(reset, 0x90);
+	VERIFY_OFFSET(power_action, 0x94);
 
 #undef VERIFY_OFFSET
 

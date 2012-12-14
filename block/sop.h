@@ -66,9 +66,9 @@ struct pqi_device_register_set {
 	u64 admin_oq_pi_addr;
 	u32 admin_queue_param;
 	u8  reserved3[4];
+	u64 device_error;
 	u64 error_data;
 	u32 reset;
-	u8  reserved4[4];
 	u32 power_action;
 };
 #pragma pack()
