@@ -1085,44 +1085,30 @@ int sop_msix_handle_adminq(struct queue_info *q)
 	u8 iu_type;
 	u16 request_id;
 	int rc;
-	struct sop_device *h = q->h;
 
-	if (pqi_from_device_queue_is_empty(q->oq)) {
-		/* dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q); */
+	if (pqi_from_device_queue_is_empty(q->oq))
 		return IRQ_NONE;
-	}
 
-	printk(KERN_WARNING "Got admin oq interrupt, q = %p (%d)\n", q, qinfo_to_qid(q));
 	do {
 		struct sop_request *r = q->oq->cur_req;
 
-		dev_warn(&h->pdev->dev, "admin intr, r = %p\n", r);
 		if (r == NULL) {
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
-			dev_warn(&h->pdev->dev, "new completion, iu type: %hhu, id = %hu\n",
-					iu_type, request_id);
 			r = q->oq->cur_req = &q->request[request_id & 0x00ff];
-			dev_warn(&h->pdev->dev, "intr: r = %p\n", r);
 			r->response_accumulated = 0;
 		}
 		rc = pqi_dequeue_from_device(q->oq, &r->response[r->response_accumulated]); 
-		dev_warn(&h->pdev->dev, "dequeued from q %p\n", q);
-		if (rc) { /* queue is empty */
-			dev_warn(&h->pdev->dev, "admin OQ %p is empty\n", q);
+		if (rc)
 			break;
-		}
 		r->response_accumulated += q->oq->element_size;
-		dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated);
 		if (sop_response_accumulated(r)) {
-			dev_warn(&h->pdev->dev, "accumlated response\n");
 			q->oq->cur_req = NULL;
 			wmb();
 			complete(r->waiting);
 			pqi_notify_device_queue_read(q->oq);
 		}
-
 	} while (!pqi_from_device_queue_is_empty(q->oq));
 
 	return IRQ_HANDLED;
@@ -1324,14 +1310,10 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	DECLARE_COMPLETION_ONSTACK(wait);
 
 	request = &h->qinfo[0].request[request_id & 0x00ff];
-	dev_warn(&h->pdev->dev, "Sending request %p\n", request);
 	request->waiting = &wait;
 	request->response_accumulated = 0;
-	dev_warn(&h->pdev->dev, "sending request %hu\n", request_id);
 	pqi_notify_device_queue_written(h->qinfo[0].iq);
-	dev_warn(&h->pdev->dev, "waiting for completion\n");
 	wait_for_completion(&wait);
-	dev_warn(&h->pdev->dev, "wait_for_completion returned\n");
 }
 
 static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
