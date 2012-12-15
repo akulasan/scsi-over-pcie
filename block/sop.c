@@ -632,6 +632,38 @@ static int wait_for_admin_queues_to_become_idle(struct sop_device *h, u8 device_
 	return -1;
 }
 
+static inline int sop_admin_queue_buflen(struct sop_device *h, int nelements)
+{
+	return (((h->pqicap.admin_iq_element_length * 16) +
+		(h->pqicap.admin_oq_element_length * 16)) *
+		nelements + 32);
+}
+
+static void sop_free_admin_queues(struct sop_device *h)
+{
+	struct queue_info *adminq = &h->qinfo[0];
+	struct pqi_device_queue *iq;
+
+	free_q_request_buffers(adminq);
+
+	if ((iq = adminq->iq)) {
+		/* 
+		 * For Admin, only a flat bufffer is allocated for PCI 
+		 * and starts at iq
+		 */
+		if (iq->vaddr) {
+			int total_admin_qsize = sop_admin_queue_buflen(h,
+						h->qinfo[0].iq->nelements);
+
+			pci_free_consistent(h->pdev, total_admin_qsize,
+						iq->vaddr, iq->dhandle);
+		}
+		kfree(iq);
+	}
+	if (adminq->oq)
+		kfree(adminq->oq);
+}
+
 static int __devinit sop_create_admin_queues(struct sop_device *h)
 {
 	u64 paf, pqicap, admin_iq_pi_offset, admin_oq_ci_offset;
@@ -797,15 +829,7 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	return 0;
 
 bailout:
-	free_q_request_buffers(&h->qinfo[0]);
-
-	if (h->qinfo[0].iq)
-		kfree(h->qinfo[0].iq);
-	if (h->qinfo[0].oq)
-		kfree(h->qinfo[0].oq);
-	if (admin_iq)
-		pci_free_consistent(h->pdev, total_admin_queue_size,
-					admin_iq, admin_iq_busaddr);
+	sop_free_admin_queues(h);
 
 	dev_warn(&h->pdev->dev, "%s: %s\n", __func__, msg);
 	return -1;	
@@ -821,23 +845,7 @@ static int sop_delete_admin_queues(struct sop_device *h)
 		return -1;
 	writeq(PQI_DELETE_ADMIN_QUEUES, &h->pqireg->process_admin_function);
 	if (!wait_for_admin_command_ack(h)) {
-		int total_admin_queue_size;
-		void *admin_iq;
-		dma_addr_t admin_iq_busaddr;
-
-		/* Free the queue HW buffer first */
-		total_admin_queue_size = ((h->pqicap.admin_iq_element_length * 16) +
-					(h->pqicap.admin_oq_element_length * 16)) *
-					ADMIN_QUEUE_ELEMENT_COUNT + 32;
-		admin_iq = (void *)(h->qinfo[0].iq->queue_vaddr);
-		admin_iq_busaddr = h->qinfo[0].iq->dhandle;
-		if (h->qinfo[0].iq->queue_vaddr)
-			pci_free_consistent(h->pdev, total_admin_queue_size,
-						admin_iq, admin_iq_busaddr);
-
-		/* Free the queue structure next */
-		kfree(h->qinfo[0].iq);
-		kfree(h->qinfo[0].oq);
+		sop_free_admin_queues(h);
 		return 0;
 	}
 
@@ -1179,32 +1187,35 @@ static int sop_request_io_irqs(struct sop_device *h,
 
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		if (sop_request_irq(h, i, msix_handler))
-			goto default_int;
+			goto irq_fail;
 	}
 	sop_irq_affinity_hints(h);
 	return 0;
-default_int:
-	/* TODO: free all the irqs, fix this */
+
+irq_fail:
+	/* Free all the irqs already allocated */
+	while (--i >= 0)
+		free_irq(h->qinfo[i].msix_vector, &h->qinfo[i]);
 	return -1;
 }
 
-static void sop_free_irqs(struct sop_device *h)
+static void sop_free_irq(struct sop_device *h, int qinfo_ind)
 {
-	int i;
+	int vector;
 
-	for (i = 0; i < h->nr_queue_pairs; i++) {
-		int vector;
-
-		vector = h->qinfo[i].msix_vector; 
-		irq_set_affinity_hint(vector, NULL);
-		free_irq(vector, &h->qinfo[i]);
-	}
+	vector = h->qinfo[qinfo_ind].msix_vector; 
+	irq_set_affinity_hint(vector, NULL);
+	free_irq(vector, &h->qinfo[qinfo_ind]);
 }
 
 static void sop_free_irqs_and_disable_msix(
 		struct sop_device *h)
 {
-	sop_free_irqs(h);
+	int i;
+
+	for (i = 0; i < h->nr_queue_pairs; i++) {
+		sop_free_irq(h, i);
+	}
 #ifdef CONFIG_PCI_MSI
 	if (h->intr_mode == INTR_MODE_MSIX && h->pdev->msix_enabled)
 		pci_disable_msix(h->pdev);
@@ -1732,7 +1743,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 
 	rc = pci_enable_device(pdev);
 	if (rc) {
-		dev_warn(&h->pdev->dev, "unable to enable PCI device\n");
+		dev_warn(&h->pdev->dev, "Unable to enable PCI device\n");
 		goto bail_set_drvdata;
 	}
 
@@ -1742,7 +1753,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	rc = pci_request_regions(h->pdev, SOP);
 	if (rc) {
 		dev_err(&h->pdev->dev,
-			"cannot obtain PCI resources, aborting\n");
+			"Cannot obtain PCI resources, aborting\n");
 		goto bail_pci_enable;
 	}
 
@@ -1756,13 +1767,13 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		return -1;
 
 	if (sop_set_dma_mask(pdev)) {
-		dev_err(&pdev->dev, "failed to set DMA mask\n");
+		dev_err(&pdev->dev, "Failed to set DMA mask\n");
 		goto bail_remap_bar;
 	}
 
 	signature = readq(&h->pqireg->signature);
 	if (memcmp("PQI DREG", &signature, sizeof(signature)) != 0) {
-		dev_warn(&pdev->dev, "device does not appear to be a PQI device\n");
+		dev_warn(&pdev->dev, "Device does not appear to be a PQI device\n");
 		goto bail_remap_bar;
 	}
 
@@ -1772,32 +1783,36 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 
 	rc = sop_create_admin_queues(h);
 	if (rc)
-		goto bail;
+		goto bail_enable_msix;
 
 	rc = sop_request_irq(h, 0, sop_adminq_msix_handler);
-	if (rc != 0)
-		goto bail;
+	if (rc != 0) {
+	dev_warn(&h->pdev->dev, "Bailing out in probe - requesting IRQ[0]\n");
+		goto bail_admin_created;
+	}
 
-	dev_warn(&h->pdev->dev, "Setting up i/o queues\n");
 	rc = sop_setup_io_queue_pairs(h);
-	if (rc)
-		goto bail;
-	dev_warn(&h->pdev->dev, "Finished Setting up i/o queues, rc = %d\n", rc);
+	if (rc) {
+		dev_warn(&h->pdev->dev, "Bailing out in probe - Creating i/o queues\n");
+		goto bail_admin_irq;
+	}
 
 	rc = sop_request_io_irqs(h, sop_ioq_msix_handler);
 	if (rc)
-		goto bail;
+		goto bail_io_q_created;
 
 	h->max_hw_sectors = 2048;	/* TODO: For now hard code it */
 	rc = sop_get_disk_params(h);
-	dev_warn(&h->pdev->dev, "Finished getting disk params rc= %d\n", rc);
-	if (rc)
-		goto bail;
+	if (rc) {
+		dev_warn(&h->pdev->dev, "Bailing out in probe - can't get disk param\n");
+		goto bail_io_irq;
+	}
 
 	rc = sop_add_disk(h);
-	dev_warn(&h->pdev->dev, "Finished adding disk, rc = %d\n", rc);
-	if (rc)
-		goto bail;
+	if (rc) {
+		dev_warn(&h->pdev->dev, "Bailing out in probe - Cannot add disk\n");
+		goto bail_io_irq;
+	}
 
 	spin_lock(&dev_list_lock);
 	list_add(&h->node, &dev_list);
@@ -1805,10 +1820,17 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 
 	return 0;
 
-bail:
-	dev_warn(&h->pdev->dev, "Bailing out in probe - not freeing a lot\n");
-	/* FIXME: Do other cleanup in cascading order */
-
+bail_io_irq:
+	for (i=1; i< h->nr_queue_pairs; i++)
+		sop_free_irq(h, 0);
+bail_io_q_created:
+	sop_delete_io_queues(h);
+bail_admin_irq:
+	/* Free admin irq */
+	sop_free_irq(h, 0);
+bail_admin_created:
+	sop_delete_admin_queues(h);
+bail_enable_msix:
 	pci_disable_msix(pdev);
 bail_remap_bar:
 	if (h && h->pqireg)
@@ -1844,9 +1866,9 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	h = pci_get_drvdata(pdev);
 	sop_remove_disk(h);
 	sop_delete_io_queues(h);
+	sop_delete_admin_queues(h);
 	sop_free_irqs_and_disable_msix(h);
 	dev_warn(&pdev->dev, "irqs freed, msix disabled\n");
-	sop_delete_admin_queues(h);
 	free_all_q_request_buffers(h);
 	free_all_q_sgl_areas(h);
 	if (h && h->pqireg)
