@@ -977,7 +977,6 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 
 	result = 0;
 
-	/* dev_warn(&h->pdev->dev, "Response IU type is 0x%02x\n", r->response[0]); */
 	switch (r->response[0]) {
 	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
                 /* No error to process */
@@ -1050,17 +1049,7 @@ int sop_msix_handle_ioq(struct queue_info *q)
 	int ncmd=0;
 	struct sop_request *r;
 
-#if 0
-	int cpu;
-
-	cpu = smp_processor_id();
-	printk(KERN_WARNING "=========> Got ioq interrupt, q = %p (%d) vector = %d, cpu %d\n",
-			q, q->pqiq->queue_id, q->msix_vector, cpu);
-#endif
 	if (pqi_from_device_queue_is_empty(q->oq)) {
-#if 0
-		printk(KERN_WARNING "=========> abort handler[cpu %d] processed %d\n", cpu, ncmd);
-#endif
 		return IRQ_NONE;
 	}
 
@@ -1083,9 +1072,7 @@ int sop_msix_handle_ioq(struct queue_info *q)
 			break;
 		}
 		r->response_accumulated += q->oq->element_size;
-		/* dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated); */
 		if (sop_response_accumulated(r)) {
-			/* dev_warn(&h->pdev->dev, "accumlated response\n"); */
 			q->oq->cur_req = NULL;
 			wmb();
 			if (likely(r->bio)) {
@@ -1093,7 +1080,6 @@ int sop_msix_handle_ioq(struct queue_info *q)
 				r = NULL;
 			} else {
 				if (likely(r->waiting)) {
-					dev_warn(&h->pdev->dev, "Sync completion ISR\n");
 					complete(r->waiting);
 					r = NULL;
 				} else {
@@ -1109,9 +1095,6 @@ int sop_msix_handle_ioq(struct queue_info *q)
 				q->oq->queue_id, q->oq->unposted_index);
 	} while (!pqi_from_device_queue_is_empty(q->oq));
 
-#if 0
-	printk(KERN_WARNING "=========> exit handler[cpu %d] processed %d\n", cpu, ncmd);
-#endif
 	return IRQ_HANDLED;
 }
 
@@ -1744,25 +1727,25 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 {
 	struct sop_device *h;
 
-	dev_warn(&pdev->dev, "remove called.\n");
+	dev_warn(&pdev->dev, "Remove called.\n");
 	h = pci_get_drvdata(pdev);
 	sop_remove_disk(h);
 	sop_delete_io_queues(h);
 	sop_delete_admin_queues(h);
 	sop_free_irqs_and_disable_msix(h);
-	dev_warn(&pdev->dev, "irqs freed, msix disabled\n");
 	if (h && h->pqireg)
 		iounmap(h->pqireg);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 	pci_set_drvdata(pdev, NULL);
 	sop_release_instance(h);
+	dev_warn(&pdev->dev, "Device Removed\n");
 	kfree(h);
 }
 
 static void sop_shutdown(struct pci_dev *pdev)
 {
-	dev_warn(&pdev->dev, "shutdown called.\n");
+	dev_warn(&pdev->dev, "Shutdown called.\n");
 }
 
 static struct pci_driver sop_pci_driver = {
@@ -1822,6 +1805,7 @@ static void __exit sop_exit(void)
 	printk("Unregistering Blockdevice with major=%d\n", sop_major);
 	unregister_blkdev(sop_major, SOP);
 	kthread_stop(sop_thread);
+	printk("%s: Driver unloaded\n", SOP);
 }
 
 static inline struct sop_device *bdev_to_hba(struct block_device *bdev)
@@ -1835,16 +1819,6 @@ static inline int find_sop_queue(struct sop_device *h, int cpu)
 	return 1 + (cpu % (h->nr_queue_pairs - 1));
 }
 
-#if 0
-static struct queue_info *find_submission_queue_fm_replyq(struct queue_info *sq)
-{
-	struct sop_device *h = sq->h;
-	int rqid = sq->pqiq->queue_id;
-	int q = rqid + h->noqs - 1;
-
-	return &h->qinfo[q];
-}
-#endif
 
 #define	SCSI_READ_BASIC			0x08
 #define	SCSI_WRITE_BASIC		0x0A
@@ -2334,7 +2308,6 @@ static int sop_get_disk_params(struct sop_device *h)
 	/* 1. send TUR */
 	memset(cdb, 0, MAX_CDB_SIZE);
 	cdb[0] = TEST_UNIT_READY;
-	dev_warn(&h->pdev->dev, "Sending TUR (CDB0=0x%x)\n", cdb[0]);
 	ret = send_sync_cdb(h, cdb, 0, 0, SOP_DATA_DIR_NONE);
 	if (ret < 0)
 		goto disk_param_err;
@@ -2344,15 +2317,12 @@ static int sop_get_disk_params(struct sop_device *h)
 	cdb[0] = READ_CAPACITY;		/* Rest all remains 0 */
 	size = 2 * sizeof(u32);
 	data = (u32 *)vaddr;
-	dev_warn(&h->pdev->dev, "Sending RDCAP (CDB0=0x%x)\n", cdb[0]);
 	ret = send_sync_cdb(h, cdb, phy_addr, size, SOP_DATA_DIR_FROM_DEVICE);
 	if (ret != 0)
 		goto disk_param_err;
 	/* Process the Read Cap data */
 	h->capacity = be32_to_cpu(data[0]);
 	h->block_size = be32_to_cpu(data[1]);
-	dev_warn(&h->pdev->dev, "Received RDCAP size = 0x%x, block size=0x%x\n", 
-		(u32)(h->capacity), h->block_size);
 
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
 	return 0;
