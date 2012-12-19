@@ -66,9 +66,9 @@ struct pqi_device_register_set {
 	u64 admin_oq_pi_addr;
 	u32 admin_queue_param;
 	u8  reserved3[4];
+	u64 device_error;
 	u64 error_data;
 	u32 reset;
-	u8  reserved4[4];
 	u32 power_action;
 };
 #pragma pack()
@@ -301,7 +301,8 @@ struct sop_device {
 #define INTR_MODE_MSI  2
 #define INTR_MODE_INTX 3
 	int intr_mode;
-	char devname[20];
+#define	SOP_MAXNAME_LEN	16
+	char devname[SOP_MAXNAME_LEN];
 	int ctlr;
 	struct pqi_device_queue *io_q_to_dev;
 	struct pqi_device_queue *io_q_from_dev;
