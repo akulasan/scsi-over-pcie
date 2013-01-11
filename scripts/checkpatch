@@ -43,5 +43,5 @@ then
 	exit 1
 fi
 
-(cd $LINUXDIR ; scripts/checkpatch.pl -  )
+(cd $LINUXSRC ; scripts/checkpatch.pl -  )
 
