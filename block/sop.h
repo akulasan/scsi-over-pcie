@@ -331,7 +331,6 @@ struct sop_request {
 	u16 response_accumulated;
 	u16 request_id;
 	u16 num_sg;
-	u8 q;
 	u8 response[MAX_RESPONSE_SIZE];
 };
 
