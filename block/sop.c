@@ -1305,6 +1305,8 @@ static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
 	sopr->request_id = request_id;
 	sopr->waiting = &wait;
 	sopr->response_accumulated = 0;
+	atomic_inc(&qinfo->cur_qdepth);
+	atomic_inc(&h->cmd_pending);
 	pqi_notify_device_queue_written(qinfo->iq);
 	put_cpu();
 	wait_for_completion(&wait);
