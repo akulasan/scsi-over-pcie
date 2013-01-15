@@ -28,6 +28,7 @@
 
 struct sop_request;
 
+#define	SOP_SIGNATURE_STR	"PQI DREG"
 #pragma pack(1)
 /*
  * A note about variable names:
@@ -57,6 +58,7 @@ struct pqi_device_register_set {
 	u32 pqi_device_status;
 #define PQI_READY_FOR_ADMIN_FUNCTION 0x02
 #define PQI_READY_FOR_IO 0x03
+#define PQI_ERROR 0x04
 	u8 reserved2[4];
 	u64 admin_iq_pi_offset;
 	u64 admin_oq_ci_offset;
@@ -269,6 +271,15 @@ struct sop_wait_queue {
 	struct bio_list iq_cong;
 };
 
+/* Note: MAX cannot be greater than 255 as it is stored in u8 */
+#define	MAX_SOP_TIMEOUT		64
+#define	DEF_IO_TIMEOUT		8
+
+struct sop_timeout {
+	atomic_t time_slot[MAX_SOP_TIMEOUT];
+	atomic_t cur_slot;
+};
+
 struct sop_device;
 struct pqi_sgl_descriptor;
 struct queue_info {
@@ -286,6 +297,7 @@ struct queue_info {
 	struct scatterlist *sgl;
 	dma_addr_t sg_bus_addr;
 	struct sop_wait_queue *wq;
+	struct sop_timeout tmo;
 };
 
 
@@ -331,6 +343,8 @@ struct sop_request {
 	u16 response_accumulated;
 	u16 request_id;
 	u16 num_sg;
+	u8 q;
+	u8 tmo_slot;
 	u8 response[MAX_RESPONSE_SIZE];
 };
 
@@ -361,6 +375,8 @@ struct sop_limited_cmd_iu {
 #define SOP_RESPONSE_CMD_RESPONSE_IU_TYPE 0x91
 #define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
 #define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
+
+#define	SOP_RESPONSE_INTERNAL_CMD_FAIL_IU_TYPE	0xE8
 
 #pragma pack(1)
 struct sop_cmd_response {

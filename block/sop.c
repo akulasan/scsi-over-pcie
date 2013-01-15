@@ -38,7 +38,7 @@
 #include "sop_kernel_compat.h"
 #include "sop.h"
 
-#define DRIVER_VERSION "1.0.0.3"
+#define DRIVER_VERSION "1.0.1.2"
 #define DRIVER_NAME "sop (v " DRIVER_VERSION ")"
 #define SOP "sop"
 
@@ -68,6 +68,9 @@ static int sop_get_disk_params(struct sop_device *h);
 static int sop_add_disk(struct sop_device *h);
 static void sop_remove_disk(struct sop_device *h);
 static int sop_thread_proc(void *data);
+static int sop_add_timeout(struct queue_info *q, uint timeout);
+static void sop_rem_timeout(struct queue_info *q, uint tmo_slot);
+static void sop_fail_all_outstanding_io(struct sop_device *h);
 
 #ifdef CONFIG_COMPAT
 static int sop_compat_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
@@ -966,6 +969,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 	struct scatterlist *sgl;
 	int result;
 
+	sop_rem_timeout(qinfo, r->tmo_slot);
 	sgl = &qinfo->sgl[(r->request_id & 0x0ff) * MAX_SGLS];
 
 	if (bio_data_dir(r->bio) == WRITE)
@@ -1028,6 +1032,10 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 		result = -EIO;
 		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
+		break;
+
+	case SOP_RESPONSE_INTERNAL_CMD_FAIL_IU_TYPE:
+		result = -EIO;
 		break;
 
 	default:
@@ -1637,7 +1645,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	}
 
 	signature = readq(&h->pqireg->signature);
-	if (memcmp("PQI DREG", &signature, sizeof(signature)) != 0) {
+	if (memcmp(SOP_SIGNATURE_STR, &signature, sizeof(signature)) != 0) {
 		dev_warn(&pdev->dev, "Device does not appear to be a PQI device\n");
 		goto bail_remap_bar;
 	}
@@ -1729,6 +1737,7 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 
 	dev_warn(&pdev->dev, "Remove called.\n");
 	h = pci_get_drvdata(pdev);
+	sop_fail_all_outstanding_io(h);
 	sop_remove_disk(h);
 	sop_delete_io_queues(h);
 	sop_delete_admin_queues(h);
@@ -1802,7 +1811,6 @@ static void __exit sop_exit(void)
 {
 	driver_remove_file(&sop_pci_driver.driver, &driver_attr_dbg_lvl);
 	pci_unregister_driver(&sop_pci_driver);
-	printk("Unregistering Blockdevice with major=%d\n", sop_major);
 	unregister_blkdev(sop_major, SOP);
 	kthread_stop(sop_thread);
 	printk("%s: Driver unloaded\n", SOP);
@@ -2096,7 +2104,6 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 		goto sg_map_fail;
 	}
 	atomic_inc(&qinfo->cur_qdepth);
-	qinfo->max_qdepth++;
 	if (qinfo->max_qdepth < atomic_read(&qinfo->cur_qdepth))
 		qinfo->max_qdepth = atomic_read(&qinfo->cur_qdepth);
 	atomic_inc(&h->cmd_pending);
@@ -2112,7 +2119,8 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	sop_scatter_gather(h, qinfo, num_sg, r, sgl, &ser->xfer_size);
 
 	r->xfer_size = cpu_to_le32(ser->xfer_size);
-	
+	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
+
 	/* Submit it to the device */
 	writew(qinfo->iq->unposted_index, qinfo->iq->pi);
 
@@ -2124,6 +2132,13 @@ sg_map_fail:
 alloc_elem_fail:
 	free_request(h, qinfo_to_qid(qinfo), request_id);
 	return -EBUSY;
+}
+
+static void sop_queue_cmd(struct sop_wait_queue *wq, struct bio *bio)
+{
+	if (bio_list_empty(&wq->iq_cong))
+		add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
+	bio_list_add(&wq->iq_cong, bio);
 }
 
 static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
@@ -2151,11 +2166,8 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 		/* Try to submit the command */
 		result = sop_process_bio(h, bio, qinfo);
 
-	if (unlikely(result)) {
-		if (bio_list_empty(&wq->iq_cong))
-			add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
-		bio_list_add(&wq->iq_cong, bio);
-	}
+	if (unlikely(result))
+		sop_queue_cmd(wq, bio);
 
 	spin_unlock_irq(&qinfo->iq->qlock);
 
@@ -2441,19 +2453,157 @@ static int sop_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, u
 	return 0;
 }
 
-static void sop_timeout_ios(struct queue_info *q, uint flag)
+static int sop_add_timeout(struct queue_info *q, uint timeout)
 {
+	int tmo_slot;
+
+	tmo_slot = ((atomic_read(&q->tmo.cur_slot) + timeout) % MAX_SOP_TIMEOUT);
+	atomic_inc(&q->tmo.time_slot[tmo_slot]);
+	return tmo_slot;
+}
+
+static void sop_rem_timeout(struct queue_info *q, uint tmo_slot)
+{
+	if(atomic_read(&q->tmo.time_slot[tmo_slot]) == 0) {
+		printk(KERN_ERR "Q[%d] TM slot[%d] count is 0, cur_slot=%d\n",
+			qinfo_to_qid(q), tmo_slot, 
+			atomic_read(&q->tmo.cur_slot));
+		return;
+	}
+	atomic_dec(&q->tmo.time_slot[tmo_slot]);
+}
+
+static void sop_fail_cmd(struct queue_info *q, struct sop_request *r)
+{
+	/* Fill a fake error completion in r->response */
+	r->response[0] = SOP_RESPONSE_INTERNAL_CMD_FAIL_IU_TYPE;
+	r->response_accumulated = 1;
+
+	/* Call complete bio with this parameter */
+	sop_complete_bio(q->h, q, r);
+}
+
+/* To be called instead of sop_process_bio in case of abort */
+static int sop_fail_bio(struct sop_device *h, struct bio *bio, 
+			struct queue_info *q)
+{
+	/* Call complete bio with error */
+	bio_endio(bio, -EIO);
+
+	return 0;
+}
+
+#define SOP_ERR_NONE		0
+#define	SOP_ERR_DEV_REM		-1
+#define SOP_ERR_DEV_RESET	-2
+/* Return 0 if no global reason found */
+static int sop_device_error_state(struct sop_device *h)
+{
+	__iomem void *sig = &h->pqireg->signature;
+	u64 signature = 0;
+	u16 state = 0;
+
+	/* Detect Surprise removal */
+	if (safe_readq(sig, &signature, &h->pqireg->signature)) {
+		return SOP_ERR_DEV_REM;
+	}
+
+	if (memcmp(SOP_SIGNATURE_STR, &signature, sizeof(signature)) != 0) {
+		return SOP_ERR_DEV_REM;
+	}
+
+	/* Detect for surprise reset */
+	if (safe_readw(sig, &state, &h->pqireg->pqi_device_status)) {
+		return SOP_ERR_DEV_REM;
+	}
+	if (state == PQI_ERROR)
+		return SOP_ERR_DEV_RESET;
+
+
+	/* No other global reason found */
+	return SOP_ERR_NONE;
+}
+
+/* tmo_slot is negative if all commands are to be failed */
+static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int action)
+{
+	int rqid, maxid;
+	int count = 0;
+	struct sop_request *ser;
+
+	/* Update time slot to include all commands for error cases */
+	if (action != SOP_ERR_NONE)
+		tmo_slot = -1;
+
+	/* Process timeout by linear search of request bits in qinfo*/
+	maxid = q->qdepth - 1;
+	for_each_set_bit(rqid, q->request_bits, maxid) {
+		ser = &q->request[rqid & 0x00ff];
+		if ((tmo_slot > 0) && (ser->tmo_slot != tmo_slot))
+			continue;
+
+		/* Found a timed out command, process timeout */
+		count++;
+
+		switch (action) {
+		case SOP_ERR_DEV_REM:
+			sop_fail_cmd(q, ser);
+			break;
+
+		case SOP_ERR_NONE:
+			/* TODO: Need to abort this command */
+			/* For now, fall thru and reset as below */
+			action = SOP_ERR_DEV_RESET;
+
+		case SOP_ERR_DEV_RESET:
+			/*
+			 * Requeue this command and 
+			 * reset the controller at end 
+			 */
+			sop_queue_cmd(q->wq, ser->bio);
+			break;
+		}
+	}
+
+	return count;
+}
+
+static void sop_timeout_ios(struct queue_info *q, int state)
+{
+	int cmd_pend;
+	u8 cur_slot;
+
+	/* Update the current slot */
+	cur_slot = (atomic_read(&q->tmo.cur_slot) + 1) % MAX_SOP_TIMEOUT;
+	atomic_set(&q->tmo.cur_slot, cur_slot);
+
+	/* Check if the curremnt slot is empty, otherwise... */
+	cmd_pend = atomic_read(&q->tmo.time_slot[cur_slot]);
+	if (cmd_pend == 0)
+		return;
+
+	dev_warn(&q->h->pdev->dev, "SOP timeout!! %d cmds left on slot[%d]\n",
+				cmd_pend, cur_slot);
+
+	/* Process timeout */
+	cmd_pend -= sop_timeout_queued_cmds(q, cur_slot, state);
+
+	if ((state == SOP_ERR_NONE) && cmd_pend)
+		dev_warn(&q->h->pdev->dev, "SOP timeout!! Cannot account for %d cmds\n",
+				cmd_pend);
 }
 
 static void sop_timeout_admin(struct sop_device *h)
 {
 }
 
-static void sop_resubmit_waitq(struct queue_info *qinfo)
+static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 {
 	struct sop_wait_queue *wq;
 	struct sop_device *h;
-	int ret, at_least_one_bio;
+	int ret;
+	int (*bio_process)(struct sop_device *h, struct bio *bio,
+			   struct queue_info *qinfo);
 
 	h = qinfo->h;
 	wq = qinfo->wq;
@@ -2463,31 +2613,59 @@ static void sop_resubmit_waitq(struct queue_info *qinfo)
 		return;
 	}
 
-	at_least_one_bio = 0;
+	if (fail)
+		bio_process = sop_fail_bio;
+	else
+		bio_process = sop_process_bio;
 	spin_lock_irq(&qinfo->iq->qlock);
 	while (bio_list_peek(&wq->iq_cong)) {
 		struct bio *bio = bio_list_pop(&wq->iq_cong);
 
 		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: proc bio %p Q[%d], PI %d CI %d!\n",
 			bio, qinfo->iq->queue_id, qinfo->iq->unposted_index, *(qinfo->iq->ci)); */
-		at_least_one_bio = 1;
-		if ((ret = sop_process_bio(h, bio, qinfo))) {
+
+		if ((ret = bio_process(h, bio, qinfo))) {
 			/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: Error %d for [%d]!\n",
 						ret, qinfo->iq->queue_id); */
 			bio_list_add_head(&wq->iq_cong, bio);
 			break;
 		}
+		if (bio_list_empty(&wq->iq_cong))
+			remove_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
+
 		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: done bio %p Q[%d], PI %d CI %d!\n",
 			bio, qinfo->iq->queue_id, qinfo->iq->unposted_index, *(qinfo->iq->ci)); */
 	}
-	if (at_least_one_bio && bio_list_empty(&wq->iq_cong))
-		remove_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
 	spin_unlock_irq(&qinfo->iq->qlock);
+}
+
+/* Run time controller reset */
+static void sop_reset_controller(struct sop_device *h)
+{
+	int rc;
+
+	rc = sop_init_time_host_reset(h);
+	if (rc)
+		goto reset_err;
+
+	/* next, sop_create_admin_queues (no alloc) */
+
+	/* Next: sop_create_io_queue for all pairs */
+
+	/* Next: sop_resubmit_waitq for all Q */
+
+	return;
+
+reset_err:
+	/* Error handling */
+	return;
+
 }
 
 static int sop_thread_proc(void *data)
 {
 	struct sop_device *h;
+	int action = SOP_ERR_NONE;
 
 	while (!kthread_should_stop()) {
 		__set_current_state(TASK_RUNNING);
@@ -2495,6 +2673,9 @@ static int sop_thread_proc(void *data)
 		list_for_each_entry(h, &dev_list, node) {
 			int i;
 			struct queue_info *q = &h->qinfo[0];
+
+			/* Decide if there is any global errofr */
+			action = sop_device_error_state(h);
 
 			/* Admin queue */
 			spin_lock_irq(&q->oq->qlock);
@@ -2515,12 +2696,13 @@ static int sop_thread_proc(void *data)
 				sop_msix_handle_ioq(q);
 
 				/* Handle errors */
-				sop_timeout_ios(q, true);
+				sop_timeout_ios(q, action);
 				spin_unlock_irq(&q->oq->qlock);
 
-				/* Process wait queue */
-				sop_resubmit_waitq(q);
-
+				if (action == SOP_ERR_NONE) {
+					/* Process wait queue */
+					sop_resubmit_waitq(q, false);
+				}
 			}
 
 			if (sop_dbg_lvl == 1) {
@@ -2535,12 +2717,45 @@ static int sop_thread_proc(void *data)
 						h->qinfo[i].max_qdepth);
 				}
 			}
+
+			if (action == SOP_ERR_DEV_RESET) {
+				/* Reset the controller */
+				sop_reset_controller(h);
+			}
 		}
 		spin_unlock(&dev_list_lock);
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule_timeout(HZ);
 	}
 	return 0;
+}
+
+static void sop_fail_all_outstanding_io(struct sop_device *h)
+{
+	int i;
+	struct queue_info *q = &h->qinfo[0];
+
+	spin_lock_irq(&q->oq->qlock);
+	/* TODO: Handle Admin commands */
+	spin_unlock_irq(&q->oq->qlock);
+
+	/* Io Queue */
+	for (i = 1; i < h->nr_queue_pairs; i++) {
+		q = &h->qinfo[i];
+
+		if (!q)
+			continue;
+		
+		spin_lock_irq(&q->oq->qlock);
+		/* Process any pending ISR */
+		sop_msix_handle_ioq(q);
+		/* Fail all outstanding commands given to HW queue */
+		sop_timeout_queued_cmds(q, -1, SOP_ERR_DEV_REM);
+		spin_unlock_irq(&q->oq->qlock);
+
+		/* Fail all commands waiting in internal queue */
+		sop_resubmit_waitq(q, true);
+	}
 }
 
 /* This gets optimized away, but will fail to compile if we mess up
