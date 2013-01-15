@@ -2629,6 +2629,21 @@ static void sop_requeue_all_outstanding_io(struct sop_device *h)
 	}
 }
 
+static void sop_reinit_all_ioq(struct sop_device *h)
+{
+	int i;
+	struct queue_info *q;
+
+	/* Io Queue */
+	for (i = 1; i < h->nr_queue_pairs; i++) {
+		q = &h->qinfo[i];
+
+		*(q->oq->pi) = q->oq->unposted_index = 0;
+		*(q->iq->ci) = q->iq->unposted_index = 0;
+		q->iq->local_pi = 0;
+	}
+}
+
 /* Run time controller reset */
 static void sop_reset_controller(struct work_struct *work)
 {
@@ -2644,6 +2659,7 @@ static void sop_reset_controller(struct work_struct *work)
 		goto reset_err;
 
 	sop_requeue_all_outstanding_io(h);
+	sop_reinit_all_ioq(h);
 
 	rc = sop_create_admin_queues(h);
 	if (rc)
