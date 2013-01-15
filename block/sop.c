@@ -1318,6 +1318,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 	struct pqi_create_operational_queue_request *r;
 	int request_id;
 	volatile struct pqi_create_operational_queue_response *resp;
+	__iomem u16 *pi_or_ci;
 
 	if (direction == PQI_DIR_FROM_DEVICE) {
 		ioq = q->oq;
@@ -1345,12 +1346,12 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 		free_request(h, 0, request_id);
 		goto bail_out;
 	}
+
+	pi_or_ci = ((void *) h->pqireg) + le64_to_cpu(resp->index_offset);
 	if (direction == PQI_DIR_TO_DEVICE)
-		h->qinfo[queue_pair_index].iq->pi = ((void *) h->pqireg) +
-						le64_to_cpu(resp->index_offset);
+		pqi_device_queue_init(ioq, pi_or_ci, ioq->ci);
 	else
-		h->qinfo[queue_pair_index].oq->ci = ((void *) h->pqireg) +
-						le64_to_cpu(resp->index_offset);
+		pqi_device_queue_init(ioq, ioq->pi, pi_or_ci);
 	free_request(h, 0, request_id);
 	return 0;
 bail_out:
