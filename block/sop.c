@@ -1525,7 +1525,7 @@ static int sop_wait_for_host_reset_ack(struct sop_device *h, uint tmo_ms)
 	return -1;
 }
 
-#define ADMIN_RESET_TMO_MS		3000
+#define ADMIN_RESET_TMO_MS		5000
 static int sop_init_time_host_reset(struct sop_device *h)
 {
 	dev_warn(&h->pdev->dev, "Resetting host\n");
@@ -2489,14 +2489,14 @@ static int sop_device_error_state(struct sop_device *h)
 }
 
 /* tmo_slot is negative if all commands are to be failed */
-static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int action)
+static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int *action)
 {
 	int rqid, maxid;
 	int count = 0;
 	struct sop_request *ser;
 
 	/* Update time slot to include all commands for error cases */
-	if (action != SOP_ERR_NONE)
+	if (*action != SOP_ERR_NONE)
 		tmo_slot = -1;
 
 	/* Process timeout by linear search of request bits in qinfo*/
@@ -2509,7 +2509,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int actio
 		/* Found a timed out command, process timeout */
 		count++;
 
-		switch (action) {
+		switch (*action) {
 		case SOP_ERR_DEV_REM:
 			sop_fail_cmd(q, ser);
 			break;
@@ -2517,7 +2517,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int actio
 		case SOP_ERR_NONE:
 			/* TODO: Need to abort this command */
 			/* For now, fall thru and reset as below */
-			action = SOP_ERR_DEV_RESET;
+			*action = SOP_ERR_DEV_RESET;
 
 		case SOP_ERR_DEV_RESET:
 			/*
@@ -2532,10 +2532,11 @@ static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int actio
 	return count;
 }
 
-static void sop_timeout_ios(struct queue_info *q, int state)
+static void sop_timeout_ios(struct queue_info *q, int *state)
 {
 	int cmd_pend;
 	u8 cur_slot;
+	int action = *state;
 
 	/* Update the current slot */
 	cur_slot = (atomic_read(&q->tmo.cur_slot) + 1) % MAX_SOP_TIMEOUT;
@@ -2552,7 +2553,7 @@ static void sop_timeout_ios(struct queue_info *q, int state)
 	/* Process timeout */
 	cmd_pend -= sop_timeout_queued_cmds(q, cur_slot, state);
 
-	if ((state == SOP_ERR_NONE) && cmd_pend)
+	if ((action == SOP_ERR_NONE) && cmd_pend)
 		dev_warn(&q->h->pdev->dev, "SOP timeout!! Cannot account for %d cmds\n",
 				cmd_pend);
 }
@@ -2603,20 +2604,51 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 	spin_unlock_irq(&qinfo->iq->qlock);
 }
 
+static void sop_requeue_all_outstanding_io(struct sop_device *h)
+{
+	int i;
+	struct queue_info *q;
+	int action = SOP_ERR_DEV_RESET;
+
+	/* Io Queue */
+	for (i = 1; i < h->nr_queue_pairs; i++) {
+		q = &h->qinfo[i];
+
+		if (!q)
+			continue;
+		
+		spin_lock_irq(&q->oq->qlock);
+
+		/* Process any pending ISR */
+		sop_msix_handle_ioq(q);
+		/* Requeue all outstanding commands given to this HW queue */
+		sop_timeout_queued_cmds(q, -1, &action);
+
+		spin_unlock_irq(&q->oq->qlock);
+	}
+}
+
 /* Run time controller reset */
-static void sop_reset_controller(struct sop_device *h)
+static void sop_reset_controller(struct work_struct *work)
 {
 	int rc;
 	int i;
+	struct sop_device *h;
 
+	h =  container_of(work, struct sop_device, dwork.work);
+
+	dev_warn(&h->pdev->dev, "%s: Starting Reset\n", h->devname);
 	rc = sop_init_time_host_reset(h);
 	if (rc)
 		goto reset_err;
+
+	sop_requeue_all_outstanding_io(h);
 
 	rc = sop_create_admin_queues(h);
 	if (rc)
 		goto reset_err;
 
+	dev_warn(&h->pdev->dev, "Re creating %d I/O queue pairs\n", h->nr_queue_pairs);
 	/* Re create all the queue pairs */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_FROM_DEVICE))
@@ -2625,14 +2657,17 @@ static void sop_reset_controller(struct sop_device *h)
 			goto reset_err;
 	}
 
+	dev_warn(&h->pdev->dev, "I/O queue created - Resubmitting pending commands\n");
 	/* Next: sop_resubmit_waitq for all Q */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		sop_resubmit_waitq(&h->qinfo[i], false);
 	}
 
+	dev_warn(&h->pdev->dev, "Reset Complete\n");
 	return;
 
 reset_err:
+	dev_warn(&h->pdev->dev, "Reset failed\n");
 	/* Error handling */
 	return;
 
@@ -2672,7 +2707,7 @@ static int sop_thread_proc(void *data)
 				sop_msix_handle_ioq(q);
 
 				/* Handle errors */
-				sop_timeout_ios(q, action);
+				sop_timeout_ios(q, &action);
 				spin_unlock_irq(&q->oq->qlock);
 
 				if (action == SOP_ERR_NONE) {
@@ -2694,15 +2729,26 @@ static int sop_thread_proc(void *data)
 				}
 			}
 
+			if (sop_dbg_lvl == 2) {
+				/* Reset the level */
+				sop_dbg_lvl = 0;
+
+				printk("@@@@ Trying to ASSERT the FW...\n");
+				/* Perform illegal write to BAR */
+				writel(0x10, &h->pqireg->error_data);
+			}
+
 			if (action == SOP_ERR_DEV_RESET) {
 				/* Reset the controller */
-				sop_reset_controller(h);
+				INIT_DELAYED_WORK(&h->dwork, sop_reset_controller);
+				schedule_delayed_work(&h->dwork, 5*HZ);
 			}
 		}
 		spin_unlock(&dev_list_lock);
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule_timeout(HZ);
 	}
+
 	return 0;
 }
 
@@ -2710,6 +2756,7 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 {
 	int i;
 	struct queue_info *q = &h->qinfo[0];
+	int action = SOP_ERR_DEV_REM;
 
 	spin_lock_irq(&q->oq->qlock);
 	/* TODO: Handle Admin commands */
@@ -2726,7 +2773,7 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 		/* Process any pending ISR */
 		sop_msix_handle_ioq(q);
 		/* Fail all outstanding commands given to HW queue */
-		sop_timeout_queued_cmds(q, -1, SOP_ERR_DEV_REM);
+		sop_timeout_queued_cmds(q, -1, &action);
 		spin_unlock_irq(&q->oq->qlock);
 
 		/* Fail all commands waiting in internal queue */

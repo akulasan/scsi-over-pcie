@@ -326,6 +326,7 @@ struct sop_device {
 #define qinfo_to_qid(qinfo) (qpindex_from_pqiq(qinfo->oq))
 #define qpindex_to_qid(qpindex, to_device) (((qpindex) * 2) + (!!to_device))
 	int instance;
+	struct delayed_work dwork;
 	sector_t capacity;
 	int block_size;
 	struct request_queue *rq;
