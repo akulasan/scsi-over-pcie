@@ -2776,6 +2776,13 @@ static int sop_thread_proc(void *data)
 				writel(0x10, &h->pqireg->error_data);
 			}
 
+			if (sop_dbg_lvl == 3) {
+				/* Reset the level */
+				sop_dbg_lvl = 0;
+
+				h->flags |= SOP_FLAGS_MASK_DO_RESET;
+			}
+
 			if ((h->flags & SOP_FLAGS_MASK_DO_RESET)) {
 
 				/* Reset is being handled - clear the flag */
