@@ -1567,9 +1567,12 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail_alloc_drvdata;
 	}
 
+	/* Initialize device structure */
 	for (i = 0; i < MAX_TOTAL_QUEUE_PAIRS; i++)
 		h->qinfo[i].h = h;
 	sprintf(h->devname, SOP"%d", h->instance);
+	INIT_DELAYED_WORK(&h->dwork, NULL);
+	h->flags = 0;
 
 	h->pdev = pdev;
 	pci_set_drvdata(pdev, h);
@@ -1704,6 +1707,7 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 
 	dev_warn(&pdev->dev, "Remove called.\n");
 	h = pci_get_drvdata(pdev);
+	cancel_delayed_work_sync(&h->dwork);
 	sop_fail_all_outstanding_io(h);
 	sop_remove_disk(h);
 	sop_delete_io_queues(h);
@@ -2470,6 +2474,10 @@ static int sop_device_error_state(struct sop_device *h)
 	u64 signature = 0;
 	u16 state = 0;
 
+	/* Do not check HW if any action is pending */
+	if (SOP_DEVICE_BUSY(h))
+		return SOP_ERR_NONE;
+
 	/* Detect Surprise removal */
 	if (safe_readq(sig, &signature, &h->pqireg->signature)) {
 		return SOP_ERR_DEV_REM;
@@ -2483,8 +2491,10 @@ static int sop_device_error_state(struct sop_device *h)
 	if (safe_readw(sig, &state, &h->pqireg->pqi_device_status)) {
 		return SOP_ERR_DEV_REM;
 	}
-	if (state == PQI_ERROR)
+	if (state == PQI_ERROR) {
+		h->flags |= SOP_FLAGS_MASK_DO_RESET;
 		return SOP_ERR_DEV_RESET;
+	}
 
 
 	/* No other global reason found */
@@ -2492,14 +2502,14 @@ static int sop_device_error_state(struct sop_device *h)
 }
 
 /* tmo_slot is negative if all commands are to be failed */
-static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int *action)
+static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int action)
 {
 	int rqid, maxid;
 	int count = 0;
 	struct sop_request *ser;
 
 	/* Update time slot to include all commands for error cases */
-	if (*action != SOP_ERR_NONE)
+	if (action != SOP_ERR_NONE)
 		tmo_slot = -1;
 
 	/* Process timeout by linear search of request bits in qinfo*/
@@ -2512,7 +2522,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int *acti
 		/* Found a timed out command, process timeout */
 		count++;
 
-		switch (*action) {
+		switch (action) {
 		case SOP_ERR_DEV_REM:
 			sop_fail_cmd(q, ser);
 			break;
@@ -2520,7 +2530,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int *acti
 		case SOP_ERR_NONE:
 			/* TODO: Need to abort this command */
 			/* For now, fall thru and reset as below */
-			*action = SOP_ERR_DEV_RESET;
+			q->h->flags |= SOP_FLAGS_MASK_DO_RESET;
 
 		case SOP_ERR_DEV_RESET:
 			/*
@@ -2535,11 +2545,10 @@ static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int *acti
 	return count;
 }
 
-static void sop_timeout_ios(struct queue_info *q, int *state)
+static void sop_timeout_ios(struct queue_info *q, int action)
 {
 	int cmd_pend;
 	u8 cur_slot;
-	int action = *state;
 
 	/* Update the current slot */
 	cur_slot = (atomic_read(&q->tmo.cur_slot) + 1) % MAX_SOP_TIMEOUT;
@@ -2554,7 +2563,7 @@ static void sop_timeout_ios(struct queue_info *q, int *state)
 				cmd_pend, cur_slot);
 
 	/* Process timeout */
-	cmd_pend -= sop_timeout_queued_cmds(q, cur_slot, state);
+	cmd_pend -= sop_timeout_queued_cmds(q, cur_slot, action);
 
 	if ((action == SOP_ERR_NONE) && cmd_pend)
 		dev_warn(&q->h->pdev->dev, "SOP timeout!! Cannot account for %d cmds\n",
@@ -2611,7 +2620,6 @@ static void sop_requeue_all_outstanding_io(struct sop_device *h)
 {
 	int i;
 	struct queue_info *q;
-	int action = SOP_ERR_DEV_RESET;
 
 	/* Io Queue */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
@@ -2625,7 +2633,7 @@ static void sop_requeue_all_outstanding_io(struct sop_device *h)
 		/* Process any pending ISR */
 		sop_msix_handle_ioq(q);
 		/* Requeue all outstanding commands given to this HW queue */
-		sop_timeout_queued_cmds(q, -1, &action);
+		sop_timeout_queued_cmds(q, -1, SOP_ERR_DEV_RESET);
 
 		spin_unlock_irq(&q->oq->qlock);
 	}
@@ -2646,15 +2654,19 @@ static void sop_reinit_all_ioq(struct sop_device *h)
 	}
 }
 
+#define	MAX_RESET_COUNT	3
+
 /* Run time controller reset */
 static void sop_reset_controller(struct work_struct *work)
 {
 	int rc;
 	int i;
+	int reset_count=0;
 	struct sop_device *h;
 
 	h =  container_of(work, struct sop_device, dwork.work);
 
+start_reset:
 	dev_warn(&h->pdev->dev, "%s: Starting Reset\n", h->devname);
 	rc = sop_init_time_host_reset(h);
 	if (rc)
@@ -2683,11 +2695,18 @@ static void sop_reset_controller(struct work_struct *work)
 	}
 
 	dev_warn(&h->pdev->dev, "Reset Complete\n");
+	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, (volatile unsigned long *)&h->flags);
 	return;
 
 reset_err:
-	dev_warn(&h->pdev->dev, "Reset failed\n");
-	/* Error handling */
+	reset_count++;
+	dev_warn(&h->pdev->dev, "Reset failed, attempt #%d of %d\n", reset_count,
+		MAX_RESET_COUNT);
+	if (reset_count < MAX_RESET_COUNT)
+		goto start_reset;
+
+	/* TODO: Error handling: Mark Dead? */
+	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, (volatile unsigned long *)&h->flags);
 	return;
 
 }
@@ -2695,7 +2714,6 @@ reset_err:
 static int sop_thread_proc(void *data)
 {
 	struct sop_device *h;
-	int action = SOP_ERR_NONE;
 
 	while (!kthread_should_stop()) {
 		__set_current_state(TASK_RUNNING);
@@ -2703,6 +2721,7 @@ static int sop_thread_proc(void *data)
 		list_for_each_entry(h, &dev_list, node) {
 			int i;
 			struct queue_info *q = &h->qinfo[0];
+			int action;
 
 			/* Decide if there is any global errofr */
 			action = sop_device_error_state(h);
@@ -2726,10 +2745,10 @@ static int sop_thread_proc(void *data)
 				sop_msix_handle_ioq(q);
 
 				/* Handle errors */
-				sop_timeout_ios(q, &action);
+				sop_timeout_ios(q, action);
 				spin_unlock_irq(&q->oq->qlock);
 
-				if (action == SOP_ERR_NONE) {
+				if (!SOP_DEVICE_BUSY(h)) {
 					/* Process wait queue */
 					sop_resubmit_waitq(q, false);
 				}
@@ -2757,10 +2776,19 @@ static int sop_thread_proc(void *data)
 				writel(0x10, &h->pqireg->error_data);
 			}
 
-			if (action == SOP_ERR_DEV_RESET) {
-				/* Reset the controller */
-				INIT_DELAYED_WORK(&h->dwork, sop_reset_controller);
-				schedule_delayed_work(&h->dwork, 5*HZ);
+			if ((h->flags & SOP_FLAGS_MASK_DO_RESET)) {
+
+				/* Reset is being handled - clear the flag */
+				h->flags &= ~SOP_FLAGS_MASK_DO_RESET;
+
+				if (!test_and_set_bit(SOP_FLAGS_BITPOS_RESET_PEND,
+					(volatile unsigned long *)&h->flags)) {
+
+					/* Reset the controller */
+					printk("Scheduling a reset for the controller...\n");
+					PREPARE_DELAYED_WORK(&h->dwork, sop_reset_controller);
+					schedule_delayed_work(&h->dwork, HZ);
+				}
 			}
 		}
 		spin_unlock(&dev_list_lock);
@@ -2775,7 +2803,6 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 {
 	int i;
 	struct queue_info *q = &h->qinfo[0];
-	int action = SOP_ERR_DEV_REM;
 
 	spin_lock_irq(&q->oq->qlock);
 	/* TODO: Handle Admin commands */
@@ -2792,7 +2819,7 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 		/* Process any pending ISR */
 		sop_msix_handle_ioq(q);
 		/* Fail all outstanding commands given to HW queue */
-		sop_timeout_queued_cmds(q, -1, &action);
+		sop_timeout_queued_cmds(q, -1, SOP_ERR_DEV_REM);
 		spin_unlock_irq(&q->oq->qlock);
 
 		/* Fail all commands waiting in internal queue */

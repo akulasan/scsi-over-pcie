@@ -306,6 +306,13 @@ struct sop_device {
 	struct pci_dev *pdev;
 	struct pqi_capability pqicap;
 	__iomem struct pqi_device_register_set *pqireg;
+#define SOP_FLAGS_BITPOS_DO_RESET	0
+#define SOP_FLAGS_MASK_DO_RESET		1
+#define SOP_FLAGS_BITPOS_DO_REM		1
+#define SOP_FLAGS_MASK_DO_REM		2
+#define SOP_FLAGS_BITPOS_RESET_PEND	2
+#define SOP_FLAGS_MASK_RESET_PEND	4
+	u32 flags;
 #define MAX_IO_QUEUE_PAIRS 32 
 #define MAX_TOTAL_QUEUE_PAIRS (MAX_IO_QUEUE_PAIRS + 1)
 	int nr_queue_pairs; /* total number of *pairs* of queues */
@@ -333,6 +340,11 @@ struct sop_device {
 	struct gendisk *disk;
 	int max_hw_sectors;
 };
+
+#define	SOP_DEVICE_BUSY(_h)	(((_h)->flags) & (\
+					SOP_FLAGS_MASK_DO_RESET | \
+					SOP_FLAGS_MASK_DO_REM | \
+					SOP_FLAGS_MASK_RESET_PEND))
 
 #pragma pack()
 
