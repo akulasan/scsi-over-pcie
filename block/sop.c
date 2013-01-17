@@ -2679,7 +2679,8 @@ start_reset:
 	if (rc)
 		goto reset_err;
 
-	dev_warn(&h->pdev->dev, "Re creating %d I/O queue pairs\n", h->nr_queue_pairs);
+	dev_warn(&h->pdev->dev, "Re creating %d I/O queue pairs\n", 
+		h->nr_queue_pairs-1);
 	/* Re create all the queue pairs */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_FROM_DEVICE))
@@ -2711,6 +2712,95 @@ reset_err:
 
 }
 
+static void sop_process_driver_debug(struct sop_device *h)
+{
+	if (sop_dbg_lvl == 1) {
+		int i;
+
+		sop_dbg_lvl = 0;
+		printk("@@@@ Total CMD Pending= %d Max = %d @@@@\n", 
+				atomic_read(&h->cmd_pending),
+				h->max_cmd_pending);
+		for (i = 1; i < h->nr_queue_pairs; i++) {
+			printk("        OQ depth[%d] = %d, Max %d\n", i,
+				atomic_read(&h->qinfo[i].cur_qdepth),
+				h->qinfo[i].max_qdepth);
+		}
+	}
+
+	if (sop_dbg_lvl == 2) {
+		/* Reset the level */
+		sop_dbg_lvl = 0;
+
+		printk("@@@@ Trying to ASSERT the FW...\n");
+		/* Perform illegal write to BAR */
+		writel(0x10, &h->pqireg->error_data);
+	}
+
+	if (sop_dbg_lvl == 3) {
+		/* Reset the level */
+		sop_dbg_lvl = 0;
+
+		h->flags |= SOP_FLAGS_MASK_DO_RESET;
+	}
+
+}
+
+static void sop_process_dev_timer(struct sop_device *h)
+{
+	int i;
+	struct queue_info *q = &h->qinfo[0];
+	int action;
+
+	/* Decide if there is any global errofr */
+	action = sop_device_error_state(h);
+
+	/* Admin queue */
+	spin_lock_irq(&q->oq->qlock);
+	sop_msix_handle_adminq(q);
+	sop_timeout_admin(h);
+	spin_unlock_irq(&q->oq->qlock);
+
+	/* Io Queue */
+	for (i = 1; i < h->nr_queue_pairs; i++) {
+		q = &h->qinfo[i];
+
+		if (!q)
+			continue;
+		
+		spin_lock_irq(&q->oq->qlock);
+
+		/* Process any pending ISR */
+		sop_msix_handle_ioq(q);
+
+		/* Handle errors */
+		sop_timeout_ios(q, action);
+		spin_unlock_irq(&q->oq->qlock);
+
+		if (!SOP_DEVICE_BUSY(h)) {
+			/* Process wait queue */
+			sop_resubmit_waitq(q, false);
+		}
+	}
+
+	sop_process_driver_debug(h);
+
+	if ((h->flags & SOP_FLAGS_MASK_DO_RESET)) {
+
+		/* Reset is being handled - clear the flag */
+		h->flags &= ~SOP_FLAGS_MASK_DO_RESET;
+
+		if (!test_and_set_bit(SOP_FLAGS_BITPOS_RESET_PEND,
+			(volatile unsigned long *)&h->flags)) {
+
+			/* Reset the controller */
+			printk("Scheduling a reset for the controller...\n");
+			PREPARE_DELAYED_WORK(&h->dwork, sop_reset_controller);
+			schedule_delayed_work(&h->dwork, HZ);
+		}
+	}
+}
+
 static int sop_thread_proc(void *data)
 {
 	struct sop_device *h;
@@ -2718,86 +2808,8 @@ static int sop_thread_proc(void *data)
 	while (!kthread_should_stop()) {
 		__set_current_state(TASK_RUNNING);
 		spin_lock(&dev_list_lock);
-		list_for_each_entry(h, &dev_list, node) {
-			int i;
-			struct queue_info *q = &h->qinfo[0];
-			int action;
-
-			/* Decide if there is any global errofr */
-			action = sop_device_error_state(h);
-
-			/* Admin queue */
-			spin_lock_irq(&q->oq->qlock);
-			sop_msix_handle_adminq(q);
-			sop_timeout_admin(h);
-			spin_unlock_irq(&q->oq->qlock);
-
-			/* Io Queue */
-			for (i = 1; i < h->nr_queue_pairs; i++) {
-				q = &h->qinfo[i];
-
-				if (!q)
-					continue;
-				
-				spin_lock_irq(&q->oq->qlock);
-
-				/* Process any pending ISR */
-				sop_msix_handle_ioq(q);
-
-				/* Handle errors */
-				sop_timeout_ios(q, action);
-				spin_unlock_irq(&q->oq->qlock);
-
-				if (!SOP_DEVICE_BUSY(h)) {
-					/* Process wait queue */
-					sop_resubmit_waitq(q, false);
-				}
-			}
-
-			if (sop_dbg_lvl == 1) {
-				int i;
-
-				sop_dbg_lvl = 0;
-				printk("@@@@ Total CMD Pending= %d Max = %d @@@@\n", atomic_read(&h->cmd_pending),
-						h->max_cmd_pending);
-				for (i = 1; i < h->nr_queue_pairs; i++) {
-					printk("        OQ depth[%d] = %d, Max %d\n", i,
-						atomic_read(&h->qinfo[i].cur_qdepth),
-						h->qinfo[i].max_qdepth);
-				}
-			}
-
-			if (sop_dbg_lvl == 2) {
-				/* Reset the level */
-				sop_dbg_lvl = 0;
-
-				printk("@@@@ Trying to ASSERT the FW...\n");
-				/* Perform illegal write to BAR */
-				writel(0x10, &h->pqireg->error_data);
-			}
-
-			if (sop_dbg_lvl == 3) {
-				/* Reset the level */
-				sop_dbg_lvl = 0;
-
-				h->flags |= SOP_FLAGS_MASK_DO_RESET;
-			}
-
-			if ((h->flags & SOP_FLAGS_MASK_DO_RESET)) {
-
-				/* Reset is being handled - clear the flag */
-				h->flags &= ~SOP_FLAGS_MASK_DO_RESET;
-
-				if (!test_and_set_bit(SOP_FLAGS_BITPOS_RESET_PEND,
-					(volatile unsigned long *)&h->flags)) {
-
-					/* Reset the controller */
-					printk("Scheduling a reset for the controller...\n");
-					PREPARE_DELAYED_WORK(&h->dwork, sop_reset_controller);
-					schedule_delayed_work(&h->dwork, HZ);
-				}
-			}
-		}
+		list_for_each_entry(h, &dev_list, node)
+			sop_process_dev_timer(h);
 		spin_unlock(&dev_list_lock);
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule_timeout(HZ);
