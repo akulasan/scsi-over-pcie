@@ -329,10 +329,10 @@ struct sop_device {
 	atomic_t cmd_pending;
 	u32  max_cmd_pending;
 	struct queue_info qinfo[MAX_TOTAL_QUEUE_PAIRS];
-#define qpindex_from_pqiq(pqiq) (pqiq->queue_id / 2)
+#define qpindex_from_pqiq(pqiq) (pqiq->queue_id)
 /* TODO probably do not need this - calculate from qinfo address */
 #define qinfo_to_qid(qinfo) (qpindex_from_pqiq(qinfo->oq))
-#define qpindex_to_qid(qpindex, to_device) (((qpindex) * 2) + (!!to_device))
+#define qpindex_to_qid(qpindex, to_device) (qpindex)
 	int instance;
 	struct delayed_work dwork;
 	sector_t capacity;
