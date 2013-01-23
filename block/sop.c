@@ -669,6 +669,7 @@ static void sop_free_admin_queues(struct sop_device *h)
 	free_q_request_buffers(adminq);
 	pqi_device_queue_free(h, adminq->iq);
 	pqi_device_queue_free(h, adminq->oq);
+	adminq->iq = adminq->oq = NULL;
 }
 
 #define ADMIN_QUEUE_ELEMENT_COUNT 64
@@ -1664,7 +1665,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 
 bail_io_irq:
 	for (i=1; i< h->nr_queue_pairs; i++)
-		sop_free_irq(h, 0);
+		sop_free_irq(h, i);
 bail_io_q_created:
 	sop_delete_io_queues(h);
 bail_admin_irq:
@@ -1711,8 +1712,8 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	sop_fail_all_outstanding_io(h);
 	sop_remove_disk(h);
 	sop_delete_io_queues(h);
-	sop_delete_admin_queues(h);
 	sop_free_irqs_and_disable_msix(h);
+	sop_delete_admin_queues(h);
 	if (h && h->pqireg)
 		iounmap(h->pqireg);
 	pci_release_regions(pdev);
@@ -2221,7 +2222,7 @@ static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
 			opcode, status);
 		return (status << 16);
 
-	case CHECK_CONDITION:
+	case SAM_STAT_CHECK_CONDITION:
 		dev_warn(&h->pdev->dev, "Sync command cdb=0x%x Check Condition SQ 0x%x\n",
 			opcode, sq);
 		return ((status << 16) | sq);
@@ -2272,6 +2273,10 @@ sync_req_id_fail:
 	return retval;
 }
 
+#define	IO_SLEEP_INTERVAL_MIN	2000
+#define	IO_SLEEP_INTERVAL_MAX	2500
+#define TUR_MAX_RETRY_COUNT	10
+
 #define	MAX_CDB_SIZE	16
 static int sop_get_disk_params(struct sop_device *h)
 {
@@ -2281,6 +2286,7 @@ static int sop_get_disk_params(struct sop_device *h)
 	void *vaddr;
 	int size, total_size;
 	u32 *data;
+	int retry_count;
 
 	/* 0. Allocate memory */
 	total_size = 1024;
@@ -2288,15 +2294,35 @@ static int sop_get_disk_params(struct sop_device *h)
 	if (!vaddr)
 		return -ENOMEM;
 
+	/* 0.1. Send Inquiry */
+	memset(cdb, 0, MAX_CDB_SIZE);
+	cdb[0] = INQUIRY;		/* Rest all remains 0 */
+	size = 36;
+	data = (u32 *)vaddr;
+	cdb[4] = size;
+	ret = send_sync_cdb(h, cdb, phy_addr, size, SOP_DATA_DIR_FROM_DEVICE);
+	if (ret != 0)
+		goto disk_param_err;
+
+	retry_count = 0;
+sync_send_tur:
 	/* 1. send TUR */
 	memset(cdb, 0, MAX_CDB_SIZE);
 	cdb[0] = TEST_UNIT_READY;
 	ret = send_sync_cdb(h, cdb, 0, 0, SOP_DATA_DIR_NONE);
-	if (ret < 0)
+	if (((ret >> 16) == SAM_STAT_CHECK_CONDITION) && 
+		(retry_count < TUR_MAX_RETRY_COUNT)) {
+		msleep(IO_SLEEP_INTERVAL_MIN);
+		/*  Retry */
+		retry_count++;
+		goto sync_send_tur;
+	}
+
+	if (ret)
 		goto disk_param_err;
-	/* Ignore any error return - it could be POWER ON Check Condition */
 
 	/* 2. Send Read Capacity */
+	memset(cdb, 0, MAX_CDB_SIZE);
 	cdb[0] = READ_CAPACITY;		/* Rest all remains 0 */
 	size = 2 * sizeof(u32);
 	data = (u32 *)vaddr;
@@ -2311,10 +2337,14 @@ static int sop_get_disk_params(struct sop_device *h)
 	return 0;
 
 disk_param_err:
-	dev_warn(&h->pdev->dev, "Error Getting Disk param (CDB0=0x%x return status 0x%x\n",
+	dev_warn(&h->pdev->dev, "Error Getting Disk param (CDB0=0x%x return status 0x%x)\n",
 		cdb[0], ret);
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
-	return ret;
+
+	/* Set Capacity to 0 and continue as degraded */
+	h->capacity = 0;
+	h->block_size = 0x200;
+	return 0;
 }
 
 
