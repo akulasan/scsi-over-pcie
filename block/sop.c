@@ -1226,8 +1226,17 @@ static u16 alloc_request(struct sop_device *h, u8 queue_pair_index)
 
 static void free_request(struct sop_device *h, u8 queue_pair_index, u16 request_id)
 {
-	BUG_ON((request_id >> 8) != queue_pair_index);
-	BUG_ON((request_id & 0x00ff) >= h->qinfo[queue_pair_index].qdepth);
+	if((request_id >> 8) != queue_pair_index) {
+		dev_warn(&h->pdev->dev, "Non matching QID %x in request id 0x%x.\n",
+			queue_pair_index, request_id);
+		return;
+
+	}
+	if((request_id & 0x00ff) >= h->qinfo[queue_pair_index].qdepth) {
+		dev_warn(&h->pdev->dev, "Q[%d] Request id %d exceeds qdepth %d.\n",
+			queue_pair_index, request_id, h->qinfo[queue_pair_index].qdepth);
+		return;
+	}
 	clear_bit(request_id & 0x00ff, h->qinfo[queue_pair_index].request_bits);
 }
 

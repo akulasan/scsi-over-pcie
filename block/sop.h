@@ -330,6 +330,7 @@ struct sop_device {
 	u32  max_cmd_pending;
 	struct queue_info qinfo[MAX_TOTAL_QUEUE_PAIRS];
 #define qpindex_from_pqiq(pqiq) (pqiq->queue_id / 2)
+/* TODO probably do not need this - calculate from qinfo address */
 #define qinfo_to_qid(qinfo) (qpindex_from_pqiq(qinfo->oq))
 #define qpindex_to_qid(qpindex, to_device) (((qpindex) * 2) + (!!to_device))
 	int instance;
