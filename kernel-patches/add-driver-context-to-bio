@@ -1,0 +1,43 @@
+Add driver context to bio
+
+From: Stephen M. Cameron <scameron@beardog.cce.hp.com>
+
+
+---
+ include/linux/bio.h       |   10 ++++++++++
+ include/linux/blk_types.h |    1 +
+ 2 files changed, 11 insertions(+), 0 deletions(-)
+
+diff --git a/include/linux/bio.h b/include/linux/bio.h
+index 820e7aa..f859c23 100644
+--- a/include/linux/bio.h
++++ b/include/linux/bio.h
+@@ -89,6 +89,16 @@ static inline int bio_has_allocated_vec(struct bio *bio)
+ 	return bio->bi_io_vec && bio->bi_io_vec != bio->bi_inline_vecs;
+ }
+ 
++static inline void bio_set_driver_context(struct bio *bio, void *context)
++{
++	bio->driver_context = context;
++}
++
++static inline void *bio_get_driver_context(struct bio *bio)
++{
++	return bio->driver_context;
++}
++
+ /*
+  * will die
+  */
+diff --git a/include/linux/blk_types.h b/include/linux/blk_types.h
+index cdf1119..4748056 100644
+--- a/include/linux/blk_types.h
++++ b/include/linux/blk_types.h
+@@ -62,6 +62,7 @@ struct bio {
+ 	bio_end_io_t		*bi_end_io;
+ 
+ 	void			*bi_private;
++	void			*driver_context; /* for LLDs with their own bios */
+ #ifdef CONFIG_BLK_CGROUP
+ 	/*
+ 	 * Optional ioc and css associated with this bio.  Put on bio

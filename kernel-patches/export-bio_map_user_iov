@@ -1,0 +1,21 @@
+export bio_map_user_iov
+
+From: Stephen M. Cameron <scameron@beardog.cce.hp.com>
+
+
+---
+ fs/bio.c |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/fs/bio.c b/fs/bio.c
+index b96fc6c..1fe3abe 100644
+--- a/fs/bio.c
++++ b/fs/bio.c
+@@ -1101,6 +1101,7 @@ struct bio *bio_map_user_iov(struct request_queue *q, struct block_device *bdev,
+ 
+ 	return bio;
+ }
++EXPORT_SYMBOL(bio_map_user_iov);
+ 
+ static void __bio_unmap_user(struct bio *bio)
+ {
