@@ -2184,49 +2184,67 @@ static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
 	struct sop_request *sopr = &qinfo->request[request_id];
 	volatile struct sop_cmd_response *resp = 
 		(volatile struct sop_cmd_response *)sopr->response;
-	u16 status, sq;
 	u8 iu_type;
+	int retval = -1;
+	u8 sense_off;
 
 	iu_type = resp->iu_type;
-	status = resp->status;
-	sq = resp->status_qualifier;
-	free_request(h, qinfo_to_qid(qinfo), request_id);
 
-	if (iu_type == SOP_RESPONSE_CMD_SUCCESS_IU_TYPE)
+	if (iu_type == SOP_RESPONSE_CMD_SUCCESS_IU_TYPE) {
+		free_request(h, qinfo_to_qid(qinfo), request_id);
 		return 0;
+	}
 
-	if (iu_type != SOP_RESPONSE_CMD_RESPONSE_IU_TYPE) {
+	if (iu_type == SOP_RESPONSE_CMD_RESPONSE_IU_TYPE) {
+		switch (resp->status & STATUS_MASK) {
+		case SAM_STAT_GOOD:
+		case SAM_STAT_CONDITION_MET:
+		case SAM_STAT_INTERMEDIATE:
+		case SAM_STAT_INTERMEDIATE_CONDITION_MET:
+			retval = 0;
+			break;
+
+		case SAM_STAT_BUSY:
+		case SAM_STAT_RESERVATION_CONFLICT:
+		case SAM_STAT_COMMAND_TERMINATED:
+		case SAM_STAT_TASK_SET_FULL:
+		case SAM_STAT_ACA_ACTIVE:
+		case SAM_STAT_TASK_ABORTED:
+			dev_warn(&h->pdev->dev, "Sync command cdb=0x%x failed with status 0x%x\n",
+				opcode, resp->status);
+			retval =  (resp->status << 16);
+			break;
+
+		case SAM_STAT_CHECK_CONDITION:
+			dev_warn(&h->pdev->dev, "Sync command cdb=0x%x Check Condition\n",
+				opcode);
+			retval = (resp->status << 16);
+			sense_off = 0x20 + resp->response_data_len;
+			if (resp->iu_length > sense_off) {
+				u8 *sense;
+
+				sense = (u8 *)resp + sense_off;
+				dev_warn(&h->pdev->dev, "Sense Key=0x%x ASC=0x%x ASCQ=0x%x\n",
+					sense[2], sense[12], sense[13]);
+				retval |= ((sense[2] << 8) | sense[12]);
+			}
+			break;
+
+		default:
+			dev_warn(&h->pdev->dev, "Sync command cdb=0x%x failed with unknown status 0x%x\n",
+				opcode, resp->status);
+			retval = -1;
+			break;
+		}
+	}
+	else {
 		dev_warn(&h->pdev->dev, "Unexpected IU type 0x%x in %s\n",
 				resp->iu_type, __func__);
-		return -1;
+		retval = -1;
 	}
 
-	switch (status & STATUS_MASK) {
-	case SAM_STAT_GOOD:
-	case SAM_STAT_CONDITION_MET:
-	case SAM_STAT_INTERMEDIATE:
-	case SAM_STAT_INTERMEDIATE_CONDITION_MET:
-		return 0;
-
-	case SAM_STAT_BUSY:
-	case SAM_STAT_RESERVATION_CONFLICT:
-	case SAM_STAT_COMMAND_TERMINATED:
-	case SAM_STAT_TASK_SET_FULL:
-	case SAM_STAT_ACA_ACTIVE:
-	case SAM_STAT_TASK_ABORTED:
-		dev_warn(&h->pdev->dev, "Sync command cdb=0x%x failed with status 0x%x\n",
-			opcode, status);
-		return (status << 16);
-
-	case SAM_STAT_CHECK_CONDITION:
-		dev_warn(&h->pdev->dev, "Sync command cdb=0x%x Check Condition SQ 0x%x\n",
-			opcode, sq);
-		return ((status << 16) | sq);
-	}
-
-	dev_warn(&h->pdev->dev, "Sync command cdb=0x%x failed with unknown status 0x%x\n",
-		opcode, status);
-	return -1;
+	free_request(h, qinfo_to_qid(qinfo), request_id);
+	return retval;
 }
 
 static int send_sync_cdb(struct sop_device *h, char *cdb, dma_addr_t phy_addr, 
@@ -2306,16 +2324,19 @@ sync_send_tur:
 	memset(cdb, 0, MAX_CDB_SIZE);
 	cdb[0] = TEST_UNIT_READY;
 	ret = send_sync_cdb(h, cdb, 0, 0, SOP_DATA_DIR_NONE);
-	if (((ret >> 16) == SAM_STAT_CHECK_CONDITION) && 
-		(retry_count < TUR_MAX_RETRY_COUNT)) {
-		msleep(IO_SLEEP_INTERVAL_MIN);
-		/*  Retry */
-		retry_count++;
-		goto sync_send_tur;
+	if (((ret >> 16) == SAM_STAT_CHECK_CONDITION) &&
+		/* Drive not ready, getting ready */
+		((ret & 0xffff) == 0x0204)) {
+		if (retry_count < TUR_MAX_RETRY_COUNT) {
+			msleep(IO_SLEEP_INTERVAL_MIN);
+			/*  Retry */
+			retry_count++;
+			goto sync_send_tur;
+		}
+		else
+			goto disk_param_err;
 	}
-
-	if (ret)
-		goto disk_param_err;
+	/* Otherwise continue even with TUR failure, we just need the capacity */
 
 	/* 2. Send Read Capacity */
 	memset(cdb, 0, MAX_CDB_SIZE);
@@ -2325,6 +2346,7 @@ sync_send_tur:
 	ret = send_sync_cdb(h, cdb, phy_addr, size, SOP_DATA_DIR_FROM_DEVICE);
 	if (ret != 0)
 		goto disk_param_err;
+
 	/* Process the Read Cap data */
 	h->capacity = be32_to_cpu(data[0]);
 	h->block_size = be32_to_cpu(data[1]);
@@ -2333,8 +2355,8 @@ sync_send_tur:
 	return 0;
 
 disk_param_err:
-	dev_warn(&h->pdev->dev, "Error Getting Disk param (CDB0=0x%x return status 0x%x)\n",
-		cdb[0], ret);
+	dev_warn(&h->pdev->dev, "Error getting disk param "
+		"(CDB0=0x%x returns 0x%x)\n", cdb[0], ret);
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
 
 	/* Set Capacity to 0 and continue as degraded */
