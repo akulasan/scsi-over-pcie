@@ -2413,6 +2413,8 @@ static int sop_add_disk(struct sop_device *h)
 	rq = blk_alloc_queue(GFP_KERNEL);
 	if (IS_ERR(rq))
 		return -ENOMEM;
+
+	blk_queue_bounce_limit(rq, h->pdev->dma_mask);
 	
 	/* Save the field in device struct */
 	h->rq = rq;
