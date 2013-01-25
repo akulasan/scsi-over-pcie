@@ -929,7 +929,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 	int result;
 
 	sop_rem_timeout(qinfo, r->tmo_slot);
-	sgl = &qinfo->sgl[(r->request_id & 0x0ff) * MAX_SGLS];
+	sgl = &qinfo->sgl[r->request_id * MAX_SGLS];
 
 	if (bio_data_dir(r->bio) == WRITE)
 		dma_dir = DMA_TO_DEVICE;
@@ -1026,7 +1026,7 @@ int sop_msix_handle_ioq(struct queue_info *q)
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
-			r = q->oq->cur_req = &q->request[request_id & 0x00ff];
+			r = q->oq->cur_req = &q->request[request_id];
 			r->request_id = request_id;
 			r->response_accumulated = 0;
 		}
@@ -1081,7 +1081,7 @@ int sop_msix_handle_adminq(struct queue_info *q)
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
-			r = q->oq->cur_req = &q->request[request_id & 0x00ff];
+			r = q->oq->cur_req = &q->request[request_id];
 			r->response_accumulated = 0;
 		}
 		rc = pqi_dequeue_from_device(q->oq, &r->response[r->response_accumulated]); 
@@ -1199,9 +1199,7 @@ static u16 alloc_request(struct sop_device *h, u8 queue_pair_index)
 
 	struct queue_info *qinfo = &h->qinfo[queue_pair_index];
 
-	/* I am encoding q number in high bight of request id */
 	BUG_ON(qinfo->qdepth > MAX_CMDS);
-	BUG_ON(queue_pair_index > 127); /* high bit reserved for error reporting */
 
         do {
                 rc = (u16) find_first_zero_bit(qinfo->request_bits, qinfo->qdepth);
@@ -1220,23 +1218,13 @@ static u16 alloc_request(struct sop_device *h, u8 queue_pair_index)
 		}
         } while (test_and_set_bit((int) rc, qinfo->request_bits));
 
-	return rc | (queue_pair_index << 8);
+	return rc;
 }
 
 static void free_request(struct sop_device *h, u8 queue_pair_index, u16 request_id)
 {
-	if((request_id >> 8) != queue_pair_index) {
-		dev_warn(&h->pdev->dev, "Non matching QID %x in request id 0x%x.\n",
-			queue_pair_index, request_id);
-		return;
-
-	}
-	if((request_id & 0x00ff) >= h->qinfo[queue_pair_index].qdepth) {
-		dev_warn(&h->pdev->dev, "Q[%d] Request id %d exceeds qdepth %d.\n",
-			queue_pair_index, request_id, h->qinfo[queue_pair_index].qdepth);
-		return;
-	}
-	clear_bit(request_id & 0x00ff, h->qinfo[queue_pair_index].request_bits);
+	BUG_ON(request_id >= h->qinfo[queue_pair_index].qdepth);
+	clear_bit(request_id, h->qinfo[queue_pair_index].request_bits);
 }
 
 static void fill_create_io_queue_request(struct sop_device *h,
@@ -1296,7 +1284,7 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	struct sop_request *request;
 	DECLARE_COMPLETION_ONSTACK(wait);
 
-	request = &h->qinfo[0].request[request_id & 0x00ff];
+	request = &h->qinfo[0].request[request_id];
 	request->waiting = &wait;
 	request->response_accumulated = 0;
 	pqi_notify_device_queue_written(h->qinfo[0].iq);
@@ -1309,7 +1297,7 @@ static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
 	struct sop_request *sopr;
 	DECLARE_COMPLETION_ONSTACK(wait);
 
-	sopr = &qinfo->request[request_id & 0x00ff];
+	sopr = &qinfo->request[request_id];
 	memset(sopr, 0, sizeof(*sopr));
 	sopr->request_id = request_id;
 	sopr->waiting = &wait;
@@ -1350,7 +1338,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 					request_id, q->msix_entry);
 	send_admin_command(h, request_id);
 	resp = (volatile struct pqi_create_operational_queue_response *)
-		h->qinfo[0].request[request_id & 0x00ff].response;	
+		h->qinfo[0].request[request_id].response;
 	if (resp->status != 0) {
 		dev_warn(&h->pdev->dev, "Failed to create up OQ #%d\n",
 			queue_pair_index);
@@ -1433,7 +1421,7 @@ static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
 	fill_delete_io_queue_request(h, r, qid, to_device, request_id);
 	send_admin_command(h, request_id);
 	resp = (volatile struct pqi_delete_operational_queue_response *)
-		h->qinfo[0].request[request_id & 0x00ff].response;	
+		h->qinfo[0].request[request_id].response;
 	if (resp->status != 0) {
 		dev_warn(&h->pdev->dev, "Failed to tear down queue #%d (to=%d)\n",
 			qpindex, to_device);
@@ -2005,7 +1993,7 @@ static int sop_scatter_gather(struct sop_device *h,
 
 	*xfer_size = 0;
 	datasg = &r->sg[0];
-	sg_block_number = (r->request_id & 0x0ff) * MAX_SGLS;
+	sg_block_number = r->request_id * MAX_SGLS;
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * 2);
 
 	for (i=0; i < num_sg; i++) {
@@ -2052,8 +2040,8 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	r->queue_id = cpu_to_le16(qinfo->oq->queue_id);
 	r->work_area = 0;
 	r->request_id = request_id;
-	sgl = &qinfo->sgl[(request_id & 0x0ff) * MAX_SGLS];
-	ser = &qinfo->request[request_id & 0x00ff];
+	sgl = &qinfo->sgl[request_id * MAX_SGLS];
+	ser = &qinfo->request[request_id];
 	ser->xfer_size = 0;
 	ser->bio = bio;
 	ser->waiting = NULL;
@@ -2193,7 +2181,7 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
 			struct queue_info *qinfo, u16 request_id)
 {
-	struct sop_request *sopr = &qinfo->request[request_id & 0x00ff];
+	struct sop_request *sopr = &qinfo->request[request_id];
 	volatile struct sop_cmd_response *resp = 
 		(volatile struct sop_cmd_response *)sopr->response;
 	u16 status, sq;
