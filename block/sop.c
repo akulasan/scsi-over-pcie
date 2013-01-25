@@ -2616,7 +2616,7 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 {
 	struct sop_wait_queue *wq;
 	struct sop_device *h;
-	int ret;
+	int ret, at_least_one_bio;
 	int (*bio_process)(struct sop_device *h, struct bio *bio,
 			   struct queue_info *qinfo);
 
@@ -2632,25 +2632,26 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 		bio_process = sop_fail_bio;
 	else
 		bio_process = sop_process_bio;
+
+	at_least_one_bio = 0;
 	spin_lock_irq(&qinfo->iq->qlock);
 	while (bio_list_peek(&wq->iq_cong)) {
 		struct bio *bio = bio_list_pop(&wq->iq_cong);
 
 		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: proc bio %p Q[%d], PI %d CI %d!\n",
 			bio, qinfo->iq->queue_id, qinfo->iq->unposted_index, *(qinfo->iq->ci)); */
-
+		at_least_one_bio = 1;
 		if ((ret = bio_process(h, bio, qinfo))) {
 			/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: Error %d for [%d]!\n",
 						ret, qinfo->iq->queue_id); */
 			bio_list_add_head(&wq->iq_cong, bio);
 			break;
 		}
-		if (bio_list_empty(&wq->iq_cong))
-			remove_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
-
 		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: done bio %p Q[%d], PI %d CI %d!\n",
 			bio, qinfo->iq->queue_id, qinfo->iq->unposted_index, *(qinfo->iq->ci)); */
 	}
+	if (at_least_one_bio && bio_list_empty(&wq->iq_cong))
+		remove_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
 	spin_unlock_irq(&qinfo->iq->qlock);
 }
 
