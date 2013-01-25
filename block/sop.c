@@ -2070,7 +2070,6 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	ser->xfer_size = 0;
 	ser->bio = bio;
 	ser->waiting = NULL;
-	ser->is_sg_io = !normal_io;
 
 	if (likely(normal_io)) {
 		if (bio_data_dir(bio) == WRITE) {
