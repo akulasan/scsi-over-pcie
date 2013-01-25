@@ -2520,7 +2520,8 @@ static int sop__blk_rq_unmap_user(struct bio *bio)
 
 
 /* Most of this is cribbed from blk_rq_map_user_iov in block/blk-map.c */
-static int sop_map_user_iov(struct request_queue *q, struct sg_iovec *iov,
+static int sop_map_user_iov(struct request_queue *q, struct block_device *dev,
+				struct sg_iovec *iov,
 				int iov_count, unsigned int len,
 				gfp_t gfp_mask, struct bio **pbio,
 				int direction)
@@ -2549,7 +2550,7 @@ static int sop_map_user_iov(struct request_queue *q, struct sg_iovec *iov,
 		bio = bio_copy_user_iov(q, NULL, iov, iov_count,
 						read, gfp_mask);
 	else
-		bio = bio_map_user_iov(q, NULL, iov, iov_count,
+		bio = bio_map_user_iov(q, dev, iov, iov_count,
 						read, gfp_mask);
 
 	if (IS_ERR(bio))
@@ -2820,7 +2821,7 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 			one_iovec->iov_len = hp->dxfer_len;
 			iov = one_iovec;
 		}
-		rc = sop_map_user_iov(h->rq, (struct sg_iovec *) iov,
+		rc = sop_map_user_iov(h->rq, dev, (struct sg_iovec *) iov,
 					iov_count, hp->dxfer_len, GFP_KERNEL,
 					&bio, data_dir);
 		if (rc) {
