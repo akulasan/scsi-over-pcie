@@ -35,6 +35,10 @@
 #include <linux/version.h>
 #include <linux/completion.h>
 #include <scsi/scsi.h>
+#include <scsi/scsi_ioctl.h>
+#include <scsi/sg.h>
+#include <scsi/scsi_cmnd.h>
+
 #include "sop_kernel_compat.h"
 #include "sop.h"
 
@@ -251,6 +255,7 @@ static int allocate_wait_queue(struct queue_info *q)
 	init_waitqueue_head(&wq->iq_full);
 	init_waitqueue_entry(&wq->iq_cong_wait, sop_thread);
 	bio_list_init(&wq->iq_cong);
+	bio_list_init(&wq->iq_cong_sgio);
 
 	return 0;
 }
@@ -1043,7 +1048,12 @@ int sop_msix_handle_ioq(struct queue_info *q)
 			q->oq->cur_req = NULL;
 			wmb();
 			if (likely(r->bio)) {
-				sop_complete_bio(h, q, r);
+				struct sop_sg_io_context *sgio_context =
+					bio_get_driver_context(r->bio);
+				if (unlikely(sgio_context))
+					complete(sgio_context->waiting);
+				else
+					sop_complete_bio(h, q, r);
 				r = NULL;
 			} else {
 				if (likely(r->waiting)) {
@@ -2009,7 +2019,7 @@ static int sop_scatter_gather(struct sop_device *h,
 }
 
 static int sop_process_bio(struct sop_device *h, struct bio *bio,
-			   struct queue_info *qinfo)
+			   struct queue_info *qinfo, int normal_io)
 {
 	struct sop_limited_cmd_iu *r;
 	struct sop_request *ser;
@@ -2018,6 +2028,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	u16 request_id;
 	int prev_index, num_sg;
 	int nsegs;
+	struct sop_sg_io_context *sgio_context;
 
 	/* FIXME: Temporarily limit the outstanding FW commands to 128 */
 	if (atomic_read(&h->cmd_pending) >= 128)
@@ -2027,13 +2038,24 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	if (request_id == (u16) -EBUSY)
 		return -EBUSY;
 
+	if (likely(normal_io)) {
+		sgio_context = NULL;
+		bio_set_driver_context(bio, sgio_context);
+	} else {
+		/* only dereference if !normalio */
+		sgio_context = bio_get_driver_context(bio);
+	}
+
 	r = pqi_alloc_elements(qinfo->iq, 1);
 	if (IS_ERR(r)) {
 		dev_warn(&h->pdev->dev, "SUBQ[%d] pqi_alloc_elements for bio %p returned %ld\n", 
 			qinfo_to_qid(qinfo), bio, PTR_ERR(r));
 		goto alloc_elem_fail;
 	}
-	nsegs = bio_phys_segments(h->rq, bio);
+	if (likely(normal_io) || sgio_context->data_dir != DMA_NONE)
+		nsegs = bio_phys_segments(h->rq, bio);
+	else
+		nsegs = 0;
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
 	r->compatible_features = 0;
@@ -2045,32 +2067,58 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	ser->xfer_size = 0;
 	ser->bio = bio;
 	ser->waiting = NULL;
+	ser->is_sg_io = !normal_io;
 
-	/* It has to be a READ or WRITE for BIO */
-	if (bio_data_dir(bio) == WRITE) {
-		r->flags = SOP_DATA_DIR_TO_DEVICE;
-		dma_dir = DMA_TO_DEVICE;
-	}
-	else {
-		r->flags = SOP_DATA_DIR_FROM_DEVICE;
-		dma_dir = DMA_FROM_DEVICE;
-	}
+	if (likely(normal_io)) {
+		if (bio_data_dir(bio) == WRITE) {
+			r->flags = SOP_DATA_DIR_TO_DEVICE;
+			dma_dir = DMA_TO_DEVICE;
+		} else {
+			r->flags = SOP_DATA_DIR_FROM_DEVICE;
+			dma_dir = DMA_FROM_DEVICE;
+		}
+		sop_prepare_cdb(r->cdb, bio);
+	} else {
+		dma_dir = sgio_context->data_dir;
 
-	/* Prepare the CDB Now */
-	sop_prepare_cdb(r->cdb, bio);
+		switch (dma_dir) {
+		case DMA_FROM_DEVICE:
+			r->flags = SOP_DATA_DIR_FROM_DEVICE;
+			break;
+		case DMA_TO_DEVICE:
+			r->flags = SOP_DATA_DIR_TO_DEVICE;
+			break;
+		case DMA_BIDIRECTIONAL: /* FIXME: this probably doesn't work. */
+			r->flags = SOP_DATA_DIR_TO_DEVICE |
+					SOP_DATA_DIR_FROM_DEVICE;
+			break;
+		case DMA_NONE:
+			r->flags = 0;
+			break;
+		}
+		sgio_context->sop_request = ser;
+		sgio_context->qinfo = qinfo;
+		memset(r->cdb, 0, sizeof(r->cdb));
+		memcpy(r->cdb, sgio_context->cdb, sgio_context->cdblen);
+	}
 
 	/* Prepare the scatterlist */
 	prev_index = bio->bi_idx;
-	num_sg = sop_prepare_scatterlist(bio, ser, sgl, nsegs);
 
-	/* Map the SG */
-	num_sg = dma_map_sg(&h->pdev->dev, sgl, num_sg, dma_dir);
-	if (num_sg < 0) {
-		bio->bi_idx = prev_index;
-		dev_warn(&h->pdev->dev, "dma_map failure bio %p, SQ[%d].\n",
-			bio, qinfo_to_qid(qinfo));
-		goto sg_map_fail;
+	if (likely(normal_io) || sgio_context->data_dir != DMA_NONE) {
+		num_sg = sop_prepare_scatterlist(bio, ser, sgl, nsegs);
+		/* Map the SG */
+		num_sg = dma_map_sg(&h->pdev->dev, sgl, num_sg, dma_dir);
+		if (num_sg < 0) {
+			bio->bi_idx = prev_index;
+			dev_warn(&h->pdev->dev, "dma_map failure bio %p, SQ[%d].\n",
+				bio, qinfo_to_qid(qinfo));
+			goto sg_map_fail;
+		}
+	} else {
+		num_sg = 0;
 	}
+
 	atomic_inc(&qinfo->cur_qdepth);
 	if (qinfo->max_qdepth < atomic_read(&qinfo->cur_qdepth))
 		qinfo->max_qdepth = atomic_read(&qinfo->cur_qdepth);
@@ -2102,14 +2150,22 @@ alloc_elem_fail:
 	return -EBUSY;
 }
 
-static void sop_queue_cmd(struct sop_wait_queue *wq, struct bio *bio)
+static void sop_queue_cmd(struct sop_wait_queue *wq, struct bio *bio,
+				int normal_io)
 {
-	if (bio_list_empty(&wq->iq_cong))
-		add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
-	bio_list_add(&wq->iq_cong, bio);
+	if (likely(normal_io)) {
+		if (bio_list_empty(&wq->iq_cong))
+			add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
+		bio_list_add(&wq->iq_cong, bio);
+	} else { /* SG_IO */
+		if (bio_list_empty(&wq->iq_cong_sgio))
+			add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
+		bio_list_add(&wq->iq_cong_sgio, bio);
+	}
 }
 
-static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
+static MRFN_TYPE __sop_make_request(struct request_queue *q,
+					struct bio *bio, int normal_io)
 {
 	struct sop_device *h = q->queuedata;
 	int result;
@@ -2130,18 +2186,23 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 	spin_lock_irq(&qinfo->iq->qlock);
 
 	result = -EBUSY;
-	if (bio_list_empty(&wq->iq_cong))
+	if (bio_list_empty(&wq->iq_cong) && bio_list_empty(&wq->iq_cong_sgio))
 		/* Try to submit the command */
-		result = sop_process_bio(h, bio, qinfo);
+		result = sop_process_bio(h, bio, qinfo, normal_io);
 
 	if (unlikely(result))
-		sop_queue_cmd(wq, bio);
+		sop_queue_cmd(wq, bio, normal_io);
 
 	spin_unlock_irq(&qinfo->iq->qlock);
 
 	put_cpu();
 
 	return MRFN_RET;
+}
+
+static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
+{
+	__sop_make_request(q, bio, 1);
 }
 
 static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
@@ -2464,12 +2525,386 @@ static int sop_compat_ioctl(struct block_device *dev, fmode_t mode, unsigned int
 }
 #endif
 
-static int sop_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg)
+/* copied from blk-map.c, blk_rq_unmap_user() */
+static int sop__blk_rq_unmap_user(struct bio *bio)
 {
-	struct sop_device *h = bdev_to_hba(dev);
+	int ret = 0;
 
-	dev_warn(&h->pdev->dev, "sop_ioctl called but not implemented\n");
+	if (bio) {
+		if (bio_flagged(bio, BIO_USER_MAPPED))
+			bio_unmap_user(bio);
+		else
+			ret = bio_uncopy_user(bio);
+	}
+
+	return ret;
+}
+
+
+/* Most of this is cribbed from blk_rq_map_user_iov in block/blk-map.c */
+static int sop_map_user_iov(struct request_queue *q, struct sg_iovec *iov,
+				int iov_count, unsigned int len,
+				gfp_t gfp_mask, struct bio **pbio,
+				int direction)
+{
+	struct bio *bio;
+	int i, unaligned = 0;
+	int read = direction == SG_DXFER_FROM_DEV ||
+		direction == SG_DXFER_TO_FROM_DEV;
+
+	/* check alignment */
+	for (i = 0; i < iov_count; i++) {
+		unsigned long uaddr = (unsigned long)iov[i].iov_base;
+
+		if (!iov[i].iov_len)
+			return -EINVAL;
+
+		/*
+		 * Keep going so we check length of all segments
+		 */
+		if (uaddr & queue_dma_alignment(q))
+			unaligned = 1;
+	}
+
+	/* FIXME... I don't quite understand this. */
+	if (unaligned /* || mapped_data || q->dma_pad_mask & len */)
+		bio = bio_copy_user_iov(q, NULL, iov, iov_count,
+						read, gfp_mask);
+	else
+		bio = bio_map_user_iov(q, NULL, iov, iov_count,
+						read, gfp_mask);
+
+	if (IS_ERR(bio))
+		return PTR_ERR(bio);
+
+	if (bio->bi_size != len) {
+		/*
+		 * Grab an extra reference to this bio, as bio_unmap_user()
+		 * expects to be able to drop it twice as it happens on the
+		 * normal IO completion path
+		 */
+		bio_get(bio);
+		bio_endio(bio, 0);
+		sop__blk_rq_unmap_user(bio);
+		return -EINVAL;
+	}
+	blk_queue_bounce(q, &bio);
+	bio_get(bio);
+	*pbio = bio;
 	return 0;
+}
+
+static void sop_complete_sgio_hdr(struct sop_device *h,
+					struct bio *bio,
+					sg_io_hdr_t *hdr)
+{
+	struct sop_sg_io_context *sgio_context = bio_get_driver_context(bio);
+	struct sop_request *r = sgio_context->sop_request;
+	struct queue_info *qinfo = sgio_context->qinfo;
+	u16 sense_data_len;
+	u16 response_data_len;
+	u8 xfer_result;
+	u32 data_xferred;
+	struct scatterlist *sgl;
+	int result, ret;
+	struct sop_cmd_response *scr;
+
+	sgl = &qinfo->sgl[r->request_id * MAX_SGLS];
+
+	if (sgio_context->data_dir != DMA_NONE)
+		dma_unmap_sg(&h->pdev->dev, sgl, r->num_sg,
+				sgio_context->data_dir);
+	result = 0;
+
+	switch (r->response[0]) {
+	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
+		hdr->status = 0;
+		hdr->masked_status = 0;
+		hdr->host_status = 0;
+		hdr->driver_status = 0;
+		hdr->info = 0;
+		hdr->resid = 0;
+		hdr->sb_len_wr = 0;
+		/* No error to process */
+		break;
+
+	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
+		scr = (struct sop_cmd_response *) r->response;
+		hdr->status = scr->status;
+		hdr->masked_status = status_byte(scr->status);
+		hdr->host_status = 0; /* FIXME is this correct? */
+		hdr->driver_status = 0; /* FIXME is this correct? */
+		hdr->info = 0;
+		if (hdr->masked_status || hdr->host_status ||
+			hdr->driver_status)
+			hdr->info |= SG_INFO_CHECK;
+		sense_data_len = le16_to_cpu(scr->sense_data_len);
+		response_data_len = le16_to_cpu(scr->response_data_len);
+		if (unlikely(response_data_len && sense_data_len))
+			dev_warn(&h->pdev->dev,
+				"Both sense and response data not expected.\n");
+
+		/* copy the sense data */
+		if (sense_data_len) {
+			if (hdr->mx_sb_len < sense_data_len)
+				sense_data_len = hdr->mx_sb_len;
+
+			if (!copy_to_user(hdr->sbp, scr->sense, sense_data_len))
+				hdr->sb_len_wr = sense_data_len;
+#if 0
+			/* FIXME!!!! */
+			else
+				ret = -EFAULT;
+#endif
+		}
+
+		/* paranoia, check for out of spec firmware */
+		if (scr->data_in_xfer_result && scr->data_out_xfer_result)
+			dev_warn(&h->pdev->dev,
+				"Unexpected bidirectional cmd with status in and out\n");
+
+		/* Calculate residual count */
+		if (scr->data_in_xfer_result) {
+			xfer_result = scr->data_in_xfer_result;
+			data_xferred = le32_to_cpu(scr->data_in_xferred);
+		} else {
+			xfer_result = scr->data_out_xfer_result;
+			data_xferred = le32_to_cpu(scr->data_out_xferred);
+		}
+		/* Set the residual transfer size */
+		hdr->resid = r->xfer_size - data_xferred;
+
+		if (response_data_len) {
+			/* FIXME need to do something correct here... */
+			result = -EIO;
+			dev_warn(&h->pdev->dev, "Got response data... what to do with it?\n");
+		}
+		break;
+
+	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
+		result = -EIO;
+		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
+		break;
+
+	default:
+		result = -EIO;
+		dev_warn(&h->pdev->dev, "got UNKNOWN response type...\n");
+		break;
+	}
+
+	if (sgio_context->data_dir != DMA_NONE)
+		ret = blk_rq_unmap_user(bio);
+	free_request(h, qinfo_to_qid(qinfo), r->request_id);
+	if (!result)
+		result = ret;
+	/* FIXME, what to do with result */
+	return;
+}
+
+/*
+ * Because we use the make_request interface and don't have
+ * an interface that accepts requests, we have to roll our own
+ * implementation of SG_IO.  This code is modelled on
+ * block/scsi_ioctl.c: sg_io();
+ */
+static int sop_sg_io(struct block_device *dev, fmode_t mode,
+			unsigned int cmd, void __user *argp)
+{
+	struct sop_device *h;
+	sg_io_hdr_t *hp = NULL;
+	unsigned char cmnd[MAX_COMMAND_SIZE];
+	int timeout, data_dir, rc;
+	unsigned long ul_timeout;
+	u8 sop_data_dir;
+	int iov_count;
+	struct iovec *iov, *one_iovec = NULL;
+	struct bio *bio;
+	struct sop_sg_io_context *sgio_context = NULL;
+	DECLARE_COMPLETION_ONSTACK(wait);
+	unsigned long start_time;
+
+	rc = 0;
+	h = bdev_to_hba(dev);
+	if (!argp)
+		return -EINVAL;
+	if (!capable(CAP_SYS_RAWIO))
+		return -EPERM;
+	if (!access_ok(VERIFY_WRITE, argp, sizeof(*hp)))
+		return -EFAULT;
+	if (!access_ok(VERIFY_READ, argp, sizeof(*hp)))
+		return -EFAULT;
+	hp = kmalloc(sizeof(*hp), GFP_KERNEL);
+	if (!hp)
+		return -ENOMEM;
+	if (__copy_from_user(hp, argp, sizeof(*hp))) {
+		rc = -EFAULT;
+		goto out;
+	}
+	if (hp->interface_id != 'S') {
+		rc = -ENOSYS;
+		goto out;
+	}
+	if (hp->flags & SG_FLAG_DIRECT_IO && hp->flags & SG_FLAG_MMAP_IO) {
+		rc = -EINVAL; /* either MMAP_IO or DIRECT_IO (not both) */
+		goto out;
+	}
+	if (hp->flags & SG_FLAG_MMAP_IO) {
+		rc = -ENOSYS; /* FIXME we should support this. */
+		goto out;
+	}
+	if (hp->flags & SG_FLAG_DIRECT_IO) {
+		rc = -ENOSYS; /* FIXME we should support this. */
+		goto out;
+	}
+	sgio_context = kmalloc(sizeof(*sgio_context), GFP_KERNEL);
+	if (!sgio_context) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	ul_timeout = msecs_to_jiffies(hp->timeout);
+	timeout = (ul_timeout < INT_MAX) ? ul_timeout : INT_MAX;
+	if ((!hp->cmdp) || (hp->cmd_len < 6) || (hp->cmd_len > sizeof(cmnd))) {
+		rc = -EMSGSIZE;
+		goto out;
+	}
+	if (!access_ok(VERIFY_READ, hp->cmdp, hp->cmd_len)) {
+		/* protects following copy_from_user()s + get_user()s */
+		rc = -EFAULT;
+		goto out;
+	}
+	sgio_context->cdblen = hp->cmd_len;
+	if (__copy_from_user(sgio_context->cdb, hp->cmdp, hp->cmd_len)) {
+		rc = -EFAULT;
+		goto out;
+	}
+
+	if (hp->dxfer_len / 512 > h->max_hw_sectors) {
+		rc = -EINVAL;
+		goto out;
+	}
+	/* FIXME check for read-only access violation here. */
+
+	hp->status = 0;
+	hp->masked_status = 0;
+	hp->msg_status = 0;
+	hp->info = 0;
+	hp->host_status = 0;
+	hp->driver_status = 0;
+	hp->resid = 0;
+
+	switch (hp->dxfer_direction) {
+	case SG_DXFER_TO_FROM_DEV: /* FIXME... bidirectional stuff? */
+	case SG_DXFER_FROM_DEV:
+		data_dir = DMA_FROM_DEVICE;
+		sop_data_dir = SOP_DATA_DIR_FROM_DEVICE;
+		break;
+	case SG_DXFER_TO_DEV:
+		data_dir = DMA_TO_DEVICE;
+		sop_data_dir = SOP_DATA_DIR_TO_DEVICE;
+		break;
+	case SG_DXFER_UNKNOWN:
+		data_dir = DMA_BIDIRECTIONAL;
+		sop_data_dir = SOP_DATA_DIR_RESERVED;
+		break;
+	default:
+		data_dir = DMA_NONE;
+		sop_data_dir = SOP_DATA_DIR_NONE;
+		break;
+	}
+	hp->duration = jiffies_to_msecs(jiffies);
+	/* FIXME do something with timeout */
+
+	/* copy in the data buffers, if any */
+	iov_count = hp->iovec_count;
+	if (hp->dxfer_len > 0 && data_dir != DMA_NONE) {
+		if (iov_count) {
+			int len, size = sizeof(struct sg_iovec) * iov_count;
+
+			iov = memdup_user(hp->dxferp, size);
+			if (IS_ERR(iov)) {
+				rc = PTR_ERR(iov);
+				goto out;
+			}
+			len = iov_length(iov, iov_count);
+			if (hp->dxfer_len < len) {
+				iov_count = iov_shorten(iov, iov_count,
+							hp->dxfer_len);
+				len = hp->dxfer_len;
+			}
+		} else {
+			iov_count = 1;
+			one_iovec = kmalloc(sizeof(*one_iovec), GFP_KERNEL);
+			if (!one_iovec) {
+				rc = -ENOMEM;
+				goto out;
+			}
+			one_iovec->iov_base = hp->dxferp;
+			one_iovec->iov_len = hp->dxfer_len;
+			iov = one_iovec;
+		}
+		rc = sop_map_user_iov(h->rq, (struct sg_iovec *) iov,
+					iov_count, hp->dxfer_len, GFP_KERNEL,
+					&bio, data_dir);
+		if (rc) {
+			rc = -ENOMEM; /* FIXME is this right? */
+			goto out;
+		}
+	} else {
+		/* No data transfer -- we don't really need a bio except that
+		 * we need a fake bio to transfer the sgio_context.
+		 */
+		bio = vmalloc(sizeof(*bio));
+	}
+	sgio_context->data_dir = data_dir;
+	bio_set_driver_context(bio, sgio_context);
+	sgio_context->waiting = &wait;
+	start_time = jiffies;
+	/*
+	 * FIXME I think I need to do some kind of kref_get() here to
+	 * make sure we know the device is in use.
+	 */
+	__sop_make_request(h->rq, bio, 0);
+	wait_for_completion(&wait);
+
+	sop_complete_sgio_hdr(h, bio, hp);
+	/*
+	 * FIXME I think I need to do some kind of kref_put() here to
+	 * undo the kref_get above.
+	 */
+	hp->duration = jiffies_to_msecs(jiffies - start_time);
+	if (copy_to_user(argp, hp, sizeof(*hp)))
+		rc = -EFAULT;
+
+out:
+	if (sgio_context->data_dir == DMA_NONE) /* free the fake bio */
+		vfree(bio);
+	kfree(hp);
+	kfree(sgio_context);
+	kfree(one_iovec);
+	return rc;
+}
+
+static int sop_ioctl(struct block_device *dev, fmode_t mode,
+			unsigned int cmd, unsigned long arg)
+{
+	__attribute__((unused)) struct sop_device *h = bdev_to_hba(dev);
+	void __user *argp = (void __user *)arg;
+
+	switch (cmd) {
+#if 0
+	case SG_GET_VERSION_NUM:
+	case SG_SET_TIMEOUT:
+	case SG_GET_TIMEOUT:
+	case SG_GET_RESERVED_SIZE:
+	case SG_SET_RESERVED_SIZE:
+	case SG_EMULATED_HOST:
+	case SCSI_IOCTL_SEND_COMMAND:
+#endif
+	case SG_IO:
+		return sop_sg_io(dev, mode, cmd, argp);
+	default:
+		return -ENOTTY;
+	}
 }
 
 static int sop_add_timeout(struct queue_info *q, uint timeout)
@@ -2504,7 +2939,8 @@ static void sop_fail_cmd(struct queue_info *q, struct sop_request *r)
 
 /* To be called instead of sop_process_bio in case of abort */
 static int sop_fail_bio(struct sop_device *h, struct bio *bio, 
-			struct queue_info *q)
+			struct queue_info *q,
+			__attribute__((unused)) int normal_io)
 {
 	/* Call complete bio with error */
 	bio_endio(bio, -EIO);
@@ -2585,7 +3021,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int actio
 			 * Requeue this command and 
 			 * reset the controller at end 
 			 */
-			sop_queue_cmd(q->wq, ser->bio);
+			sop_queue_cmd(q->wq, ser->bio, 1);
 			break;
 		}
 	}
@@ -2628,7 +3064,7 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 	struct sop_device *h;
 	int ret, at_least_one_bio;
 	int (*bio_process)(struct sop_device *h, struct bio *bio,
-			   struct queue_info *qinfo);
+			   struct queue_info *qinfo, int normal_io);
 
 	h = qinfo->h;
 	wq = qinfo->wq;
@@ -2638,6 +3074,7 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 		return;
 	}
 
+	/* FIXME, what about sgio? */
 	if (fail)
 		bio_process = sop_fail_bio;
 	else
@@ -2651,7 +3088,8 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: proc bio %p Q[%d], PI %d CI %d!\n",
 			bio, qinfo->iq->queue_id, qinfo->iq->unposted_index, *(qinfo->iq->ci)); */
 		at_least_one_bio = 1;
-		if ((ret = bio_process(h, bio, qinfo))) {
+		ret = bio_process(h, bio, qinfo, 1);
+		if (ret) {
 			/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: Error %d for [%d]!\n",
 						ret, qinfo->iq->queue_id); */
 			bio_list_add_head(&wq->iq_cong, bio);
@@ -2660,7 +3098,18 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: done bio %p Q[%d], PI %d CI %d!\n",
 			bio, qinfo->iq->queue_id, qinfo->iq->unposted_index, *(qinfo->iq->ci)); */
 	}
-	if (at_least_one_bio && bio_list_empty(&wq->iq_cong))
+	while (bio_list_peek(&wq->iq_cong_sgio)) {
+		struct bio *bio = bio_list_pop(&wq->iq_cong_sgio);
+
+		at_least_one_bio = 1;
+		ret = sop_process_bio(h, bio, qinfo, 0);
+		if (ret) {
+			bio_list_add_head(&wq->iq_cong_sgio, bio);
+			break;
+		}
+	}
+	if (at_least_one_bio && bio_list_empty(&wq->iq_cong) &&
+			bio_list_empty(&wq->iq_cong_sgio))
 		remove_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
 	spin_unlock_irq(&qinfo->iq->qlock);
 }

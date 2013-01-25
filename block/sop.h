@@ -269,6 +269,7 @@ struct sop_wait_queue {
 	wait_queue_head_t iq_full;
 	wait_queue_t iq_cong_wait;
 	struct bio_list iq_cong;
+	struct bio_list iq_cong_sgio;
 };
 
 /* Note: MAX cannot be greater than 255 as it is stored in u8 */
@@ -359,8 +360,25 @@ struct sop_request {
 	u16 num_sg;
 	u8 tmo_slot;
 	u8 response[MAX_RESPONSE_SIZE];
+	u8 is_sg_io;
 };
 
+/*
+ * For SG_IO, we make our own bio, and bio->bi_private points to
+ * a struct sop_sg_io_context which contains the context we need
+ * on completion.  We know on completion that it's our sg_io bio
+ * (and so can safely look in bio->bi_private) if the struct
+ * struct sop_request->is_sg_io is set.
+ */
+struct sop_sg_io_context {
+	unsigned char cdb[16];
+	u8 cdblen;
+	u8 request_type;
+	struct completion *waiting;
+	struct sop_request *sop_request;
+	struct queue_info *qinfo;
+	int data_dir;
+};
 
 #pragma pack(1)
 struct sop_limited_cmd_iu {
