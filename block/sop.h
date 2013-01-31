@@ -83,7 +83,7 @@ struct pqi_device_queue {
 					 * depending on direction of queue.
 					 */
 	u16 local_pi;			/* local copy of what was last
-					 * written to *pi for inbound queues 
+					 * written to *pi for inbound queues
 					 */
 	u16 element_size;		/* must be multiple of 16 */
 	u16 nelements;
@@ -314,7 +314,7 @@ struct sop_device {
 #define SOP_FLAGS_BITPOS_RESET_PEND	2
 #define SOP_FLAGS_MASK_RESET_PEND	4
 	u32 flags;
-#define MAX_IO_QUEUE_PAIRS 32 
+#define MAX_IO_QUEUE_PAIRS 32
 #define MAX_TOTAL_QUEUE_PAIRS (MAX_IO_QUEUE_PAIRS + 1)
 	int nr_queue_pairs; /* total number of *pairs* of queues */
 #define INTR_MODE_MSIX 1
