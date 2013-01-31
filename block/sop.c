@@ -888,7 +888,7 @@ static int sop_setup_msix(struct sop_device *h)
 	if (err == 0) {
 		for (i = 0; i < h->nr_queue_pairs; i++) {
 			/* vid makes admin q share with io q 0 */
-			int vid = i ? i - 1 : 0; 
+			int vid = i ? i - 1 : 0;
 			h->qinfo[i].msix_entry = msix_entry[vid].entry;
 			h->qinfo[i].msix_vector = msix_entry[vid].vector;
 			/*
@@ -919,7 +919,8 @@ static int sop_response_accumulated(struct sop_request *r)
 	return (r->response_accumulated >= iu_length);
 }
 
-static void free_request(struct sop_device *h, u8 queue_pair_index, u16 request_id);
+static void free_request(struct sop_device *h, u8 queue_pair_index,
+				u16 request_id);
 
 static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 				struct sop_request *r)
@@ -947,7 +948,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 
 	switch (r->response[0]) {
 	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
-                /* No error to process */
+		/* No error to process */
 		break;
 
 	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
@@ -1008,7 +1009,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 		break;
 	}
 
-        bio_endio(r->bio, result);
+	bio_endio(r->bio, result);
 	free_request(h, qinfo_to_qid(qinfo), r->request_id);
 }
 
@@ -1018,17 +1019,16 @@ int sop_msix_handle_ioq(struct queue_info *q)
 	u8 iu_type;
 	int rc;
 	struct sop_device *h = q->h;
-	int ncmd=0;
+	int ncmd = 0;
 	struct sop_request *r;
 
-	if (pqi_from_device_queue_is_empty(q->oq)) {
+	if (pqi_from_device_queue_is_empty(q->oq))
 		return IRQ_NONE;
-	}
 
 	r = q->oq->cur_req;
 	do {
 		if (r == NULL) {
-			/* Receiving completion of a new request */ 
+			/* Receiving completion of a new request */
 			iu_type = pqi_peek_ui_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
 			r = q->oq->cur_req = &q->request[request_id];
@@ -1036,11 +1036,13 @@ int sop_msix_handle_ioq(struct queue_info *q)
 			r->response_accumulated = 0;
 		}
 		rc = pqi_dequeue_from_device(q->oq,
-				&r->response[r->response_accumulated]); 
+				&r->response[r->response_accumulated]);
 		ncmd++;
 		if (rc) { /* queue is empty */
-			dev_warn(&h->pdev->dev, "=-=-=- io OQ[%hhu] PI %d CI %d empty(rc=%d)\n", 
-				q->oq->queue_id, *(q->oq->pi), q->oq->unposted_index, rc);
+			dev_warn(&h->pdev->dev,
+				"=-=-=- io OQ[%hhu] PI %d CI %d empty(rc=%d)\n",
+				q->oq->queue_id, *(q->oq->pi),
+				q->oq->unposted_index, rc);
 			break;
 		}
 		r->response_accumulated += q->oq->element_size;
@@ -1066,10 +1068,10 @@ int sop_msix_handle_ioq(struct queue_info *q)
 			atomic_dec(&h->cmd_pending);
 			atomic_dec(&q->cur_qdepth);
 			pqi_notify_device_queue_read(q->oq);
-		}
-		else
+		} else {
 			dev_warn(&h->pdev->dev, "Multiple entry completion Q[%d] CI %d\n",
 				q->oq->queue_id, q->oq->unposted_index);
+		}
 	} while (!pqi_from_device_queue_is_empty(q->oq));
 
 	return IRQ_HANDLED;
@@ -1088,13 +1090,14 @@ int sop_msix_handle_adminq(struct queue_info *q)
 		struct sop_request *r = q->oq->cur_req;
 
 		if (r == NULL) {
-			/* Receiving completion of a new request */ 
+			/* Receiving completion of a new request */
 			iu_type = pqi_peek_ui_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
 			r = q->oq->cur_req = &q->request[request_id];
 			r->response_accumulated = 0;
 		}
-		rc = pqi_dequeue_from_device(q->oq, &r->response[r->response_accumulated]); 
+		rc = pqi_dequeue_from_device(q->oq,
+				&r->response[r->response_accumulated]);
 		if (rc)
 			break;
 		r->response_accumulated += q->oq->element_size;
@@ -1153,7 +1156,8 @@ static int sop_request_irq(struct sop_device *h, int queue_index,
 	int rc;
 
 	rc = request_irq(h->qinfo[queue_index].msix_vector, msix_handler,
-				IRQF_SHARED, h->devname, &h->qinfo[queue_index]);
+				IRQF_SHARED, h->devname,
+				&h->qinfo[queue_index]);
 	if (rc != 0)
 		dev_warn(&h->pdev->dev, "Request_irq failed, queue_index = %d\n",
 				queue_index);
@@ -1183,7 +1187,7 @@ static void sop_free_irq(struct sop_device *h, int qinfo_ind)
 {
 	int vector;
 
-	vector = h->qinfo[qinfo_ind].msix_vector; 
+	vector = h->qinfo[qinfo_ind].msix_vector;
 	irq_set_affinity_hint(vector, NULL);
 	free_irq(vector, &h->qinfo[qinfo_ind]);
 }
@@ -1193,9 +1197,8 @@ static void sop_free_irqs_and_disable_msix(
 {
 	int i;
 
-	for (i = 0; i < h->nr_queue_pairs; i++) {
+	for (i = 0; i < h->nr_queue_pairs; i++)
 		sop_free_irq(h, i);
-	}
 #ifdef CONFIG_PCI_MSI
 	if (h->intr_mode == INTR_MODE_MSIX && h->pdev->msix_enabled)
 		pci_disable_msix(h->pdev);
