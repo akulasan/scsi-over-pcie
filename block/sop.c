@@ -2927,8 +2927,9 @@ static int sop_add_timeout(struct queue_info *q, uint timeout)
 static void sop_rem_timeout(struct queue_info *q, uint tmo_slot)
 {
 	if(atomic_read(&q->tmo.time_slot[tmo_slot]) == 0) {
-		printk(KERN_ERR "Q[%d] TM slot[%d] count is 0, cur_slot=%d\n",
-			qinfo_to_qid(q), tmo_slot, 
+		dev_err(&q->h->pdev->dev,
+			"Q[%d] TM slot[%d] count is 0, cur_slot=%d\n",
+			qinfo_to_qid(q), tmo_slot,
 			atomic_read(&q->tmo.cur_slot));
 		return;
 	}
@@ -2946,7 +2947,7 @@ static void sop_fail_cmd(struct queue_info *q, struct sop_request *r)
 }
 
 /* To be called instead of sop_process_bio in case of abort */
-static int sop_fail_bio(struct sop_device *h, struct bio *bio, 
+static int sop_fail_bio(struct sop_device *h, struct bio *bio,
 			struct queue_info *q,
 			__attribute__((unused)) int normal_io)
 {
@@ -2971,18 +2972,15 @@ static int sop_device_error_state(struct sop_device *h)
 		return SOP_ERR_NONE;
 
 	/* Detect Surprise removal */
-	if (safe_readq(sig, &signature, &h->pqireg->signature)) {
+	if (safe_readq(sig, &signature, &h->pqireg->signature))
 		return SOP_ERR_DEV_REM;
-	}
 
-	if (memcmp(SOP_SIGNATURE_STR, &signature, sizeof(signature)) != 0) {
+	if (memcmp(SOP_SIGNATURE_STR, &signature, sizeof(signature)) != 0)
 		return SOP_ERR_DEV_REM;
-	}
 
 	/* Detect for surprise reset */
-	if (safe_readw(sig, &state, &h->pqireg->pqi_device_status)) {
+	if (safe_readw(sig, &state, &h->pqireg->pqi_device_status))
 		return SOP_ERR_DEV_REM;
-	}
 	if (state == PQI_ERROR) {
 		h->flags |= SOP_FLAGS_MASK_DO_RESET;
 		return SOP_ERR_DEV_RESET;
@@ -2994,7 +2992,8 @@ static int sop_device_error_state(struct sop_device *h)
 }
 
 /* tmo_slot is negative if all commands are to be failed */
-static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int action)
+static int sop_timeout_queued_cmds(struct queue_info *q,
+					int tmo_slot, int action)
 {
 	int rqid, maxid;
 	int count = 0;
@@ -3026,8 +3025,8 @@ static int sop_timeout_queued_cmds(struct queue_info *q, int tmo_slot, int actio
 
 		case SOP_ERR_DEV_RESET:
 			/*
-			 * Requeue this command and 
-			 * reset the controller at end 
+			 * Requeue this command and
+			 * reset the controller at end
 			 */
 			sop_queue_cmd(q->wq, ser->bio, 1);
 			break;
