@@ -1329,11 +1329,10 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 	volatile struct pqi_create_operational_queue_response *resp;
 	__iomem u16 *pi_or_ci;
 
-	if (direction == PQI_DIR_FROM_DEVICE) {
+	if (direction == PQI_DIR_FROM_DEVICE)
 		ioq = q->oq;
-	} else {
+	else
 		ioq = q->iq;
-	}
 	spin_lock_init(&ioq->index_lock);
 	spin_lock_init(&ioq->qlock);
 	r = pqi_alloc_elements(aq, 1);
@@ -1387,14 +1386,17 @@ static int sop_setup_io_queue_pairs(struct sop_device *h)
 	/* From 1, not 0, to skip admin oq, which was already set up */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		if (pqi_device_queue_alloc(h, &h->qinfo[i].oq,
-				IQ_NELEMENTS, IQ_IU_SIZE / 16, PQI_DIR_FROM_DEVICE, i))
+				IQ_NELEMENTS, IQ_IU_SIZE / 16,
+				PQI_DIR_FROM_DEVICE, i))
 			goto bail_out;
 		if (pqi_device_queue_alloc(h, &h->qinfo[i].iq,
-				OQ_NELEMENTS, OQ_IU_SIZE / 16, PQI_DIR_TO_DEVICE, i))
+				OQ_NELEMENTS, OQ_IU_SIZE / 16,
+				PQI_DIR_TO_DEVICE, i))
 			goto bail_out;
 		if (pqi_iq_data_alloc(h, &h->qinfo[i]))
 			goto bail_out;
-		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_FROM_DEVICE))
+		if (sop_create_io_queue(h, &h->qinfo[i], i,
+					PQI_DIR_FROM_DEVICE))
 			goto bail_out;
 		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_TO_DEVICE))
 			goto bail_out;
@@ -1413,7 +1415,7 @@ static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
 	u16 request_id;
 	volatile struct pqi_delete_operational_queue_response *resp;
 	u16 qid;
-	int err=0;
+	int err = 0;
 
 	/* Check to see if the Admin queue is ready for taking commands */
 	if (wait_for_admin_queues_to_become_idle(h, ADMIN_SLEEP_TMO_MS,
@@ -1458,7 +1460,7 @@ static int sop_delete_io_queues(struct sop_device *h)
 	return 0;
 }
 
-static int sop_set_dma_mask(struct pci_dev * pdev)
+static int sop_set_dma_mask(struct pci_dev *pdev)
 {
 	int rc;
 
@@ -1516,7 +1518,7 @@ static int sop_wait_for_host_reset_ack(struct sop_device *h, uint tmo_ms)
 	do {
 		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
 				ADMIN_SLEEP_INTERVAL_MAX);
-		/* 
+		/*
 		 * Not using safe_readl here because while in reset we can
 		 * get -1 and be unable to read the signature, and this
 		 * is normal (I think).
@@ -1636,7 +1638,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 
 	rc = sop_request_irq(h, 0, sop_adminq_msix_handler);
 	if (rc != 0) {
-	dev_warn(&h->pdev->dev, "Bailing out in probe - requesting IRQ[0]\n");
+		dev_warn(&h->pdev->dev, "Bailing out in probe - requesting IRQ[0]\n");
 		goto bail_admin_created;
 	}
 
@@ -1670,7 +1672,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	return 0;
 
 bail_io_irq:
-	for (i=1; i< h->nr_queue_pairs; i++)
+	for (i = 1; i < h->nr_queue_pairs; i++)
 		sop_free_irq(h, i);
 bail_io_q_created:
 	sop_delete_io_queues(h);
@@ -1765,7 +1767,8 @@ static int __init sop_init(void)
 	if (result < 0)
 		goto register_fail;
 
-	result = driver_create_file(&sop_pci_driver.driver, &driver_attr_dbg_lvl);
+	result = driver_create_file(&sop_pci_driver.driver,
+					&driver_attr_dbg_lvl);
 	if (result)
 		goto create_fail;
 
