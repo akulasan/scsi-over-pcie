@@ -1051,6 +1051,7 @@ int sop_msix_handle_ioq(struct queue_info *q)
 				struct sop_sg_io_context *sgio_context =
 					bio_get_driver_context(r->bio);
 				if (unlikely(sgio_context)) {
+					sop_rem_timeout(q, r->tmo_slot);
 					complete(sgio_context->waiting);
 				} else
 					sop_complete_bio(h, q, r);
