@@ -3191,7 +3191,8 @@ reset_err:
 		goto start_reset;
 
 	/* TODO: Error handling: Mark Dead? */
-	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, (volatile unsigned long *)&h->flags);
+	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND,
+			(volatile unsigned long *) &h->flags);
 	return;
 
 }
@@ -3202,11 +3203,13 @@ static void sop_process_driver_debug(struct sop_device *h)
 		int i;
 
 		sop_dbg_lvl = 0;
-		printk("@@@@ Total CMD Pending= %d Max = %d @@@@\n", 
+		dev_warn(&h->pdev->dev,
+				"@@@@ Total CMD Pending= %d Max = %d @@@@\n",
 				atomic_read(&h->cmd_pending),
 				h->max_cmd_pending);
 		for (i = 1; i < h->nr_queue_pairs; i++) {
-			printk("        OQ depth[%d] = %d, Max %d\n", i,
+			dev_warn(&h->pdev->dev,
+				"        OQ depth[%d] = %d, Max %d\n", i,
 				atomic_read(&h->qinfo[i].cur_qdepth),
 				h->qinfo[i].max_qdepth);
 		}
@@ -3216,7 +3219,7 @@ static void sop_process_driver_debug(struct sop_device *h)
 		/* Reset the level */
 		sop_dbg_lvl = 0;
 
-		printk("@@@@ Trying to ASSERT the FW...\n");
+		dev_warn(&h->pdev->dev, "@@@@ Trying to ASSERT the FW...\n");
 		/* Perform illegal write to BAR */
 		writel(0x10, &h->pqireg->error_data);
 	}
@@ -3251,7 +3254,7 @@ static void sop_process_dev_timer(struct sop_device *h)
 
 		if (!q)
 			continue;
-		
+
 		spin_lock_irq(&q->oq->qlock);
 
 		/* Process any pending ISR */
@@ -3275,10 +3278,11 @@ static void sop_process_dev_timer(struct sop_device *h)
 		h->flags &= ~SOP_FLAGS_MASK_DO_RESET;
 
 		if (!test_and_set_bit(SOP_FLAGS_BITPOS_RESET_PEND,
-			(volatile unsigned long *)&h->flags)) {
+			(volatile unsigned long *) &h->flags)) {
 
 			/* Reset the controller */
-			printk("Scheduling a reset for the controller...\n");
+			dev_warn(&h->pdev->dev,
+				"Scheduling a reset for the controller\n");
 			PREPARE_DELAYED_WORK(&h->dwork, sop_reset_controller);
 			schedule_delayed_work(&h->dwork, HZ);
 		}
