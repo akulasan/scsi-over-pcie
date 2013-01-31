@@ -3339,7 +3339,7 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 
 		if (!q)
 			continue;
-		
+
 		spin_lock_irq(&q->oq->qlock);
 		/* Process any pending ISR */
 		sop_msix_handle_ioq(q);
@@ -3363,7 +3363,7 @@ static void __attribute__((unused)) verify_structure_defs(void)
 
 	VERIFY_OFFSET(iu_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
-	VERIFY_OFFSET(iu_length, 2); 
+	VERIFY_OFFSET(iu_length, 2);
 	VERIFY_OFFSET(response_oq, 4);
 	VERIFY_OFFSET(work_area, 6);
 	VERIFY_OFFSET(request_id, 8);
@@ -3375,8 +3375,8 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(index_addr, 24);
 	VERIFY_OFFSET(nelements, 32);
 	VERIFY_OFFSET(element_length, 34);
-	VERIFY_OFFSET(iqp, 36); 
-	VERIFY_OFFSET(oqp, 36); 
+	VERIFY_OFFSET(iqp, 36);
+	VERIFY_OFFSET(oqp, 36);
 	VERIFY_OFFSET(reserved4, 47);
 #undef VERIFY_OFFSET
 	BUILD_BUG_ON(sizeof(struct pqi_create_operational_queue_request) !=
@@ -3429,22 +3429,22 @@ static void __attribute__((unused)) verify_structure_defs(void)
 #define VERIFY_OFFSET(field, offset) \
 	BUILD_BUG_ON(offsetof(struct pqi_delete_operational_queue_request, \
 			field) != offset)
-        VERIFY_OFFSET(iu_type, 0);
-        VERIFY_OFFSET(compatible_features, 1);
-        VERIFY_OFFSET(iu_length, 2);
-        VERIFY_OFFSET(response_oq, 4);
-        VERIFY_OFFSET(work_area, 6);
-        VERIFY_OFFSET(request_id, 8);
-        VERIFY_OFFSET(function_code, 10);
-        VERIFY_OFFSET(reserved2, 11);
-        VERIFY_OFFSET(queue_id, 12);
-        VERIFY_OFFSET(reserved3, 14);
+	VERIFY_OFFSET(iu_type, 0);
+	VERIFY_OFFSET(compatible_features, 1);
+	VERIFY_OFFSET(iu_length, 2);
+	VERIFY_OFFSET(response_oq, 4);
+	VERIFY_OFFSET(work_area, 6);
+	VERIFY_OFFSET(request_id, 8);
+	VERIFY_OFFSET(function_code, 10);
+	VERIFY_OFFSET(reserved2, 11);
+	VERIFY_OFFSET(queue_id, 12);
+	VERIFY_OFFSET(reserved3, 14);
 #undef VERIFY_OFFSET
 
 #define VERIFY_OFFSET(field, offset) \
 	BUILD_BUG_ON(offsetof(struct pqi_delete_operational_queue_response, \
 			field) != offset)
- 	VERIFY_OFFSET(ui_type, 0);
+	VERIFY_OFFSET(ui_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
 	VERIFY_OFFSET(ui_length, 2);
 	VERIFY_OFFSET(response_oq, 4);
@@ -3502,8 +3502,8 @@ static void __attribute__((unused)) verify_structure_defs(void)
 #undef VERIFY_OFFSET
 
 #define VERIFY_OFFSET(field, offset) \
-	BUILD_BUG_ON(offsetof(struct report_pqi_device_capability_iu, field) != offset)
-
+	BUILD_BUG_ON(offsetof(struct report_pqi_device_capability_iu, \
+				field) != offset)
 	VERIFY_OFFSET(iu_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
 	VERIFY_OFFSET(iu_length, 2);
@@ -3517,7 +3517,8 @@ static void __attribute__((unused)) verify_structure_defs(void)
 #undef VERIFY_OFFSET
 
 #define VERIFY_OFFSET(field, offset) \
-	BUILD_BUG_ON(offsetof(struct report_pqi_device_capability_response, field) != offset)
+	BUILD_BUG_ON(offsetof(struct report_pqi_device_capability_response, \
+				field) != offset)
 	VERIFY_OFFSET(iu_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
 	VERIFY_OFFSET(iu_length, 2);
@@ -3601,7 +3602,8 @@ static void __attribute__((unused)) verify_structure_defs(void)
 #undef VERIFY_OFFSET
 
 #define VERIFY_OFFSET(field, offset) \
-	BUILD_BUG_ON(offsetof(struct report_general_response_iu, field) != offset)
+	BUILD_BUG_ON(offsetof(struct report_general_response_iu, \
+				 field) != offset)
 		VERIFY_OFFSET(reserved, 0);
 		VERIFY_OFFSET(lun_bridge_present_flags, 4);
 		VERIFY_OFFSET(reserved2, 5);
