@@ -3071,18 +3071,12 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 	while (bio_list_peek(&wq->iq_cong)) {
 		struct bio *bio = bio_list_pop(&wq->iq_cong);
 
-		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: proc bio %p Q[%d], PI %d CI %d!\n",
-			bio, qinfo->iq->queue_id, qinfo->iq->unposted_index, *(qinfo->iq->ci)); */
 		at_least_one_bio = 1;
 		ret = bio_process(h, bio, qinfo, 1);
 		if (ret) {
-			/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: Error %d for [%d]!\n",
-						ret, qinfo->iq->queue_id); */
 			bio_list_add_head(&wq->iq_cong, bio);
 			break;
 		}
-		/* dev_warn(&h->pdev->dev, "sop_resubmit_waitq: done bio %p Q[%d], PI %d CI %d!\n",
-			bio, qinfo->iq->queue_id, qinfo->iq->unposted_index, *(qinfo->iq->ci)); */
 	}
 	while (bio_list_peek(&wq->iq_cong_sgio)) {
 		struct bio *bio = bio_list_pop(&wq->iq_cong_sgio);
@@ -3111,7 +3105,7 @@ static void sop_requeue_all_outstanding_io(struct sop_device *h)
 
 		if (!q)
 			continue;
-		
+
 		spin_lock_irq(&q->oq->qlock);
 
 		/* Process any pending ISR */
@@ -3145,7 +3139,7 @@ static void sop_reset_controller(struct work_struct *work)
 {
 	int rc;
 	int i;
-	int reset_count=0;
+	int reset_count = 0;
 	struct sop_device *h;
 
 	h =  container_of(work, struct sop_device, dwork.work);
@@ -3163,11 +3157,12 @@ start_reset:
 	if (rc)
 		goto reset_err;
 
-	dev_warn(&h->pdev->dev, "Re creating %d I/O queue pairs\n", 
+	dev_warn(&h->pdev->dev, "Re creating %d I/O queue pairs\n",
 		h->nr_queue_pairs-1);
 	/* Re create all the queue pairs */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
-		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_FROM_DEVICE))
+		if (sop_create_io_queue(h, &h->qinfo[i], i,
+				PQI_DIR_FROM_DEVICE))
 			goto reset_err;
 		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_TO_DEVICE))
 			goto reset_err;
@@ -3175,18 +3170,18 @@ start_reset:
 
 	dev_warn(&h->pdev->dev, "I/O queue created - Resubmitting pending commands\n");
 	/* Next: sop_resubmit_waitq for all Q */
-	for (i = 1; i < h->nr_queue_pairs; i++) {
+	for (i = 1; i < h->nr_queue_pairs; i++)
 		sop_resubmit_waitq(&h->qinfo[i], false);
-	}
 
 	dev_warn(&h->pdev->dev, "Reset Complete\n");
-	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, (volatile unsigned long *)&h->flags);
+	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND,
+			(volatile unsigned long *)&h->flags);
 	return;
 
 reset_err:
 	reset_count++;
-	dev_warn(&h->pdev->dev, "Reset failed, attempt #%d of %d\n", reset_count,
-		MAX_RESET_COUNT);
+	dev_warn(&h->pdev->dev, "Reset failed, attempt #%d of %d\n",
+			reset_count, MAX_RESET_COUNT);
 	if (reset_count < MAX_RESET_COUNT)
 		goto start_reset;
 
