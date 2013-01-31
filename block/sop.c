@@ -77,9 +77,11 @@ static void sop_rem_timeout(struct queue_info *q, uint tmo_slot);
 static void sop_fail_all_outstanding_io(struct sop_device *h);
 
 #ifdef CONFIG_COMPAT
-static int sop_compat_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
+static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
+				unsigned int cmd, unsigned long arg);
 #endif
-static int sop_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg);
+static int sop_ioctl(struct block_device *dev, fmode_t mode,
+				unsigned int cmd, unsigned long arg);
 
 static const struct block_device_operations sop_fops = {
 	.owner			= THIS_MODULE,
@@ -101,12 +103,13 @@ sop_sysfs_show_dbg_lvl(struct device_driver *dd, char *buf)
 	return sprintf(buf, "%u\n", sop_dbg_lvl);
 }
 
-static ssize_t
-sop_sysfs_set_dbg_lvl(struct device_driver *dd, const char *buf, size_t count)
+static ssize_t sop_sysfs_set_dbg_lvl(struct device_driver *dd, const char *buf,
+					size_t count)
 {
 	int retval = count;
-	if(sscanf(buf,"%u",&sop_dbg_lvl)<1){
-		printk(KERN_ERR "sop: could not set dbg_lvl\n");
+
+	if (sscanf(buf, "%u", &sop_dbg_lvl) < 1) {
+		pr_err("sop: could not set dbg_lvl\n");
 		retval = -EINVAL;
 	}
 	return retval;
@@ -115,10 +118,9 @@ sop_sysfs_set_dbg_lvl(struct device_driver *dd, const char *buf, size_t count)
 static DRIVER_ATTR(dbg_lvl, S_IRUGO|S_IWUSR, sop_sysfs_show_dbg_lvl,
 		sop_sysfs_set_dbg_lvl);
 
-
-/* 
+/*
  * 32-bit readq and writeq implementations taken from old
- * version of arch/x86/include/asm/io.h 
+ * version of arch/x86/include/asm/io.h
  */
 #ifndef readq
 static inline u64 readq(const volatile void __iomem *addr)
