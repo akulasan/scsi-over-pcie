@@ -1890,12 +1890,11 @@ static int sop_prepare_cdb(u8 *cdb, struct bio *bio)
 	return 0;
 }
 
-
 /* Prepares the scatterlist for the given bio */
-static int sop_prepare_scatterlist(struct bio *bio, struct sop_request *ser, 
-                                   struct scatterlist  *sgl, int nsegs)
+static int sop_prepare_scatterlist(struct bio *bio, struct sop_request *ser,
+				   struct scatterlist  *sgl, int nsegs)
 {
-	int	i, len=0, num_sg = 0;
+	int i, len = 0, num_sg = 0;
 	struct bio_vec  *bv, *prev_bv = NULL;
 	struct scatterlist  *cur_sg = NULL;
 
@@ -1908,17 +1907,12 @@ static int sop_prepare_scatterlist(struct bio *bio, struct sop_request *ser,
 		if (prev_bv && __BIOVEC_PHYS_MERGEABLE(prev_bv, bv)) {
 			/* Merge the sg */
 			cur_sg->length += bv->bv_len;
-		}
-		else {
+		} else {
 			/* Create a new SG */
 			if (cur_sg == NULL)
 				cur_sg = sgl;
 			else
 				cur_sg++;
-#if 0
-			printk("SG[%d] (%d) 0x%p, 0x%x\n", num_sg, i,
-				bv->bv_page + bv->bv_offset, bv->bv_len);
-#endif
 			sg_set_page(cur_sg, bv->bv_page, bv->bv_len,
 				bv->bv_offset);
 			num_sg++;
@@ -1932,7 +1926,7 @@ static int sop_prepare_scatterlist(struct bio *bio, struct sop_request *ser,
 
 	sg_mark_end(cur_sg);
 
-	return (num_sg);
+	return num_sg;
 }
 
 static void fill_sg_data_element(struct pqi_sgl_descriptor *sgld,
@@ -1976,7 +1970,7 @@ static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
 	datasg = &r->sg[0];
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * num_sg);
 
-	for (i=0; i<num_sg; i++) {
+	for (i = 0; i < num_sg; i++) {
 		fill_sg_data_element(datasg, &sgl[i], xfer_size);
 		datasg++;
 	}
@@ -2006,7 +2000,7 @@ static int sop_scatter_gather(struct sop_device *h,
 	sg_block_number = r->request_id * MAX_SGLS;
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * 2);
 
-	for (i=0; i < num_sg; i++) {
+	for (i = 0; i < num_sg; i++) {
 		if (i == 1) {
 			fill_sg_chain_element(datasg, q,
 					sg_block_number, num_sg-1);
@@ -2049,7 +2043,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 
 	r = pqi_alloc_elements(qinfo->iq, 1);
 	if (IS_ERR(r)) {
-		dev_warn(&h->pdev->dev, "SUBQ[%d] pqi_alloc_elements for bio %p returned %ld\n", 
+		dev_warn(&h->pdev->dev, "SUBQ[%d] pqi_alloc_elements for bio %p returned %ld\n",
 			qinfo_to_qid(qinfo), bio, PTR_ERR(r));
 		goto alloc_elem_fail;
 	}
@@ -2128,10 +2122,10 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 		h->max_cmd_pending = atomic_read(&h->cmd_pending);
 	ser->num_sg = num_sg;
 #if 0
-	dev_warn(&h->pdev->dev, "CDB: [0]%02x [1]%02x [2]%02x %02x %02x %02x"
-		"  XFER Size: %d, Num Seg %d\n",
-		r->cdb[0], r->cdb[1], r->cdb[2], r->cdb[3], r->cdb[4], r->cdb[5], 
-		ser->xfer_size, num_sg);
+	dev_warn(&h->pdev->dev,
+		"CDB: [0]%02x [1]%02x [2]%02x %02x %02x %02x XFER Size: %d, Num Seg %d\n",
+		r->cdb[0], r->cdb[1], r->cdb[2], r->cdb[3],
+		r->cdb[4], r->cdb[5], ser->xfer_size, num_sg);
 #endif
 	sop_scatter_gather(h, qinfo, num_sg, r, sgl, &ser->xfer_size);
 
@@ -2207,7 +2201,7 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 }
 
 static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
-		u16 queue_id, u16 request_id, char *cdb, 
+		u16 queue_id, u16 request_id, char *cdb,
 		dma_addr_t phy_addr, int data_len, u8 data_dir)
 {
 	int cdb_len;
