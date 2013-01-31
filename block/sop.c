@@ -1051,7 +1051,6 @@ int sop_msix_handle_ioq(struct queue_info *q)
 				struct sop_sg_io_context *sgio_context =
 					bio_get_driver_context(r->bio);
 				if (unlikely(sgio_context)) {
-					printk(KERN_WARNING "zzz so interrupt handler , SG_IO\n");
 					complete(sgio_context->waiting);
 				} else
 					sop_complete_bio(h, q, r);
@@ -2031,8 +2030,6 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	int nsegs;
 	struct sop_sg_io_context *sgio_context;
 
-	printk(KERN_WARNING "zzz bio->bi_bdev = %p\n", bio->bi_bdev);
-
 	/* FIXME: Temporarily limit the outstanding FW commands to 128 */
 	if (atomic_read(&h->cmd_pending) >= 128)
 		return -EBUSY;
@@ -2102,9 +2099,6 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 		sgio_context->qinfo = qinfo;
 		memset(r->cdb, 0, sizeof(r->cdb));
 		memcpy(r->cdb, sgio_context->cdb, sgio_context->cdblen);
-		printk(KERN_WARNING "sgio cdb = %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
-			r->cdb[0], r->cdb[1], r->cdb[2], r->cdb[3], r->cdb[4], r->cdb[5], r->cdb[6], r->cdb[7],
-			r->cdb[8], r->cdb[9], r->cdb[10], r->cdb[11], r->cdb[12], r->cdb[13], r->cdb[14], r->cdb[15]);
 	}
 
 	/* Prepare the scatterlist */
@@ -2555,12 +2549,10 @@ static int sop_map_user_iov(struct request_queue *q, struct block_device *dev,
 	if (unaligned /* || mapped_data || q->dma_pad_mask & len */) {
 		bio = bio_copy_user_iov(q, NULL, iov, iov_count,
 						read, gfp_mask);
-		printk(KERN_WARNING "zzz copied user iov\n");
 		bio->bi_bdev = dev;
 	} else {
 		bio = bio_map_user_iov(q, dev, iov, iov_count,
 						read, gfp_mask);
-		printk(KERN_WARNING "zzz mapped user iov\n");
 	}
 
 	if (IS_ERR(bio))
@@ -2605,7 +2597,6 @@ static void sop_complete_sgio_hdr(struct sop_device *h,
 				sgio_context->data_dir);
 	result = 0;
 
-	printk(KERN_WARNING "zzz sop_complete_sgio_hdr , r->response[0] = %d\n", r->response[0]);
 	switch (r->response[0]) {
 	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
 		hdr->status = 0;
@@ -2688,7 +2679,6 @@ static void sop_complete_sgio_hdr(struct sop_device *h,
 	if (!result)
 		result = ret;
 	/* FIXME, what to do with result */
-	printk(KERN_WARNING "zzz sop_complete_sgio_hdr returning\n");
 	return;
 }
 
@@ -2715,55 +2705,43 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	unsigned long start_time;
 
 	rc = 0;
-	printk(KERN_WARNING "zzz 1\n");
 	h = bdev_to_hba(dev);
 	if (!argp)
 		return -EINVAL;
-	printk(KERN_WARNING "zzz 2\n");
 	if (!capable(CAP_SYS_RAWIO))
 		return -EPERM;
-	printk(KERN_WARNING "zzz 3\n");
 	if (!access_ok(VERIFY_WRITE, argp, sizeof(*hp)))
 		return -EFAULT;
-	printk(KERN_WARNING "zzz 4\n");
 	if (!access_ok(VERIFY_READ, argp, sizeof(*hp)))
 		return -EFAULT;
-	printk(KERN_WARNING "zzz 5\n");
 	hp = kmalloc(sizeof(*hp), GFP_KERNEL);
 	if (!hp)
 		return -ENOMEM;
-	printk(KERN_WARNING "zzz 5a\n");
 	if (__copy_from_user(hp, argp, sizeof(*hp))) {
 		rc = -EFAULT;
 		goto out;
 	}
-	printk(KERN_WARNING "zzz 5b\n");
 	if (hp->interface_id != 'S') {
 		rc = -ENOSYS;
 		goto out;
 	}
-	printk(KERN_WARNING "zzz 6\n");
 	if (hp->flags & SG_FLAG_DIRECT_IO && hp->flags & SG_FLAG_MMAP_IO) {
 		rc = -EINVAL; /* either MMAP_IO or DIRECT_IO (not both) */
 		goto out;
 	}
-	printk(KERN_WARNING "zzz 7\n");
 	if (hp->flags & SG_FLAG_MMAP_IO) {
 		rc = -ENOSYS; /* FIXME we should support this. */
 		goto out;
 	}
-	printk(KERN_WARNING "zzz 8\n");
 	if (hp->flags & SG_FLAG_DIRECT_IO) {
 		rc = -ENOSYS; /* FIXME we should support this. */
 		goto out;
 	}
-	printk(KERN_WARNING "zzz 9\n");
 	sgio_context = kmalloc(sizeof(*sgio_context), GFP_KERNEL);
 	if (!sgio_context) {
 		rc = -ENOMEM;
 		goto out;
 	}
-	printk(KERN_WARNING "zzz 10\n");
 	ul_timeout = msecs_to_jiffies(hp->timeout);
 	timeout = (ul_timeout < INT_MAX) ? ul_timeout : INT_MAX;
 	if ((!hp->cmdp) || (hp->cmd_len < 6) || (hp->cmd_len > sizeof(cmnd))) {
@@ -2786,7 +2764,6 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		goto out;
 	}
 	/* FIXME check for read-only access violation here. */
-	printk(KERN_WARNING "zzz 20\n");
 
 	hp->status = 0;
 	hp->masked_status = 0;
@@ -2818,14 +2795,12 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	hp->duration = jiffies_to_msecs(jiffies);
 	/* FIXME do something with timeout */
 
-	printk(KERN_WARNING "zzz 30\n");
 	/* copy in the data buffers, if any */
 	iov_count = hp->iovec_count;
 	if (hp->dxfer_len > 0 && data_dir != DMA_NONE) {
 		if (iov_count) {
 			int len, size = sizeof(struct sg_iovec) * iov_count;
 
-			printk(KERN_WARNING "zzz 31\n");
 			iov = memdup_user(hp->dxferp, size);
 			if (IS_ERR(iov)) {
 				rc = PTR_ERR(iov);
@@ -2838,7 +2813,6 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 				len = hp->dxfer_len;
 			}
 		} else {
-			printk(KERN_WARNING "zzz 32\n");
 			iov_count = 1;
 			one_iovec = kmalloc(sizeof(*one_iovec), GFP_KERNEL);
 			if (!one_iovec) {
@@ -2860,10 +2834,8 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		/* No data transfer -- we don't really need a bio except that
 		 * we need a fake bio to transfer the sgio_context.
 		 */
-		printk(KERN_WARNING "zzz 33\n");
 		bio = vmalloc(sizeof(*bio));
 	}
-	printk(KERN_WARNING "zzz 40\n");
 	sgio_context->data_dir = data_dir;
 	bio_set_driver_context(bio, sgio_context);
 	sgio_context->waiting = &wait;
@@ -2873,12 +2845,9 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	 * make sure we know the device is in use.
 	 */
 	__sop_make_request(h->rq, bio, 0);
-	printk(KERN_WARNING "zzz 50\n");
 	wait_for_completion(&wait);
-	printk(KERN_WARNING "zzz 60\n");
 
 	sop_complete_sgio_hdr(h, bio, hp);
-	printk(KERN_WARNING "zzz 70\n");
 	/*
 	 * FIXME I think I need to do some kind of kref_put() here to
 	 * undo the kref_get above.
@@ -2888,13 +2857,11 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		rc = -EFAULT;
 
 out:
-	printk(KERN_WARNING "zzz out\n");
 	if (sgio_context->data_dir == DMA_NONE) /* free the fake bio */
 		vfree(bio);
 	kfree(hp);
 	kfree(sgio_context);
 	kfree(one_iovec);
-	printk(KERN_WARNING "zzz returning, rc = %d\n", rc);
 	return rc;
 }
 
@@ -2915,7 +2882,6 @@ static int sop_ioctl(struct block_device *dev, fmode_t mode,
 	case SCSI_IOCTL_SEND_COMMAND:
 #endif
 	case SG_IO:
-		printk(KERN_WARNING "SG_IO called\n");
 		return sop_sg_io(dev, mode, cmd, argp);
 	default:
 		return -ENOTTY;
