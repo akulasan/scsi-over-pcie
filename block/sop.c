@@ -1211,27 +1211,18 @@ static u16 alloc_request(struct sop_device *h, u8 queue_pair_index)
 
 	BUG_ON(qinfo->qdepth > MAX_CMDS);
 
-        do {
-                rc = (u16) find_first_zero_bit(qinfo->request_bits, qinfo->qdepth);
-                if (rc >= qinfo->qdepth-1) {
-			/*
-			int i, lim;
-
-			dev_warn(&h->pdev->dev, "Q[%d] alloc_request failed. Bit=%d Qdepth=%d.\n",
-				q, rc, qinfo->qdepth);
-			lim = BITS_TO_LONGS(qinfo->qdepth) + 1;
-			for (i=0; i < lim; i++)
-				dev_warn(&h->pdev->dev, "Bits [%02d]: %08lx\n", i, 
-					qinfo->request_bits[i]);
-			*/
-                        return (u16) -EBUSY;
-		}
-        } while (test_and_set_bit((int) rc, qinfo->request_bits));
+	do {
+		rc = (u16) find_first_zero_bit(qinfo->request_bits,
+						qinfo->qdepth);
+		if (rc >= qinfo->qdepth-1)
+			return (u16) -EBUSY;
+	} while (test_and_set_bit((int) rc, qinfo->request_bits));
 
 	return rc;
 }
 
-static void free_request(struct sop_device *h, u8 queue_pair_index, u16 request_id)
+static void free_request(struct sop_device *h, u8 queue_pair_index,
+				u16 request_id)
 {
 	BUG_ON(request_id >= h->qinfo[queue_pair_index].qdepth);
 	clear_bit(request_id, h->qinfo[queue_pair_index].request_bits);
@@ -1246,7 +1237,7 @@ static void fill_create_io_queue_request(struct sop_device *h,
 
 	if (to_device)
 		function_code = CREATE_QUEUE_TO_DEVICE;
-	else 
+	else
 		function_code = CREATE_QUEUE_FROM_DEVICE;
 
 	memset(r, 0, sizeof(*r));
@@ -1278,7 +1269,7 @@ static void fill_delete_io_queue_request(struct sop_device *h,
 
 	if (to_device)
 		function_code = DELETE_QUEUE_TO_DEVICE;
-	else 
+	else
 		function_code = DELETE_QUEUE_FROM_DEVICE;
 
 	memset(r, 0, sizeof(*r));
