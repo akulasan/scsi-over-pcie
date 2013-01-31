@@ -503,30 +503,29 @@ static void print_bytes(unsigned char *c, int len, int hex, int ascii)
 	int i;
 	unsigned char *x;
 
-	if (hex)
-	{
+	if (hex) {
 		x = c;
-		for (i=0;i<len;i++)
-		{
+		for (i = 0; i < len; i++) {
 			if ((i % xmargin) == 0 && i>0) printk("\n");
 			if ((i % xmargin) == 0) printk("0x%04x:", i);
-			printk(" %02x", *x);
+			pr_warn(" %02x", *x);
 			x++;
 		}
-		printk("\n");
+		pr_warn("\n");
 	}
-	if (ascii)
-	{
+	if (ascii) {
 		x = c;
-		for (i=0;i<len;i++)
-		{
+		for (i = 0;i < len; i++) {
 			if ((i % amargin) == 0 && i>0) printk("\n");
-			if ((i % amargin) == 0) printk("0x%04x:", i);
-			if (*x > 26 && *x < 128) printk("%c", *x);
-			else printk(".");
+			if ((i % amargin) == 0)
+				pr_warn("0x%04x:", i);
+			if (*x > 26 && *x < 128)
+				pr_warn("%c", *x);
+			else
+				pr_warn(".");
 			x++;
 		}
-		printk("\n");
+		pr_warn("\n");
 	}
 }
 
@@ -536,7 +535,7 @@ static void print_iu(unsigned char *iu)
 
 	memcpy(&iu_length, &iu[2], 2);
 	iu_length = le16_to_cpu(iu_length) + 4;
-	printk(KERN_WARNING "***** IU type = 0x%02x, len = %hd, compat_features = %02x *****\n",
+	pr_warn("***** IU type = 0x%02x, len = %hd, compat_features = %02x *****\n",
 			iu[0], iu_length, iu[1]);
 	print_bytes(iu, (int) iu_length, 1, 0);
 }
@@ -552,22 +551,25 @@ static void __attribute__((unused)) print_unsubmitted_commands(struct pqi_device
 	spin_lock_irqsave(&q->index_lock, flags);
 	pi = q->local_pi;
 	if (pi == q->unposted_index) {
-		printk(KERN_WARNING "submit queue is empty.\n");
+		pr_warn("submit queue is empty.\n");
 		spin_unlock_irqrestore(&q->index_lock, flags);
 		return;
 	}
 	if (pi < q->unposted_index) {
 		for (i = pi; i < q->unposted_index; i++) {
-			iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
+			iu = (unsigned char *) q->queue_vaddr +
+					(i * IQ_IU_SIZE);
 			print_iu(iu);
 		}
 	} else {
 		for (i = pi; i < q->nelements; i++) {
-			iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
+			iu = (unsigned char *) q->queue_vaddr +
+					(i * IQ_IU_SIZE);
 			print_iu(iu);
 		}
 		for (i = 0; i < q->unposted_index; i++) {
-			iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
+			iu = (unsigned char *) q->queue_vaddr +
+					(i * IQ_IU_SIZE);
 			print_iu(iu);
 		}
 	}
@@ -617,7 +619,7 @@ static int wait_for_admin_command_ack(struct sop_device *h)
 	return -1;
 }
 
-static int wait_for_admin_queues_to_become_idle(struct sop_device *h, 
+static int wait_for_admin_queues_to_become_idle(struct sop_device *h,
 						int timeout_ms,
 						u8 device_state)
 {
@@ -661,9 +663,9 @@ static int wait_for_admin_queues_to_become_idle(struct sop_device *h,
 
 static inline int sop_admin_queue_buflen(struct sop_device *h, int nelements)
 {
-	return (((h->pqicap.admin_iq_element_length * 16) +
+	return ((h->pqicap.admin_iq_element_length * 16) +
 		(h->pqicap.admin_oq_element_length * 16)) *
-		nelements + 32);
+		nelements + 32;
 }
 
 static void sop_free_admin_queues(struct sop_device *h)
@@ -704,11 +706,13 @@ static int __devinit sop_alloc_admin_queues(struct sop_device *h)
 	}
 
 	if (pqi_device_queue_alloc(h, &h->qinfo[0].oq, admin_oq_elem_count,
-			h->pqicap.admin_iq_element_length, PQI_DIR_FROM_DEVICE, 0))
+			h->pqicap.admin_iq_element_length,
+			PQI_DIR_FROM_DEVICE, 0))
 		return -1;
 
 	if (pqi_device_queue_alloc(h, &h->qinfo[0].iq, admin_iq_elem_count,
-			h->pqicap.admin_iq_element_length, PQI_DIR_TO_DEVICE, 0))
+			h->pqicap.admin_iq_element_length,
+			PQI_DIR_TO_DEVICE, 0))
 		goto bailout;
 
 #define PQI_REG_ALIGNMENT 16
@@ -736,7 +740,7 @@ bailout:
 	sop_free_admin_queues(h);
 
 	dev_warn(&h->pdev->dev, "%s: %s\n", __func__, msg);
-	return -1;	
+	return -1;
 }
 
 static int sop_create_admin_queues(struct sop_device *h)
@@ -825,7 +829,7 @@ static int sop_create_admin_queues(struct sop_device *h)
 
 bailout:
 	dev_warn(&h->pdev->dev, "%s: %s\n", __func__, msg);
-	return -1;	
+	return -1;
 }
 
 static int sop_delete_admin_queues(struct sop_device *h)
