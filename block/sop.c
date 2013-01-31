@@ -1061,9 +1061,9 @@ int sop_msix_handle_ioq(struct queue_info *q)
 			if (likely(r->bio)) {
 				struct sop_sg_io_context *sgio_context =
 					bio_get_driver_context(r->bio);
-				if (unlikely(sgio_context)) {
+				if (unlikely(sgio_context))
 					complete(sgio_context->waiting);
-				} else
+				else
 					sop_complete_bio(h, q, r);
 				r = NULL;
 			} else {
@@ -1811,7 +1811,6 @@ static inline int find_sop_queue(struct sop_device *h, int cpu)
 {
 	return 1 + (cpu % (h->nr_queue_pairs - 1));
 }
-
 
 #define	SCSI_READ_BASIC			0x08
 #define	SCSI_WRITE_BASIC		0x0A
