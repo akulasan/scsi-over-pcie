@@ -1751,7 +1751,8 @@ static int __init sop_init(void)
 
 	sop_thread = kthread_run(sop_thread_proc, NULL, "sop");
 	if (IS_ERR(sop_thread)) {
-		printk("SOP Init: Thread creation failed with %p!\n", sop_thread);
+		pr_warn("SOP Init: Thread creation failed with %p!\n",
+				sop_thread);
 		return PTR_ERR(sop_thread);
 	}
 
@@ -1768,18 +1769,18 @@ static int __init sop_init(void)
 	if (result)
 		goto create_fail;
 
-	printk("SOP driver initialized!\n");
+	pr_info("SOP driver initialized!\n");
 	return 0;
 
  create_fail:
 	pci_unregister_driver(&sop_pci_driver);
 
  register_fail:
-	printk("SOP Init: PCI register failed with %d!\n", result);
+	pr_warn("SOP Init: PCI register failed with %d!\n", result);
 	unregister_blkdev(sop_major, SOP);
 
  blkdev_fail:
-	printk("SOP Init: Blkdev register failed with %d!\n", result);
+	pr_warn("SOP Init: Blkdev register failed with %d!\n", result);
 	kthread_stop(sop_thread);
 	return result;
 
@@ -1791,7 +1792,7 @@ static void __exit sop_exit(void)
 	pci_unregister_driver(&sop_pci_driver);
 	unregister_blkdev(sop_major, SOP);
 	kthread_stop(sop_thread);
-	printk("%s: Driver unloaded\n", SOP);
+	pr_info("%s: Driver unloaded\n", SOP);
 }
 
 static inline struct sop_device *bdev_to_hba(struct block_device *bdev)
@@ -1850,8 +1851,7 @@ static int sop_prepare_cdb(u8 *cdb, struct bio *bio)
 			cdb[7] = SOP_GET_BYTE(num_sec, 1);
 			cdb[8] = SOP_GET_BYTE(num_sec, 0);
 			cdb[9] = 0;     /* Control */
-		}
-		else {
+		} else {
 			/* Use RW_12 */
 			cdb[0] = (SCSI_CMD_RW_12_PRE | cmd_low);
 
@@ -1859,15 +1859,14 @@ static int sop_prepare_cdb(u8 *cdb, struct bio *bio)
 			cdb[7] = SOP_GET_BYTE(num_sec, 2);
 			cdb[8] = SOP_GET_BYTE(num_sec, 1);
 			cdb[9] = SOP_GET_BYTE(num_sec, 0);
-			cdb[10]= 0;     /* Reserved */
-			cdb[11]= 0;     /* Control */
+			cdb[10] = 0;     /* Reserved */
+			cdb[11] = 0;     /* Control */
 		}
 		cdb[2] = SOP_GET_BYTE(lba, 3);
 		cdb[3] = SOP_GET_BYTE(lba, 2);
 		cdb[4] = SOP_GET_BYTE(lba, 1);
 		cdb[5] = SOP_GET_BYTE(lba, 0);
-	}
-	else {
+	} else {
 		/* Has to be RW_16 */
 		cdb[0] = (SCSI_CMD_RW_16_PRE | cmd_low);
 
@@ -1879,12 +1878,12 @@ static int sop_prepare_cdb(u8 *cdb, struct bio *bio)
 		cdb[7] = SOP_GET_BYTE(lba, 2);
 		cdb[8] = SOP_GET_BYTE(lba, 1);
 		cdb[9] = SOP_GET_BYTE(lba, 0);
-		cdb[10]= SOP_GET_BYTE(num_sec, 3);
-		cdb[11]= SOP_GET_BYTE(num_sec, 2);
-		cdb[12]= SOP_GET_BYTE(num_sec, 1);
-		cdb[13]= SOP_GET_BYTE(num_sec, 0);
-		cdb[14]= 0;     /* Reserved+Group Num */
-		cdb[15]= 0;     /* Control */
+		cdb[10] = SOP_GET_BYTE(num_sec, 3);
+		cdb[11] = SOP_GET_BYTE(num_sec, 2);
+		cdb[12] = SOP_GET_BYTE(num_sec, 1);
+		cdb[13] = SOP_GET_BYTE(num_sec, 0);
+		cdb[14] = 0;     /* Reserved+Group Num */
+		cdb[15] = 0;     /* Control */
 	}
 
 	return 0;
