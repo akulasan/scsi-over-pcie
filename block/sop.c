@@ -2557,8 +2557,7 @@ static int sop_map_user_iov(struct request_queue *q, struct block_device *dev,
 {
 	struct bio *bio;
 	int i, unaligned = 0;
-	int read = direction == SG_DXFER_FROM_DEV ||
-		direction == SG_DXFER_TO_FROM_DEV;
+	int read = (direction == DMA_FROM_DEVICE);
 
 	/* check alignment */
 	for (i = 0; i < iov_count; i++) {
