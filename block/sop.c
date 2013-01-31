@@ -311,7 +311,7 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 		(*xq)->pi = vaddr + q_element_size_over_16 * 16 * n_q_elements;
 		/* (*xq)->ci is unknown now, hardware will tell us later */
 	}
-	(*xq)->queue_id = qpindex_to_qid(queue_pair_index, 
+	(*xq)->queue_id = qpindex_to_qid(queue_pair_index,
 				(queue_direction == PQI_DIR_TO_DEVICE));
 	(*xq)->unposted_index = 0;
 	(*xq)->element_size = q_element_size_over_16 * 16;
@@ -331,7 +331,7 @@ bailout:
 
 static void pqi_device_queue_init(struct pqi_device_queue *q,
 		__iomem u16 *pi, __iomem u16 *ci)
-{	
+{
 	q->pi = pi;
 	q->ci = ci;
 	q->unposted_index = 0;
@@ -339,7 +339,8 @@ static void pqi_device_queue_init(struct pqi_device_queue *q,
 	spin_lock_init(&q->index_lock);
 }
 
-static void pqi_device_queue_free(struct sop_device *h, struct pqi_device_queue *q)
+static void pqi_device_queue_free(struct sop_device *h,
+					struct pqi_device_queue *q)
 {
 	size_t total_size, n_q_elements, element_size;
 
@@ -368,7 +369,7 @@ static int pqi_iq_data_alloc(struct sop_device *h, struct queue_info *qinfo)
 
 	if (allocate_q_request_buffers(qinfo, n_q_elements,
 		sizeof(struct sop_request))) {
-		dev_warn(&h->pdev->dev, "Failed to alloc rq buffers #%d\n", 
+		dev_warn(&h->pdev->dev, "Failed to alloc rq buffers #%d\n",
 			queue_pair_index);
 		goto bailout_iq;
 	}
@@ -425,8 +426,8 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
 	void *p;
 
 	if (pqi_to_device_queue_is_full(q, nelements)) {
-		printk(KERN_WARNING "pqi device queue [%d] is full!\n", q->queue_id);
-		printk(KERN_WARNING "  unposted_index = %d, ci = %d, nelements=%d\n",
+		pr_warn("pqi device queue [%d] is full!\n", q->queue_id);
+		pr_warn("  unposted_index = %d, ci = %d, nelements=%d\n",
 			q->unposted_index, *(q->ci), q->nelements);
 		return ERR_PTR(-ENOMEM);
 	}
@@ -438,12 +439,13 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
 	 */
 	if (q->nelements - q->unposted_index < nelements) {
 		int extra_elements = q->nelements - q->unposted_index;
-		if (pqi_to_device_queue_is_full(q, nelements + extra_elements)) {
-			printk(KERN_WARNING "pqi device queue [%d] End is full!\n", 
+		if (pqi_to_device_queue_is_full(q,
+				nelements + extra_elements)) {
+			pr_warn("pqi device queue [%d] End is full!\n",
 				q->queue_id);
-			printk(KERN_WARNING "q->nelements = %d, q->unposted_index = %hu,"
-				" extra_elements = %d\n", q->nelements, 
-				q->unposted_index, extra_elements);
+			pr_warn("q->nelements = %d, q->unposted_index = %hu, extra_elements = %d\n",
+				q->nelements, q->unposted_index,
+				extra_elements);
 			return ERR_PTR(-ENOMEM);
 		}
 		p = q->queue_vaddr + q->unposted_index * q->element_size;
@@ -459,7 +461,8 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
 static void pqi_unalloc_elements(struct pqi_device_queue *q,
 					int nelements)
 {
-	q->unposted_index = (q->unposted_index + q->nelements - nelements) % q->nelements;
+	q->unposted_index = (q->unposted_index + q->nelements - nelements) %
+				q->nelements;
 }
 
 static int pqi_dequeue_from_device(struct pqi_device_queue *q, void *element)
@@ -494,8 +497,8 @@ static u16 pqi_peek_request_id_from_device(struct pqi_device_queue *q)
 	return *(u16 *) p;
 }
 
-static int xmargin=8;
-static int amargin=60;
+static int xmargin = 8;
+static int amargin = 60;
 
 static void print_bytes(unsigned char *c, int len, int hex, int ascii)
 {
@@ -506,8 +509,10 @@ static void print_bytes(unsigned char *c, int len, int hex, int ascii)
 	if (hex) {
 		x = c;
 		for (i = 0; i < len; i++) {
-			if ((i % xmargin) == 0 && i>0) printk("\n");
-			if ((i % xmargin) == 0) printk("0x%04x:", i);
+			if ((i % xmargin) == 0 && i > 0)
+				pr_warn("\n");
+			if ((i % xmargin) == 0)
+				pr_warn("0x%04x:", i);
 			pr_warn(" %02x", *x);
 			x++;
 		}
@@ -515,8 +520,9 @@ static void print_bytes(unsigned char *c, int len, int hex, int ascii)
 	}
 	if (ascii) {
 		x = c;
-		for (i = 0;i < len; i++) {
-			if ((i % amargin) == 0 && i>0) printk("\n");
+		for (i = 0; i < len; i++) {
+			if ((i % amargin) == 0 && i > 0)
+				pr_warn("\n");
 			if ((i % amargin) == 0)
 				pr_warn("0x%04x:", i);
 			if (*x > 26 && *x < 128)
@@ -540,8 +546,11 @@ static void print_iu(unsigned char *iu)
 	print_bytes(iu, (int) iu_length, 1, 0);
 }
 
-/* Can only be called for Admin queue: the q->local_pi is not updated elsewhere */
-static void __attribute__((unused)) print_unsubmitted_commands(struct pqi_device_queue *q)
+/* Can only be called for Admin queue:
+ * the q->local_pi is not updated elsewhere
+ */
+static void __attribute__((unused))
+		print_unsubmitted_commands(struct pqi_device_queue *q)
 {
 	u16 pi;
 	int i;
