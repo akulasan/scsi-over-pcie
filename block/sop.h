@@ -372,6 +372,7 @@ struct sop_sg_io_context {
 	unsigned char cdb[16];
 	u8 cdblen;
 	u8 request_type;
+	u8 timeout;
 	struct completion *waiting;
 	struct sop_request *sop_request;
 	struct queue_info *qinfo;

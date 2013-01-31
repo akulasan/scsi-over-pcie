@@ -1051,7 +1051,6 @@ int sop_msix_handle_ioq(struct queue_info *q)
 				struct sop_sg_io_context *sgio_context =
 					bio_get_driver_context(r->bio);
 				if (unlikely(sgio_context)) {
-					sop_rem_timeout(q, r->tmo_slot);
 					complete(sgio_context->waiting);
 				} else
 					sop_complete_bio(h, q, r);
@@ -2029,6 +2028,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	u16 request_id;
 	int prev_index, num_sg;
 	int nsegs;
+	uint timeout = DEF_IO_TIMEOUT;
 	struct sop_sg_io_context *sgio_context;
 
 	/* FIXME: Temporarily limit the outstanding FW commands to 128 */
@@ -2096,6 +2096,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 			r->flags = 0;
 			break;
 		}
+		timeout = sgio_context->timeout;
 		sgio_context->sop_request = ser;
 		sgio_context->qinfo = qinfo;
 		memset(r->cdb, 0, sizeof(r->cdb));
@@ -2135,7 +2136,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	sop_scatter_gather(h, qinfo, num_sg, r, sgl, &ser->xfer_size);
 
 	r->xfer_size = cpu_to_le32(ser->xfer_size);
-	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
+	ser->tmo_slot = sop_add_timeout(qinfo, timeout);
 
 	/* Submit it to the device */
 	writew(qinfo->iq->unposted_index, qinfo->iq->pi);
@@ -2613,6 +2614,8 @@ static void sop_complete_sgio_hdr(struct sop_device *h,
 	int result, ret;
 	struct sop_cmd_response *scr;
 
+	sop_rem_timeout(qinfo, r->tmo_slot);
+	hdr->duration = jiffies_to_msecs(jiffies) - hdr->duration;
 	sgl = &qinfo->sgl[r->request_id * MAX_SGLS];
 
 	if (sgio_context->data_dir != DMA_NONE)
@@ -2765,8 +2768,10 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		rc = -ENOMEM;
 		goto out;
 	}
-	ul_timeout = msecs_to_jiffies(hp->timeout);
-	timeout = (ul_timeout < INT_MAX) ? ul_timeout : INT_MAX;
+	ul_timeout = hp->timeout/1000;
+	timeout = (ul_timeout < MAX_SOP_TIMEOUT) ? ul_timeout : MAX_SOP_TIMEOUT;
+	timeout = (timeout > 0) ? timeout : 1;
+	sgio_context->timeout = ul_timeout;
 	if ((!hp->cmdp) || (hp->cmd_len < 6) || (hp->cmd_len > sizeof(cmnd))) {
 		rc = -EMSGSIZE;
 		goto out;
@@ -2816,7 +2821,6 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		break;
 	}
 	hp->duration = jiffies_to_msecs(jiffies);
-	/* FIXME do something with timeout */
 
 	/* copy in the data buffers, if any */
 	iov_count = hp->iovec_count;
