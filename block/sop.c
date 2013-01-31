@@ -188,14 +188,10 @@ static inline int safe_readq(__iomem void *sig, u64 *value,
 
 static void free_q_request_buffers(struct queue_info *q)
 {
-	if (q->request_bits) {
-		kfree(q->request_bits);
-		q->request_bits = NULL;
-	}
-	if (q->request) {
-		kfree(q->request);
-		q->request = NULL;
-	}
+	kfree(q->request_bits);
+	q->request_bits = NULL;
+	kfree(q->request);
+	q->request = NULL;
 }
 
 static int allocate_sgl_area(struct sop_device *h,
@@ -205,7 +201,8 @@ static int allocate_sgl_area(struct sop_device *h,
 				sizeof(struct pqi_sgl_descriptor);
 
 	q->sg = pci_alloc_consistent(h->pdev, total_size, &q->sg_bus_addr);
-	q->sgl = kmalloc(q->qdepth * MAX_SGLS * sizeof(struct scatterlist), GFP_KERNEL);
+	q->sgl = kmalloc(q->qdepth * MAX_SGLS * sizeof(struct scatterlist),
+					GFP_KERNEL);
 	return (q->sg) ? 0 : -ENOMEM;
 }
 
@@ -214,9 +211,7 @@ static void free_sgl_area(struct sop_device *h, struct queue_info *q)
 	size_t total_size = q->qdepth * MAX_SGLS *
 				sizeof(struct pqi_sgl_descriptor);
 
-	if (q->sgl)
-		kfree(q->sgl);
-
+	kfree(q->sgl);
 	if (!q->sg)
 		return;
 	pci_free_consistent(h->pdev, total_size, q->sg, q->sg_bus_addr);
@@ -264,8 +259,7 @@ static void free_wait_queue(struct queue_info *q)
 {
 	struct sop_wait_queue *wq = q->wq;
 
-	if (wq)
-		kfree(wq);
+	kfree(wq);
 }
 
 static int pqi_device_queue_alloc(struct sop_device *h,
@@ -281,22 +275,22 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 #if 0
 	int remainder = total_size % 64;
 
-	/* this adjustment we think is unnecessary because we now allocate queues
-	 * separately not in a big array, and pci_alloc_consistent returns
-	 * page aligned memory.
+	/* this adjustment we think is unnecessary because we now allocate
+	 * queues separately not in a big array, and pci_alloc_consistent
+	 * returns page aligned memory.
 	 */
 	total_size += remainder ? 64 - remainder : 0;
 #endif
 
 	*xq = kzalloc(sizeof(**xq), GFP_KERNEL);
 	if (!*xq) {
-		dev_warn(&h->pdev->dev, "Failed to alloc pqi struct #%d, dir %d\n", 
+		dev_warn(&h->pdev->dev, "Failed to alloc pqi struct #%d, dir %d\n",
 			queue_pair_index, queue_direction);
 		goto bailout;
 	}
 	vaddr = pci_alloc_consistent(h->pdev, total_size, &dhandle);
 	if (!vaddr) {
-		dev_warn(&h->pdev->dev, "Failed to alloc PCI buffer #%d, dir %d\n", 
+		dev_warn(&h->pdev->dev, "Failed to alloc PCI buffer #%d, dir %d\n",
 			queue_pair_index, queue_direction);
 		goto bailout;
 	}
