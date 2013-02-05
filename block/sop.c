@@ -2296,8 +2296,7 @@ static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
 			retval = -1;
 			break;
 		}
-	}
-	else {
+	} else {
 		dev_warn(&h->pdev->dev, "Unexpected IU type 0x%x in %s\n",
 				resp->iu_type, __func__);
 		retval = -1;
