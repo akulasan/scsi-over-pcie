@@ -2222,7 +2222,7 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 	sgl_size = (u16) (sizeof(*r) - sizeof(r->sg[0]) * 2) - 4;
 	if (data_len)
 		/* We use only max one descriptor */
-		sgl_size += sizeof(struct pqi_sgl_descriptor);	
+		sgl_size += sizeof(struct pqi_sgl_descriptor);
 	r->iu_length = cpu_to_le16(sgl_size);
 
 	/* Prepare the CDB */
@@ -2242,8 +2242,8 @@ static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
 			struct queue_info *qinfo, u16 request_id)
 {
 	struct sop_request *sopr = &qinfo->request[request_id];
-	volatile struct sop_cmd_response *resp = 
-		(volatile struct sop_cmd_response *)sopr->response;
+	volatile struct sop_cmd_response *resp =
+		(volatile struct sop_cmd_response *) sopr->response;
 	u8 iu_type;
 	int retval = -1;
 	u8 sense_off;
@@ -2307,10 +2307,10 @@ static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
 	return retval;
 }
 
-static int send_sync_cdb(struct sop_device *h, char *cdb, dma_addr_t phy_addr, 
+static int send_sync_cdb(struct sop_device *h, char *cdb, dma_addr_t phy_addr,
 			 int data_len, u8 data_dir)
 {
-	int queue_pair_index;	
+	int queue_pair_index;
 	struct queue_info *qinfo;
 
 	struct sop_limited_cmd_iu *r;
@@ -2329,12 +2329,13 @@ static int send_sync_cdb(struct sop_device *h, char *cdb, dma_addr_t phy_addr,
 	}
 	r = pqi_alloc_elements(qinfo->iq, 1);
 	if (IS_ERR(r)) {
-		dev_warn(&h->pdev->dev, "SUBQ[%d] pqi_alloc_elements for CDB 0x%x returned %ld\n", 
+		dev_warn(&h->pdev->dev,
+			"SUBQ[%d] pqi_alloc_elements for CDB 0x%x returned %ld\n",
 			queue_pair_index, cdb[0], PTR_ERR(r));
 		goto sync_alloc_elem_fail;
 	}
-	fill_send_cdb_request(r, qpindex_to_qid(queue_pair_index, 0), request_id, cdb, phy_addr, 
-				data_len, data_dir);
+	fill_send_cdb_request(r, qpindex_to_qid(queue_pair_index, 0),
+				request_id, cdb, phy_addr, data_len, data_dir);
 
 	send_sop_command(h, qinfo, request_id);
 	return process_direct_cdb_response(h, cdb[0], qinfo, request_id);
@@ -2436,7 +2437,7 @@ static int sop_add_disk(struct sop_device *h)
 		return -ENOMEM;
 
 	blk_queue_bounce_limit(rq, h->pdev->dma_mask);
-	
+
 	/* Save the field in device struct */
 	h->rq = rq;
 
@@ -2468,7 +2469,8 @@ static int sop_add_disk(struct sop_device *h)
 	disk->driverfs_dev = &h->pdev->dev;
 	strcpy(disk->disk_name, h->devname);
 	set_capacity(disk, h->capacity);
-	dev_warn(&h->pdev->dev, "Creating SOP drive '%s'- Capacity %d sectors\n", 
+	dev_warn(&h->pdev->dev,
+		"Creating SOP drive '%s'- Capacity %d sectors\n",
 		disk->disk_name, (int)(h->capacity));
 	add_disk(disk);
 
@@ -2517,7 +2519,8 @@ static int sop_device_reset_handler(struct scsi_cmnd *sc)
 #endif
 
 #ifdef CONFIG_COMPAT
-static int sop_compat_ioctl(struct block_device *dev, fmode_t mode, unsigned int cmd, unsigned long arg)
+static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
+				unsigned int cmd, unsigned long arg)
 {
 	struct sop_device *h = bdev_to_hba(dev);
 
@@ -2917,14 +2920,15 @@ static int sop_add_timeout(struct queue_info *q, uint timeout)
 {
 	int tmo_slot;
 
-	tmo_slot = ((atomic_read(&q->tmo.cur_slot) + timeout) % MAX_SOP_TIMEOUT);
+	tmo_slot = ((atomic_read(&q->tmo.cur_slot) + timeout) %
+				MAX_SOP_TIMEOUT);
 	atomic_inc(&q->tmo.time_slot[tmo_slot]);
 	return tmo_slot;
 }
 
 static void sop_rem_timeout(struct queue_info *q, uint tmo_slot)
 {
-	if(atomic_read(&q->tmo.time_slot[tmo_slot]) == 0) {
+	if (atomic_read(&q->tmo.time_slot[tmo_slot]) == 0) {
 		dev_err(&q->h->pdev->dev,
 			"Q[%d] TM slot[%d] count is 0, cur_slot=%d\n",
 			qinfo_to_qid(q), tmo_slot,
