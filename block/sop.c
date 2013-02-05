@@ -2393,11 +2393,11 @@ sync_send_tur:
 			/*  Retry */
 			retry_count++;
 			goto sync_send_tur;
-		}
-		else
+		} else {
 			goto disk_param_err;
+		}
 	}
-	/* Otherwise continue even with TUR failure, we just need the capacity */
+	/* Otherwise continue even with TUR failure, we just need capacity */
 
 	/* 2. Send Read Capacity */
 	memset(cdb, 0, MAX_CDB_SIZE);
@@ -2416,8 +2416,8 @@ sync_send_tur:
 	return 0;
 
 disk_param_err:
-	dev_warn(&h->pdev->dev, "Error getting disk param "
-		"(CDB0=0x%x returns 0x%x)\n", cdb[0], ret);
+	dev_warn(&h->pdev->dev, "Error getting disk param (CDB0=0x%x returns 0x%x)\n",
+			cdb[0], ret);
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
 
 	/* Set Capacity to 0 and continue as degraded */
