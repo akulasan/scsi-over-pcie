@@ -1414,6 +1414,8 @@ static int sop_setup_io_queue_pairs(struct sop_device *h)
 		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_TO_DEVICE))
 			goto bail_out;
 	}
+	dev_warn(&h->pdev->dev, "Successfully created %d IO queue pairs\n",
+		h->nr_queue_pairs - 1);
 	return 0;
 
 bail_out:
@@ -1677,6 +1679,8 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		dev_warn(&h->pdev->dev, "Bailing out in probe - Cannot add disk\n");
 		goto bail_io_irq;
 	}
+
+	dev_warn(&h->pdev->dev, "Successfully loaded device '%s'\n", h->devname);
 
 	spin_lock(&dev_list_lock);
 	list_add(&h->node, &dev_list);
