@@ -1907,17 +1907,12 @@ static int sop_prepare_cdb(u8 *cdb, struct bio *bio)
 
 /* Returns the numbers of sg prepared in sgl */
 static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
-					struct scatterlist  *sgl)
+					struct scatterlist  *sgl,
+					struct page **page_map)
 {
 	int i, j, nsegs, count, err;
 	int iov_count, write;
 	struct iovec *iov_array = sio->iov;
-	struct page **page_map;
-
-	/* Allocate the maximum number of page map that we need here */
-	page_map = kcalloc(MAX_SGLS, sizeof(*page_map), GFP_NOWAIT);
-	if (!page_map)
-		return -ENOMEM;
 
 	nsegs = 0;
 	iov_count = sio->iov_count;
@@ -1973,15 +1968,11 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 	/* Store the current index of iovec to be processed next */
 	sio->iovec_idx = i;
 
-	/* We do not need the page map any more */
-	kfree(page_map);
-
 	return nsegs;
 
 put_iovec_pages:
 	for (j = 0; j < count; j++)
 		put_page(page_map[j]);
-	kfree(page_map);
 
 err_iovec:
 	/* Start all over next time,  sio->iovec_idx is not changed*/
@@ -2413,6 +2404,16 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	int retval = -EBUSY;
 	int nsegs;
 	struct scatterlist *sgl;
+	struct page **page_map;
+
+	if (sio->data_dir != DMA_NONE && sio->iov_count > 0) {
+		/* Must alloc prior to get_cpu() because we might sleep. */
+		page_map = kcalloc(MAX_SGLS, sizeof(*page_map), GFP_KERNEL);
+		if (!page_map)
+			return -ENOMEM;
+	} else {
+		page_map = NULL;
+	}
 
 	cpu = get_cpu();
 	queue_pair_index = find_sop_queue(h, cpu);
@@ -2443,7 +2444,9 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 			int start_idx = sio->iovec_idx;
 
 			/* Prepare the sg from iov */
-			nsegs = sop_get_sync_cdb_scatterlist(sio, sgl);
+			nsegs = sop_get_sync_cdb_scatterlist(sio, sgl,
+								page_map);
+			kfree(page_map);
 			nsegs = dma_map_sg(&h->pdev->dev, sgl,
 						nsegs, sio->data_dir);
 			if (nsegs < 0) {
