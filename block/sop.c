@@ -75,6 +75,9 @@ static int sop_thread_proc(void *data);
 static int sop_add_timeout(struct queue_info *q, uint timeout);
 static void sop_rem_timeout(struct queue_info *q, uint tmo_slot);
 static void sop_fail_all_outstanding_io(struct sop_device *h);
+static int sop_complete_sgio_hdr(struct sop_device *h,
+				struct sop_sync_cdb_req *scdb,
+				struct sop_request *r);
 
 #ifdef CONFIG_COMPAT
 static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
@@ -2322,12 +2325,7 @@ static int process_direct_cdb_response(struct sop_device *h,
 			struct sop_sync_cdb_req *sio, struct queue_info *qinfo,
 			struct sop_request *sopr)
 {
-	volatile struct sop_cmd_response *resp =
-		(volatile struct sop_cmd_response *) sopr->response;
-	u8 iu_type;
 	int retval = -1;
-	u8 sense_off;
-	u8 opcode = sio->cdb[0];
 
 	sop_rem_timeout(qinfo, sopr->tmo_slot);
 	if (sio->data_dir != DMA_NONE) {
@@ -2337,59 +2335,7 @@ static int process_direct_cdb_response(struct sop_device *h,
 		dma_unmap_sg(&h->pdev->dev, sgl, sopr->num_sg,
 				sio->data_dir);
 	}
-	iu_type = resp->iu_type;
-
-	if (iu_type == SOP_RESPONSE_CMD_SUCCESS_IU_TYPE) {
-		free_request(h, qinfo_to_qid(qinfo), sopr->request_id);
-		return 0;
-	}
-
-	if (iu_type == SOP_RESPONSE_CMD_RESPONSE_IU_TYPE) {
-		switch (resp->status & STATUS_MASK) {
-		case SAM_STAT_GOOD:
-		case SAM_STAT_CONDITION_MET:
-		case SAM_STAT_INTERMEDIATE:
-		case SAM_STAT_INTERMEDIATE_CONDITION_MET:
-			retval = 0;
-			break;
-
-		case SAM_STAT_BUSY:
-		case SAM_STAT_RESERVATION_CONFLICT:
-		case SAM_STAT_COMMAND_TERMINATED:
-		case SAM_STAT_TASK_SET_FULL:
-		case SAM_STAT_ACA_ACTIVE:
-		case SAM_STAT_TASK_ABORTED:
-			dev_warn(&h->pdev->dev, "Sync command cdb=0x%x failed with status 0x%x\n",
-				opcode, resp->status);
-			retval =  (resp->status << 16);
-			break;
-
-		case SAM_STAT_CHECK_CONDITION:
-			dev_warn(&h->pdev->dev, "Sync command cdb=0x%x Check Condition\n",
-				opcode);
-			retval = (resp->status << 16);
-			sense_off = 0x20 + resp->response_data_len;
-			if (resp->iu_length > sense_off) {
-				u8 *sense;
-
-				sense = (u8 *)resp + sense_off;
-				dev_warn(&h->pdev->dev, "Sense Key=0x%x ASC=0x%x ASCQ=0x%x\n",
-					sense[2], sense[12], sense[13]);
-				retval |= ((sense[2] << 8) | sense[12]);
-			}
-			break;
-
-		default:
-			dev_warn(&h->pdev->dev, "Sync command cdb=0x%x failed with unknown status 0x%x\n",
-				opcode, resp->status);
-			retval = -1;
-			break;
-		}
-	} else {
-		dev_warn(&h->pdev->dev, "Unexpected IU type 0x%x in %s\n",
-				resp->iu_type, __func__);
-		retval = -1;
-	}
+	retval = sop_complete_sgio_hdr(h, sio, sopr);
 
 	free_request(h, qinfo_to_qid(qinfo), sopr->request_id);
 	return retval;
@@ -2506,9 +2452,11 @@ sync_send_tur:
 	sio.cdb[0] = TEST_UNIT_READY;
 	sio.data_dir = DMA_NONE;
 	ret = send_sync_cdb(h, &sio, 0);
-	if (((ret >> 16) == SAM_STAT_CHECK_CONDITION) &&
+	if (ret && (sio.scsi_status == SAM_STAT_CHECK_CONDITION) &&
+		/* FIXME: replace 2 hardcodes below */
+		(sio.sense_key == 0x02) &&
 		/* Drive not ready, getting ready */
-		((ret & 0xffff) == 0x0204)) {
+		(sio.sense_asc_ascq == 0x0401)) {
 		if (retry_count < TUR_MAX_RETRY_COUNT) {
 			msleep(IO_SLEEP_INTERVAL_MIN);
 			/*  Retry */
@@ -2652,22 +2600,27 @@ static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
 
 
 static int sop_complete_sgio_hdr(struct sop_device *h,
-					struct bio *bio,
-					sg_io_hdr_t *hdr)
+				struct sop_sync_cdb_req *scdb,
+				struct sop_request *r)
 {
-	struct sop_sg_io_context *sgio_context = bio_get_driver_context(bio);
-	struct sop_request *r = sgio_context->sop_request;
+	sg_io_hdr_t *hdr = scdb->sg_hdr;
 	u16 sense_data_len;
 	u16 response_data_len;
 	u8 xfer_result;
 	u32 data_xferred;
-	int result, ret;
+	int result;
 	struct sop_cmd_response *scr;
 
 	result = 0;
 
 	switch (r->response[0]) {
 	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
+		scdb->scsi_status = 0;
+		scdb->sense_asc_ascq = 0;
+		scdb->sense_key = 0;
+		if (hdr == NULL)
+			break;
+
 		hdr->status = 0;
 		hdr->masked_status = 0;
 		hdr->host_status = 0;
@@ -2680,6 +2633,17 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 
 	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
 		scr = (struct sop_cmd_response *) r->response;
+		scdb->scsi_status = scr->status;
+		if (scr->sense_data_len > 2) {
+			scdb->sense_key = scr->sense[2];
+			if (scr->sense_data_len > 13)
+				scdb->sense_asc_ascq =
+					((scr->sense[12] << 8)
+					| (scr->sense[13]));
+		}
+		if (hdr == NULL)
+			break;
+
 		hdr->status = scr->status;
 		hdr->masked_status = status_byte(scr->status);
 		hdr->host_status = 0; /* FIXME is this correct? */
@@ -2704,7 +2668,7 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 #if 0
 			/* FIXME!!!! */
 			else
-				ret = -EFAULT;
+				result = -EFAULT;
 #endif
 		}
 
@@ -2733,18 +2697,17 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 		result = -EIO;
-		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
+		dev_warn(&h->pdev->dev, "got unhandled response type 0x%x...\n",
+			r->response[0]);
 		break;
 
 	default:
 		result = -EIO;
-		dev_warn(&h->pdev->dev, "got UNKNOWN response type...\n");
+		dev_warn(&h->pdev->dev, "got UNKNOWN response type 0x%x...\n",
+			r->response[0]);
 		break;
 	}
 
-	if (!result)
-		result = ret;
-	/* FIXME, what to do with result */
 	return result;
 }
 
@@ -2765,7 +2728,6 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	u8 sop_data_dir;
 	int iov_count, len;
 	struct iovec *iov, *one_iovec = NULL;
-	struct bio *bio;
 	struct sop_sync_cdb_req *scdb = NULL;
 	unsigned long start_time;
 
@@ -2903,7 +2865,6 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	 */
 	send_sync_cdb(h, scdb, 0);
 
-	sop_complete_sgio_hdr(h, bio, hp);
 	/*
 	 * FIXME I think I need to do some kind of kref_put() here to
 	 * undo the kref_get above.

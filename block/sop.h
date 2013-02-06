@@ -393,8 +393,9 @@ struct sop_sync_cdb_req {
 	int iovec_idx;
 
 	/* return value */
-	u16 scsi_satus;
-	u16 sense_code;
+	u8 scsi_status;
+	u8 sense_key;
+	u16 sense_asc_ascq;
 	sg_io_hdr_t *sg_hdr;
 };
 
