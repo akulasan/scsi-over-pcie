@@ -2058,12 +2058,12 @@ static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
 	BUILD_BUG_ON((sizeof(*r) - sizeof(r->sg[0]) * 2) != 32);
 
 	BUG_ON(num_sg > 2);
+	*xfer_size = 0;
 	if (!num_sg) {
 		r->iu_length = cpu_to_le16(no_sgl_size);
 		return;
 	}
 
-	*xfer_size = 0;
 	datasg = &r->sg[0];
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * num_sg);
 
@@ -2251,10 +2251,7 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 		int data_len, int dma_dir)
 {
 	int cdb_len;
-	u16 sgl_size;
 	u8 data_dir = sop_convert_dma_dir(dma_dir);
-
-	memset(r, 0, sizeof(*r));
 
 	/* Prepare the entry for SOP */
 	r->iu_type = SOP_LIMITED_CMD_IU;
@@ -2262,11 +2259,6 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 	r->queue_id = cpu_to_le16(queue_id);
 	r->work_area = 0;
 	r->request_id = request_id;
-	sgl_size = (u16) (sizeof(*r) - sizeof(r->sg[0]) * 2) - 4;
-	if (data_len)
-		/* We use only max one descriptor */
-		sgl_size += sizeof(struct pqi_sgl_descriptor);
-	r->iu_length = cpu_to_le16(sgl_size);
 
 	/* Prepare the CDB */
 	cdb_len = COMMAND_SIZE(cdb[0]);
@@ -2305,6 +2297,8 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	struct sop_limited_cmd_iu *r;
 	int request_id, cpu;
 	int retval = -EBUSY;
+	int nsegs;
+	struct scatterlist *sgl;
 
 	cpu = get_cpu();
 	queue_pair_index = find_sop_queue(h, cpu);
@@ -2328,16 +2322,13 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	ser->request_id = request_id;
 	ser->bio = NULL;
 	ser->num_sg = 0;
-	ser->xfer_size = sio->data_len;
+	sgl = &qinfo->sgl[request_id * MAX_SGLS];
 	if (sio->data_dir != DMA_NONE) {
 		/* Prepare and fill the sg */
 		if (sio->iov_count > 0) {
-			int nsegs;
-			struct scatterlist *sgl;
 			int start_idx = sio->iovec_idx;
 
 			/* Prepare the sg from iov */
-			sgl = &qinfo->sgl[request_id * MAX_SGLS];
 			nsegs = sop_get_sync_cdb_scatterlist(sio, sgl);
 			nsegs = dma_map_sg(&h->pdev->dev, sgl,
 						nsegs, sio->data_dir);
@@ -2350,16 +2341,20 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 			ser->num_sg = nsegs;
 		} else {
 			/* Prepare single SG */
-			r->sg[0].address = cpu_to_le64(phy_addr);
-			r->sg[0].length = cpu_to_le32(sio->data_len);
-			r->sg[0].descriptor_type = PQI_SGL_DATA_BLOCK;
+			nsegs = 1;
+			sgl[0].dma_address = phy_addr;
+			sg_dma_len(&sgl[0]) = sio->data_len;
+			/* ser->num_sg must remain 0 */
 		}
-	}
+	} else
+		nsegs = 0;
+	/* Now prepare the sg in sop queue request */
+	sop_scatter_gather(h, qinfo, nsegs, r, sgl, &ser->xfer_size);
 
 	/* Fill the rest of sop request */
 	fill_send_cdb_request(r, qpindex_to_qid(queue_pair_index, 0),
 				request_id, sio->cdb,
-				sio->data_len, sio->data_dir);
+				ser->xfer_size, sio->data_dir);
 
 	ser->tmo_slot = sop_add_timeout(qinfo, sio->timeout);
 	send_sop_command(h, qinfo, ser);
