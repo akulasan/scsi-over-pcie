@@ -2592,6 +2592,7 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
 		scr = (struct sop_cmd_response *) r->response;
 		scdb->scsi_status = scr->status;
+		result = scr->status;
 		if (scr->sense_data_len > 2) {
 			scdb->sense_key = scr->sense[2];
 			if (scr->sense_data_len > 13)
