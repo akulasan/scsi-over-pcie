@@ -1319,14 +1319,10 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 }
 
 static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
-				u16 request_id)
+				struct sop_request *sopr)
 {
-	struct sop_request *sopr;
 	DECLARE_COMPLETION_ONSTACK(wait);
 
-	sopr = &qinfo->request[request_id];
-	memset(sopr, 0, sizeof(*sopr));
-	sopr->request_id = request_id;
 	sopr->waiting = &wait;
 	sopr->response_accumulated = 0;
 	atomic_inc(&qinfo->cur_qdepth);
@@ -2328,11 +2324,11 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 		goto sync_alloc_elem_fail;
 	}
 	ser = &qinfo->request[request_id];
-	/* Init fieldfs of sop request context */
+	/* Init fields of sop request context */
+	ser->request_id = request_id;
 	ser->bio = NULL;
 	ser->num_sg = 0;
 	ser->xfer_size = sio->data_len;
-	ser->response_accumulated = 0;
 	if (sio->data_dir != DMA_NONE) {
 		/* Prepare and fill the sg */
 		if (sio->iov_count > 0) {
@@ -2366,7 +2362,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 				sio->data_len, sio->data_dir);
 
 	ser->tmo_slot = sop_add_timeout(qinfo, sio->timeout);
-	send_sop_command(h, qinfo, request_id);
+	send_sop_command(h, qinfo, ser);
 	return process_direct_cdb_response(h, sio, qinfo, ser);
 
 sync_alloc_elem_fail:
