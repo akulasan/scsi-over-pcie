@@ -255,7 +255,6 @@ static int allocate_wait_queue(struct queue_info *q)
 	init_waitqueue_head(&wq->iq_full);
 	init_waitqueue_entry(&wq->iq_cong_wait, sop_thread);
 	bio_list_init(&wq->iq_cong);
-	bio_list_init(&wq->iq_cong_sgio);
 
 	return 0;
 }
@@ -1079,12 +1078,7 @@ int sop_msix_handle_ioq(struct queue_info *q)
 			q->oq->cur_req = NULL;
 			wmb();
 			if (likely(r->bio)) {
-				struct sop_sg_io_context *sgio_context =
-					bio_get_driver_context(r->bio);
-				if (unlikely(sgio_context))
-					complete(sgio_context->waiting);
-				else
-					sop_complete_bio(h, q, r);
+				sop_complete_bio(h, q, r);
 				r = NULL;
 			} else {
 				if (likely(r->waiting)) {
@@ -2120,7 +2114,7 @@ static int sop_scatter_gather(struct sop_device *h,
 }
 
 static int sop_process_bio(struct sop_device *h, struct bio *bio,
-			   struct queue_info *qinfo, int normal_io)
+			   struct queue_info *qinfo)
 {
 	struct sop_limited_cmd_iu *r;
 	struct sop_request *ser;
@@ -2129,8 +2123,6 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	u16 request_id;
 	int prev_index, num_sg;
 	int nsegs;
-	uint timeout = DEF_IO_TIMEOUT;
-	struct sop_sg_io_context *sgio_context;
 
 	/* FIXME: Temporarily limit the outstanding FW commands to 128 */
 	if (atomic_read(&h->cmd_pending) >= 128)
@@ -2140,24 +2132,13 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	if (request_id == (u16) -EBUSY)
 		return -EBUSY;
 
-	if (likely(normal_io)) {
-		sgio_context = NULL;
-		bio_set_driver_context(bio, sgio_context);
-	} else {
-		/* only dereference if !normalio */
-		sgio_context = bio_get_driver_context(bio);
-	}
-
 	r = pqi_alloc_elements(qinfo->iq, 1);
 	if (IS_ERR(r)) {
 		dev_warn(&h->pdev->dev, "SUBQ[%d] pqi_alloc_elements for bio %p returned %ld\n",
 			qinfo_to_qid(qinfo), bio, PTR_ERR(r));
 		goto alloc_elem_fail;
 	}
-	if (likely(normal_io) || sgio_context->data_dir != DMA_NONE)
-		nsegs = bio_phys_segments(h->rq, bio);
-	else
-		nsegs = 0;
+	nsegs = bio_phys_segments(h->rq, bio);
 
 	r->iu_type = SOP_LIMITED_CMD_IU;
 	r->compatible_features = 0;
@@ -2170,39 +2151,30 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	ser->bio = bio;
 	ser->waiting = NULL;
 
-	if (likely(normal_io)) {
-		if (bio_data_dir(bio) == WRITE) {
-			r->flags = SOP_DATA_DIR_TO_DEVICE;
-			dma_dir = DMA_TO_DEVICE;
-		} else {
-			r->flags = SOP_DATA_DIR_FROM_DEVICE;
-			dma_dir = DMA_FROM_DEVICE;
-		}
-		sop_prepare_cdb(r->cdb, bio);
-	} else {
-		r->flags = sop_convert_dma_dir(sgio_context->data_dir);
-		timeout = sgio_context->timeout;
-		sgio_context->sop_request = ser;
-		sgio_context->qinfo = qinfo;
-		memset(r->cdb, 0, sizeof(r->cdb));
-		memcpy(r->cdb, sgio_context->cdb, sgio_context->cdblen);
+	/* It has to be a READ or WRITE for BIO */
+	if (bio_data_dir(bio) == WRITE) {
+		r->flags = SOP_DATA_DIR_TO_DEVICE;
+		dma_dir = DMA_TO_DEVICE;
 	}
+	else {
+		r->flags = SOP_DATA_DIR_FROM_DEVICE;
+		dma_dir = DMA_FROM_DEVICE;
+	}
+
+	/* Prepare the CDB Now */
+	sop_prepare_cdb(r->cdb, bio);
 
 	/* Prepare the scatterlist */
 	prev_index = bio->bi_idx;
+	num_sg = sop_prepare_scatterlist(bio, ser, sgl, nsegs);
 
-	if (likely(normal_io) || sgio_context->data_dir != DMA_NONE) {
-		num_sg = sop_prepare_scatterlist(bio, ser, sgl, nsegs);
-		/* Map the SG */
-		num_sg = dma_map_sg(&h->pdev->dev, sgl, num_sg, dma_dir);
-		if (num_sg < 0) {
-			bio->bi_idx = prev_index;
-			dev_warn(&h->pdev->dev, "dma_map failure bio %p, SQ[%d].\n",
-				bio, qinfo_to_qid(qinfo));
-			goto sg_map_fail;
-		}
-	} else {
-		num_sg = 0;
+	/* Map the SG */
+	num_sg = dma_map_sg(&h->pdev->dev, sgl, num_sg, dma_dir);
+	if (num_sg < 0) {
+		bio->bi_idx = prev_index;
+		dev_warn(&h->pdev->dev, "dma_map failure bio %p, SQ[%d].\n",
+			bio, qinfo_to_qid(qinfo));
+		goto sg_map_fail;
 	}
 
 	atomic_inc(&qinfo->cur_qdepth);
@@ -2221,7 +2193,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	sop_scatter_gather(h, qinfo, num_sg, r, sgl, &ser->xfer_size);
 
 	r->xfer_size = cpu_to_le32(ser->xfer_size);
-	ser->tmo_slot = sop_add_timeout(qinfo, timeout);
+	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
 
 	/* Submit it to the device */
 	writew(qinfo->iq->unposted_index, qinfo->iq->pi);
@@ -2236,22 +2208,14 @@ alloc_elem_fail:
 	return -EBUSY;
 }
 
-static void sop_queue_cmd(struct sop_wait_queue *wq, struct bio *bio,
-				int normal_io)
+static void sop_queue_cmd(struct sop_wait_queue *wq, struct bio *bio)
 {
-	if (likely(normal_io)) {
-		if (bio_list_empty(&wq->iq_cong))
-			add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
-		bio_list_add(&wq->iq_cong, bio);
-	} else { /* SG_IO */
-		if (bio_list_empty(&wq->iq_cong_sgio))
-			add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
-		bio_list_add(&wq->iq_cong_sgio, bio);
-	}
+	if (bio_list_empty(&wq->iq_cong))
+		add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
+	bio_list_add(&wq->iq_cong, bio);
 }
 
-static MRFN_TYPE __sop_make_request(struct request_queue *q,
-					struct bio *bio, int normal_io)
+static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct sop_device *h = q->queuedata;
 	int result;
@@ -2272,23 +2236,18 @@ static MRFN_TYPE __sop_make_request(struct request_queue *q,
 	spin_lock_irq(&qinfo->iq->qlock);
 
 	result = -EBUSY;
-	if (bio_list_empty(&wq->iq_cong) && bio_list_empty(&wq->iq_cong_sgio))
+	if (bio_list_empty(&wq->iq_cong))
 		/* Try to submit the command */
-		result = sop_process_bio(h, bio, qinfo, normal_io);
+		result = sop_process_bio(h, bio, qinfo);
 
 	if (unlikely(result))
-		sop_queue_cmd(wq, bio, normal_io);
+		sop_queue_cmd(wq, bio);
 
 	spin_unlock_irq(&qinfo->iq->qlock);
 
 	put_cpu();
 
 	return MRFN_RET;
-}
-
-static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
-{
-	__sop_make_request(q, bio, 1);
 }
 
 static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
@@ -2943,8 +2902,7 @@ static void sop_fail_cmd(struct queue_info *q, struct sop_request *r)
 
 /* To be called instead of sop_process_bio in case of abort */
 static int sop_fail_bio(struct sop_device *h, struct bio *bio,
-			struct queue_info *q,
-			__attribute__((unused)) int normal_io)
+			struct queue_info *q)
 {
 	/* Call complete bio with error */
 	bio_endio(bio, -EIO);
@@ -3038,7 +2996,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 			 * reset the controller at end
 			 */
 			if (ser->bio)
-				sop_queue_cmd(q->wq, ser->bio, 1);
+				sop_queue_cmd(q->wq, ser->bio);
 			else
 				sop_timeout_sync_cmd(q, ser);
 			break;
@@ -3083,7 +3041,7 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 	struct sop_device *h;
 	int ret, at_least_one_bio;
 	int (*bio_process)(struct sop_device *h, struct bio *bio,
-			   struct queue_info *qinfo, int normal_io);
+			   struct queue_info *qinfo);
 
 	h = qinfo->h;
 	wq = qinfo->wq;
@@ -3093,7 +3051,6 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 		return;
 	}
 
-	/* FIXME, what about sgio? */
 	if (fail)
 		bio_process = sop_fail_bio;
 	else
@@ -3105,24 +3062,13 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 		struct bio *bio = bio_list_pop(&wq->iq_cong);
 
 		at_least_one_bio = 1;
-		ret = bio_process(h, bio, qinfo, 1);
+		ret = bio_process(h, bio, qinfo);
 		if (ret) {
 			bio_list_add_head(&wq->iq_cong, bio);
 			break;
 		}
 	}
-	while (bio_list_peek(&wq->iq_cong_sgio)) {
-		struct bio *bio = bio_list_pop(&wq->iq_cong_sgio);
-
-		at_least_one_bio = 1;
-		ret = sop_process_bio(h, bio, qinfo, 0);
-		if (ret) {
-			bio_list_add_head(&wq->iq_cong_sgio, bio);
-			break;
-		}
-	}
-	if (at_least_one_bio && bio_list_empty(&wq->iq_cong) &&
-			bio_list_empty(&wq->iq_cong_sgio))
+	if (at_least_one_bio && bio_list_empty(&wq->iq_cong))
 		remove_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
 	spin_unlock_irq(&qinfo->iq->qlock);
 }

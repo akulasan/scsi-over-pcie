@@ -24,6 +24,11 @@ void usleep_range(unsigned long min, unsigned long max)
 	__set_current_state(TASK_UNINTERRUPTIBLE);
 	do_usleep_range(min, max);
 }
+
+#ifndef for_each_set_bit
+  #define for_each_set_bit for_each_bit
+#endif
+
 #endif
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0) )
