@@ -75,9 +75,6 @@ static int sop_thread_proc(void *data);
 static int sop_add_timeout(struct queue_info *q, uint timeout);
 static void sop_rem_timeout(struct queue_info *q, uint tmo_slot);
 static void sop_fail_all_outstanding_io(struct sop_device *h);
-static int sop_complete_sgio_hdr(struct sop_device *h,
-				struct sop_sync_cdb_req *scdb,
-				struct sop_request *r);
 
 #ifdef CONFIG_COMPAT
 static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
@@ -2272,6 +2269,119 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 	r->xfer_size = data_len;
 }
 
+static int sop_complete_sgio_hdr(struct sop_device *h,
+				struct sop_sync_cdb_req *scdb,
+				struct sop_request *r)
+{
+	sg_io_hdr_t *hdr = scdb->sg_hdr;
+	u16 sense_data_len;
+	u16 response_data_len;
+	u8 xfer_result;
+	u32 data_xferred;
+	int result;
+	struct sop_cmd_response *scr;
+
+	result = 0;
+
+	switch (r->response[0]) {
+	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
+		scdb->scsi_status = 0;
+		scdb->sense_asc_ascq = 0;
+		scdb->sense_key = 0;
+		if (hdr == NULL)
+			break;
+
+		hdr->status = 0;
+		hdr->masked_status = 0;
+		hdr->host_status = 0;
+		hdr->driver_status = 0;
+		hdr->info = 0;
+		hdr->resid = 0;
+		hdr->sb_len_wr = 0;
+		/* No error to process */
+		break;
+
+	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
+		scr = (struct sop_cmd_response *) r->response;
+		scdb->scsi_status = scr->status;
+		result = scr->status;
+		if (scr->sense_data_len > 2) {
+			scdb->sense_key = scr->sense[2];
+			if (scr->sense_data_len > 13)
+				scdb->sense_asc_ascq =
+					((scr->sense[12] << 8)
+					| (scr->sense[13]));
+		}
+		if (hdr == NULL)
+			break;
+
+		hdr->status = scr->status;
+		hdr->masked_status = status_byte(scr->status);
+		hdr->host_status = 0; /* FIXME is this correct? */
+		hdr->driver_status = 0; /* FIXME is this correct? */
+		hdr->info = 0;
+		if (hdr->masked_status || hdr->host_status ||
+			hdr->driver_status)
+			hdr->info |= SG_INFO_CHECK;
+		sense_data_len = le16_to_cpu(scr->sense_data_len);
+		response_data_len = le16_to_cpu(scr->response_data_len);
+		if (unlikely(response_data_len && sense_data_len))
+			dev_warn(&h->pdev->dev,
+				"Both sense and response data not expected.\n");
+
+		/* copy the sense data */
+		if (sense_data_len) {
+			if (hdr->mx_sb_len < sense_data_len)
+				sense_data_len = hdr->mx_sb_len;
+
+			if (!copy_to_user(hdr->sbp, scr->sense, sense_data_len))
+				hdr->sb_len_wr = sense_data_len;
+#if 0
+			/* FIXME!!!! */
+			else
+				result = -EFAULT;
+#endif
+		}
+
+		/* paranoia, check for out of spec firmware */
+		if (scr->data_in_xfer_result && scr->data_out_xfer_result)
+			dev_warn(&h->pdev->dev,
+				"Unexpected bidirectional cmd with status in and out\n");
+
+		/* Calculate residual count */
+		if (scr->data_in_xfer_result) {
+			xfer_result = scr->data_in_xfer_result;
+			data_xferred = le32_to_cpu(scr->data_in_xferred);
+		} else {
+			xfer_result = scr->data_out_xfer_result;
+			data_xferred = le32_to_cpu(scr->data_out_xferred);
+		}
+		/* Set the residual transfer size */
+		hdr->resid = r->xfer_size - data_xferred;
+
+		if (response_data_len) {
+			/* FIXME need to do something correct here... */
+			result = -EIO;
+			dev_warn(&h->pdev->dev, "Got response data... what to do with it?\n");
+		}
+		break;
+
+	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
+		result = -EIO;
+		dev_warn(&h->pdev->dev, "got unhandled response type 0x%x...\n",
+			r->response[0]);
+		break;
+
+	default:
+		result = -EIO;
+		dev_warn(&h->pdev->dev, "got UNKNOWN response type 0x%x...\n",
+			r->response[0]);
+		break;
+	}
+
+	return result;
+}
+
 static int process_direct_cdb_response(struct sop_device *h,
 			struct sop_sync_cdb_req *sio, struct queue_info *qinfo,
 			struct sop_request *sopr)
@@ -2559,120 +2669,6 @@ static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
 	return 0;
 }
 #endif
-
-
-static int sop_complete_sgio_hdr(struct sop_device *h,
-				struct sop_sync_cdb_req *scdb,
-				struct sop_request *r)
-{
-	sg_io_hdr_t *hdr = scdb->sg_hdr;
-	u16 sense_data_len;
-	u16 response_data_len;
-	u8 xfer_result;
-	u32 data_xferred;
-	int result;
-	struct sop_cmd_response *scr;
-
-	result = 0;
-
-	switch (r->response[0]) {
-	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
-		scdb->scsi_status = 0;
-		scdb->sense_asc_ascq = 0;
-		scdb->sense_key = 0;
-		if (hdr == NULL)
-			break;
-
-		hdr->status = 0;
-		hdr->masked_status = 0;
-		hdr->host_status = 0;
-		hdr->driver_status = 0;
-		hdr->info = 0;
-		hdr->resid = 0;
-		hdr->sb_len_wr = 0;
-		/* No error to process */
-		break;
-
-	case SOP_RESPONSE_CMD_RESPONSE_IU_TYPE:
-		scr = (struct sop_cmd_response *) r->response;
-		scdb->scsi_status = scr->status;
-		result = scr->status;
-		if (scr->sense_data_len > 2) {
-			scdb->sense_key = scr->sense[2];
-			if (scr->sense_data_len > 13)
-				scdb->sense_asc_ascq =
-					((scr->sense[12] << 8)
-					| (scr->sense[13]));
-		}
-		if (hdr == NULL)
-			break;
-
-		hdr->status = scr->status;
-		hdr->masked_status = status_byte(scr->status);
-		hdr->host_status = 0; /* FIXME is this correct? */
-		hdr->driver_status = 0; /* FIXME is this correct? */
-		hdr->info = 0;
-		if (hdr->masked_status || hdr->host_status ||
-			hdr->driver_status)
-			hdr->info |= SG_INFO_CHECK;
-		sense_data_len = le16_to_cpu(scr->sense_data_len);
-		response_data_len = le16_to_cpu(scr->response_data_len);
-		if (unlikely(response_data_len && sense_data_len))
-			dev_warn(&h->pdev->dev,
-				"Both sense and response data not expected.\n");
-
-		/* copy the sense data */
-		if (sense_data_len) {
-			if (hdr->mx_sb_len < sense_data_len)
-				sense_data_len = hdr->mx_sb_len;
-
-			if (!copy_to_user(hdr->sbp, scr->sense, sense_data_len))
-				hdr->sb_len_wr = sense_data_len;
-#if 0
-			/* FIXME!!!! */
-			else
-				result = -EFAULT;
-#endif
-		}
-
-		/* paranoia, check for out of spec firmware */
-		if (scr->data_in_xfer_result && scr->data_out_xfer_result)
-			dev_warn(&h->pdev->dev,
-				"Unexpected bidirectional cmd with status in and out\n");
-
-		/* Calculate residual count */
-		if (scr->data_in_xfer_result) {
-			xfer_result = scr->data_in_xfer_result;
-			data_xferred = le32_to_cpu(scr->data_in_xferred);
-		} else {
-			xfer_result = scr->data_out_xfer_result;
-			data_xferred = le32_to_cpu(scr->data_out_xferred);
-		}
-		/* Set the residual transfer size */
-		hdr->resid = r->xfer_size - data_xferred;
-
-		if (response_data_len) {
-			/* FIXME need to do something correct here... */
-			result = -EIO;
-			dev_warn(&h->pdev->dev, "Got response data... what to do with it?\n");
-		}
-		break;
-
-	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
-		result = -EIO;
-		dev_warn(&h->pdev->dev, "got unhandled response type 0x%x...\n",
-			r->response[0]);
-		break;
-
-	default:
-		result = -EIO;
-		dev_warn(&h->pdev->dev, "got UNKNOWN response type 0x%x...\n",
-			r->response[0]);
-		break;
-	}
-
-	return result;
-}
 
 /*
  * Because we use the make_request interface and don't have
