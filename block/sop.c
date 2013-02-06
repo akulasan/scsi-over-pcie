@@ -1918,7 +1918,7 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 	struct page **page_map;
 
 	/* Allocate the maximum number of page map that we need here */
-	page_map = kcalloc(MAX_SGLS, sizeof(*page_map), GFP_KERNEL);
+	page_map = kcalloc(MAX_SGLS, sizeof(*page_map), GFP_NOWAIT);
 	if (!page_map)
 		return -ENOMEM;
 
