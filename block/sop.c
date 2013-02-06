@@ -2398,10 +2398,12 @@ static int sop_get_disk_params(struct sop_device *h)
 	if (!vaddr)
 		return -ENOMEM;
 	data = (u32 *)vaddr;
+
+	/* Initialize the sync cdb struct */
+	memset(&sio, 0, sizeof(sio));
 	sio.timeout = DEF_IO_TIMEOUT;
 
 	/* 0.1. Send Inquiry */
-	memset(sio.cdb, 0, MAX_CDB_SIZE);
 	sio.data_len = 36;
 	sio.cdb[0] = INQUIRY;		/* Rest all remains 0 */
 	sio.cdb[4] = sio.data_len;
