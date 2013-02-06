@@ -2447,12 +2447,13 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 			nsegs = sop_get_sync_cdb_scatterlist(sio, sgl,
 								page_map);
 			kfree(page_map);
-			nsegs = dma_map_sg(&h->pdev->dev, sgl,
-						nsegs, sio->data_dir);
+			if (nsegs > 0)
+				nsegs = dma_map_sg(&h->pdev->dev, sgl, nsegs,
+							sio->data_dir);
 			if (nsegs < 0) {
 				sio->iovec_idx = start_idx;
-				dev_warn(&h->pdev->dev, "dma_map failure CDB[0]=0x%x, SQ[%d].\n",
-					sio->cdb[0], qinfo_to_qid(qinfo));
+				dev_warn(&h->pdev->dev, "sg prep failure %d CDB[0]=0x%x, SQ[%d].\n",
+					nsegs, sio->cdb[0], qinfo_to_qid(qinfo));
 				goto sync_alloc_elem_fail;
 			}
 			ser->num_sg = nsegs;
