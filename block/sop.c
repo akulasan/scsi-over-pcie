@@ -1913,6 +1913,7 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 	int i, j, nsegs, count, err;
 	int iov_count, write;
 	struct iovec *iov_array = sio->iov;
+	struct scatterlist *cur_sg = NULL;
 
 	nsegs = 0;
 	iov_count = sio->iov_count;
@@ -1956,7 +1957,24 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 			if (len < page_len)
 				page_len = len;
 
-			sg_set_page(&sgl[nsegs], page_map[j],
+			if (cur_sg == NULL)
+				cur_sg = sgl;
+			else {
+				/*
+				 * If the driver previously mapped a shorter
+				 * list, we could see a termination bit
+				 * prematurely unless it fully inits the sg
+				 * table on each mapping. We KNOW that there
+				 * must be more entries here or the driver
+				 * would be buggy, so force clear the
+				 * termination bit to avoid doing a full
+				 * sg_init_table() in drivers for each command.
+				 */
+				cur_sg->page_link &= ~0x02;
+				cur_sg = sg_next(cur_sg);
+			}
+
+			sg_set_page(cur_sg, page_map[j],
 					page_len, offset);
 			len -= page_len;
 			offset = 0;
@@ -1979,16 +1997,16 @@ err_iovec:
 	return err;
 }
 
-/* Prepares the scatterlist for the given bio */
+/*
+ * Prepares the scatterlist for the given bio.
+ * - taken from blk_rq_map_sg in block./blk-merge.c
+ */
 static int sop_prepare_scatterlist(struct bio *bio, struct sop_request *ser,
 				   struct scatterlist  *sgl, int nsegs)
 {
 	int i, len = 0, num_sg = 0;
 	struct bio_vec  *bv, *prev_bv = NULL;
 	struct scatterlist  *cur_sg = NULL;
-
-	/* Init the SG table */
-	sg_init_table(sgl, nsegs);
 
 	/* Scan the list of segments in bio */
 	bio_for_each_segment(bv, bio, i) {
@@ -2000,8 +2018,20 @@ static int sop_prepare_scatterlist(struct bio *bio, struct sop_request *ser,
 			/* Create a new SG */
 			if (cur_sg == NULL)
 				cur_sg = sgl;
-			else
-				cur_sg++;
+			else {
+				/*
+				 * If the driver previously mapped a shorter
+				 * list, we could see a termination bit
+				 * prematurely unless it fully inits the sg
+				 * table on each mapping. We KNOW that there
+				 * must be more entries here or the driver
+				 * would be buggy, so force clear the
+				 * termination bit to avoid doing a full
+				 * sg_init_table() in drivers for each command.
+				 */
+				cur_sg->page_link &= ~0x02;
+				cur_sg = sg_next(cur_sg);
+			}
 			sg_set_page(cur_sg, bv->bv_page, bv->bv_len,
 				bv->bv_offset);
 			num_sg++;
