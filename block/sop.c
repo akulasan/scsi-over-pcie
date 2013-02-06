@@ -493,6 +493,23 @@ static u16 pqi_peek_request_id_from_device(struct pqi_device_queue *q)
 	return *(u16 *) p;
 }
 
+static int sop_convert_dma_dir(int dma_dir)
+{
+	switch (dma_dir) {
+	case DMA_FROM_DEVICE:
+		return SOP_DATA_DIR_FROM_DEVICE;
+	case DMA_TO_DEVICE:
+		return SOP_DATA_DIR_TO_DEVICE;
+	case DMA_BIDIRECTIONAL: /* FIXME: this probably doesn't work. */
+		return SOP_DATA_DIR_TO_DEVICE | SOP_DATA_DIR_FROM_DEVICE;
+	case DMA_NONE:
+		return SOP_DATA_DIR_NONE;
+	default:
+		/* Not expected */
+		return -1;
+	}
+}
+
 static int xmargin = 8;
 static int amargin = 60;
 
@@ -1894,6 +1911,89 @@ static int sop_prepare_cdb(u8 *cdb, struct bio *bio)
 	return 0;
 }
 
+/* Returns the numbers of sg prepared in sgl */
+static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
+					struct scatterlist  *sgl)
+{
+	int i, j, nsegs, count, err;
+	int iov_count, write;
+	struct iovec *iov_array = sio->iov;
+	struct page **page_map;
+
+	/* Allocate the maximum number of page map that we need here */
+	page_map = kcalloc(MAX_SGLS, sizeof(*page_map), GFP_KERNEL);
+	if (!page_map)
+		return -ENOMEM;
+
+	nsegs = 0;
+	iov_count = sio->iov_count;
+	write = (sio->data_dir == SOP_DATA_DIR_TO_DEVICE);
+	for (i = sio->iovec_idx; i < iov_count; i++) {
+		int len, offset;
+		unsigned long addr;
+		struct iovec *iov;
+
+		/* process each iov */
+		iov = &iov_array[i];
+		addr = (unsigned long)iov->iov_base;
+		len = iov->iov_len;
+
+		/* Basic field check */
+		err = -EINVAL;
+		if (addr & 3)
+			goto err_iovec;
+		if (len == 0)
+			goto err_iovec;
+
+		/* Try to map the pages in this iov */
+		offset = offset_in_page(addr);
+		count = DIV_ROUND_UP(offset + len, PAGE_SIZE);
+
+		/* Check the sgl size limit */
+		if (nsegs + count >= MAX_SGLS)
+			break;
+
+		err = get_user_pages_fast(addr, count, write, page_map);
+		if (err < count) {
+			count = err;
+			err = -EFAULT;
+			goto put_iovac_pages;
+		}
+
+		/* Now fill up the sgl with these pages */
+		for (j = 0; j < count; j++) {
+			int page_len = PAGE_SIZE - offset;
+
+			if (len < page_len)
+				page_len = len;
+
+			sg_set_page(&sgl[nsegs], page_map[j],
+					page_len, offset);
+			len -= page_len;
+			offset = 0;
+			nsegs++;
+		}
+	}
+	sg_mark_end(&sgl[nsegs-1]);
+
+	/* Store the current index of iovec processed to be processed next */
+	sio->iovec_idx = i;
+
+	/* We do not need the page map any more */
+	kfree(page_map);
+
+	return nsegs;
+
+put_iovac_pages:
+	for (j = 0; j < count; j++)
+		put_page(page_map[j]);
+	kfree(page_map);
+
+err_iovec:
+	/* Start all over next time,  sio->iovec_idx is not changed*/
+	return err;
+}
+
 /* Prepares the scatterlist for the given bio */
 static int sop_prepare_scatterlist(struct bio *bio, struct sop_request *ser,
 				   struct scatterlist  *sgl, int nsegs)
@@ -2077,23 +2177,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 		}
 		sop_prepare_cdb(r->cdb, bio);
 	} else {
-		dma_dir = sgio_context->data_dir;
-
-		switch (dma_dir) {
-		case DMA_FROM_DEVICE:
-			r->flags = SOP_DATA_DIR_FROM_DEVICE;
-			break;
-		case DMA_TO_DEVICE:
-			r->flags = SOP_DATA_DIR_TO_DEVICE;
-			break;
-		case DMA_BIDIRECTIONAL: /* FIXME: this probably doesn't work. */
-			r->flags = SOP_DATA_DIR_TO_DEVICE |
-					SOP_DATA_DIR_FROM_DEVICE;
-			break;
-		case DMA_NONE:
-			r->flags = 0;
-			break;
-		}
+		r->flags = sop_convert_dma_dir(sgio_context->data_dir);
 		timeout = sgio_context->timeout;
 		sgio_context->sop_request = ser;
 		sgio_context->qinfo = qinfo;
@@ -2206,10 +2290,11 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 
 static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 		u16 queue_id, u16 request_id, char *cdb,
-		dma_addr_t phy_addr, int data_len, u8 data_dir)
+		int data_len, int dma_dir)
 {
 	int cdb_len;
 	u16 sgl_size;
+	u8 data_dir = sop_convert_dma_dir(dma_dir);
 
 	memset(r, 0, sizeof(*r));
 
@@ -2231,11 +2316,6 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 
 	r->flags = data_dir;
 	r->xfer_size = data_len;
-
-	/* Prepare SG */
-	r->sg[0].address = cpu_to_le64(phy_addr);
-	r->sg[0].length = cpu_to_le32(data_len);
-	r->sg[0].descriptor_type = PQI_SGL_DATA_BLOCK;
 }
 
 static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
@@ -2306,8 +2386,8 @@ static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
 	return retval;
 }
 
-static int send_sync_cdb(struct sop_device *h, char *cdb, dma_addr_t phy_addr,
-			 int data_len, u8 data_dir)
+static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
+			 dma_addr_t phy_addr)
 {
 	int queue_pair_index;
 	struct queue_info *qinfo;
@@ -2330,14 +2410,39 @@ static int send_sync_cdb(struct sop_device *h, char *cdb, dma_addr_t phy_addr,
 	if (IS_ERR(r)) {
 		dev_warn(&h->pdev->dev,
 			"SUBQ[%d] pqi_alloc_elements for CDB 0x%x returned %ld\n",
-			queue_pair_index, cdb[0], PTR_ERR(r));
+			queue_pair_index, sio->cdb[0], PTR_ERR(r));
 		goto sync_alloc_elem_fail;
 	}
+	/* Prepare and fill the sg */
+	if (sio->iov_count > 0) {
+		int nsegs;
+		struct scatterlist *sgl;
+		int start_idx = sio->iovec_idx;
+
+		/* Prepare the sg from iov */
+		sgl = &qinfo->sgl[request_id * MAX_SGLS];
+		nsegs = sop_get_sync_cdb_scatterlist(sio, sgl);
+		nsegs = dma_map_sg(&h->pdev->dev, sgl, nsegs, sio->data_dir);
+		if (nsegs < 0) {
+			sio->iovec_idx = start_idx;
+			dev_warn(&h->pdev->dev, "dma_map failure CDB[0]=0x%x, SQ[%d].\n",
+				sio->cdb[0], qinfo_to_qid(qinfo));
+			goto sync_alloc_elem_fail;
+		}
+	} else {
+		/* Prepare single SG */
+		r->sg[0].address = cpu_to_le64(phy_addr);
+		r->sg[0].length = cpu_to_le32(sio->data_len);
+		r->sg[0].descriptor_type = PQI_SGL_DATA_BLOCK;
+	}
+
+	/* Fill the rest of sop request */
 	fill_send_cdb_request(r, qpindex_to_qid(queue_pair_index, 0),
-				request_id, cdb, phy_addr, data_len, data_dir);
+				request_id, sio->cdb,
+				sio->data_len, sio->data_dir);
 
 	send_sop_command(h, qinfo, request_id);
-	return process_direct_cdb_response(h, cdb[0], qinfo, request_id);
+	return process_direct_cdb_response(h, sio->cdb[0], qinfo, request_id);
 
 sync_alloc_elem_fail:
 	free_request(h, qinfo_to_qid(qinfo), request_id);
@@ -2355,35 +2460,37 @@ sync_req_id_fail:
 static int sop_get_disk_params(struct sop_device *h)
 {
 	int ret;
-	u8 cdb[MAX_CDB_SIZE];
 	dma_addr_t phy_addr;
 	void *vaddr;
-	int size, total_size;
+	int total_size;
 	u32 *data;
 	int retry_count;
+	struct sop_sync_cdb_req sio;
 
 	/* 0. Allocate memory */
 	total_size = 1024;
 	vaddr = pci_alloc_consistent(h->pdev, total_size, &phy_addr);
 	if (!vaddr)
 		return -ENOMEM;
+	data = (u32 *)vaddr;
 
 	/* 0.1. Send Inquiry */
-	memset(cdb, 0, MAX_CDB_SIZE);
-	cdb[0] = INQUIRY;		/* Rest all remains 0 */
-	size = 36;
-	data = (u32 *)vaddr;
-	cdb[4] = size;
-	ret = send_sync_cdb(h, cdb, phy_addr, size, SOP_DATA_DIR_FROM_DEVICE);
+	memset(sio.cdb, 0, MAX_CDB_SIZE);
+	sio.data_len = 36;
+	sio.cdb[0] = INQUIRY;		/* Rest all remains 0 */
+	sio.cdb[4] = sio.data_len;
+	sio.data_dir = DMA_FROM_DEVICE;
+	ret = send_sync_cdb(h, &sio, phy_addr);
 	if (ret != 0)
 		goto disk_param_err;
 
 	retry_count = 0;
 sync_send_tur:
 	/* 1. send TUR */
-	memset(cdb, 0, MAX_CDB_SIZE);
-	cdb[0] = TEST_UNIT_READY;
-	ret = send_sync_cdb(h, cdb, 0, 0, SOP_DATA_DIR_NONE);
+	memset(sio.cdb, 0, MAX_CDB_SIZE);
+	sio.cdb[0] = TEST_UNIT_READY;
+	sio.data_dir = DMA_NONE;
+	ret = send_sync_cdb(h, &sio, 0);
 	if (((ret >> 16) == SAM_STAT_CHECK_CONDITION) &&
 		/* Drive not ready, getting ready */
 		((ret & 0xffff) == 0x0204)) {
@@ -2399,11 +2506,11 @@ sync_send_tur:
 	/* Otherwise continue even with TUR failure, we just need capacity */
 
 	/* 2. Send Read Capacity */
-	memset(cdb, 0, MAX_CDB_SIZE);
-	cdb[0] = READ_CAPACITY;		/* Rest all remains 0 */
-	size = 2 * sizeof(u32);
-	data = (u32 *)vaddr;
-	ret = send_sync_cdb(h, cdb, phy_addr, size, SOP_DATA_DIR_FROM_DEVICE);
+	memset(sio.cdb, 0, MAX_CDB_SIZE);
+	sio.cdb[0] = READ_CAPACITY;		/* Rest all remains 0 */
+	sio.data_len = 2 * sizeof(u32);
+	sio.data_dir = DMA_FROM_DEVICE;
+	ret = send_sync_cdb(h, &sio, phy_addr);
 	if (ret != 0)
 		goto disk_param_err;
 
@@ -2416,7 +2523,7 @@ sync_send_tur:
 
 disk_param_err:
 	dev_warn(&h->pdev->dev, "Error getting disk param (CDB0=0x%x returns 0x%x)\n",
-			cdb[0], ret);
+			sio.cdb[0], ret);
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
 
 	/* Set Capacity to 0 and continue as degraded */
@@ -2723,11 +2830,10 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	int timeout, data_dir, rc;
 	unsigned long ul_timeout;
 	u8 sop_data_dir;
-	int iov_count;
+	int iov_count, len;
 	struct iovec *iov, *one_iovec = NULL;
 	struct bio *bio;
-	struct sop_sg_io_context *sgio_context = NULL;
-	DECLARE_COMPLETION_ONSTACK(wait);
+	struct sop_sync_cdb_req *scdb = NULL;
 	unsigned long start_time;
 
 	rc = 0;
@@ -2763,15 +2869,16 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		rc = -ENOSYS; /* FIXME we should support this. */
 		goto out;
 	}
-	sgio_context = kmalloc(sizeof(*sgio_context), GFP_KERNEL);
-	if (!sgio_context) {
+	scdb = kmalloc(sizeof(*scdb), GFP_KERNEL);
+	if (!scdb) {
 		rc = -ENOMEM;
 		goto out;
 	}
+	memset(scdb, 0, sizeof(*scdb));
 	ul_timeout = hp->timeout/1000;
 	timeout = (ul_timeout < MAX_SOP_TIMEOUT) ? ul_timeout : MAX_SOP_TIMEOUT;
 	timeout = (timeout > 0) ? timeout : 1;
-	sgio_context->timeout = ul_timeout;
+	scdb->timeout = ul_timeout;
 	if ((!hp->cmdp) || (hp->cmd_len < 6) || (hp->cmd_len > sizeof(cmnd))) {
 		rc = -EMSGSIZE;
 		goto out;
@@ -2781,8 +2888,8 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		rc = -EFAULT;
 		goto out;
 	}
-	sgio_context->cdblen = hp->cmd_len;
-	if (__copy_from_user(sgio_context->cdb, hp->cmdp, hp->cmd_len)) {
+	scdb->cdblen = hp->cmd_len;
+	if (__copy_from_user(scdb->cdb, hp->cmdp, hp->cmd_len)) {
 		rc = -EFAULT;
 		goto out;
 	}
@@ -2820,13 +2927,13 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		sop_data_dir = SOP_DATA_DIR_NONE;
 		break;
 	}
-	hp->duration = jiffies_to_msecs(jiffies);
 
 	/* copy in the data buffers, if any */
 	iov_count = hp->iovec_count;
+	len = hp->dxfer_len;
 	if (hp->dxfer_len > 0 && data_dir != DMA_NONE) {
 		if (iov_count) {
-			int len, size = sizeof(struct sg_iovec) * iov_count;
+			int size = sizeof(struct sg_iovec) * iov_count;
 
 			iov = memdup_user(hp->dxferp, size);
 			if (IS_ERR(iov)) {
@@ -2850,29 +2957,18 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 			one_iovec->iov_len = hp->dxfer_len;
 			iov = one_iovec;
 		}
-		rc = sop_map_user_iov(h->rq, dev, (struct sg_iovec *) iov,
-					iov_count, hp->dxfer_len, GFP_KERNEL,
-					&bio, data_dir);
-		if (rc) {
-			rc = -ENOMEM; /* FIXME is this right? */
-			goto out;
-		}
-	} else {
-		/* No data transfer -- we don't really need a bio except that
-		 * we need a fake bio to transfer the sgio_context.
-		 */
-		bio = vmalloc(sizeof(*bio));
+		scdb->iov = iov;
+		scdb->iov_count = iov_count;
 	}
-	sgio_context->data_dir = data_dir;
-	bio_set_driver_context(bio, sgio_context);
-	sgio_context->waiting = &wait;
+	scdb->data_len = len;
+	scdb->data_dir = data_dir;
+
 	start_time = jiffies;
 	/*
 	 * FIXME I think I need to do some kind of kref_get() here to
 	 * make sure we know the device is in use.
 	 */
-	__sop_make_request(h->rq, bio, 0);
-	wait_for_completion(&wait);
+	send_sync_cdb(h, scdb, 0);
 
 	sop_complete_sgio_hdr(h, bio, hp);
 	/*
@@ -2884,10 +2980,8 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		rc = -EFAULT;
 
 out:
-	if (sgio_context->data_dir == DMA_NONE) /* free the fake bio */
-		vfree(bio);
 	kfree(hp);
-	kfree(sgio_context);
+	kfree(scdb);
 	kfree(one_iovec);
 	return rc;
 }
@@ -2956,6 +3050,20 @@ static int sop_fail_bio(struct sop_device *h, struct bio *bio,
 	bio_endio(bio, -EIO);
 
 	return 0;
+}
+
+static void sop_timeout_sync_cmd(struct queue_info *q, struct sop_request *r)
+{
+	/* Fill a fake error completion in r->response */
+	r->response[0] = SOP_RESPONSE_TIMEOUT_CMD_FAIL_IU_TYPE;
+	r->response_accumulated = 1;
+
+	/* Complete sync cmd */
+	if (r->waiting)
+		complete(r->waiting);
+	else
+		dev_err(&q->h->pdev->dev, "bio and waiting both NULL for Q[%d], rqid %d\n",
+				q->oq->queue_id, r->request_id);
 }
 
 #define SOP_ERR_NONE		0
@@ -3029,7 +3137,10 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 			 * Requeue this command and
 			 * reset the controller at end
 			 */
-			sop_queue_cmd(q->wq, ser->bio, 1);
+			if (ser->bio)
+				sop_queue_cmd(q->wq, ser->bio, 1);
+			else
+				sop_timeout_sync_cmd(q, ser);
 			break;
 		}
 	}

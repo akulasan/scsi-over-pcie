@@ -379,6 +379,25 @@ struct sop_sg_io_context {
 	int data_dir;
 };
 
+struct sop_sync_cdb_req {
+	/* input parameters */
+	unsigned char cdb[16];
+	u8 cdblen;
+	u8 timeout;
+	struct iovec *iov;
+	int iov_count;
+	int data_len;
+	int data_dir;
+
+	/* field for partial issue */
+	int iovec_idx;
+
+	/* return value */
+	u16 scsi_satus;
+	u16 sense_code;
+	u8 *sense;
+};
+
 #pragma pack(1)
 struct sop_limited_cmd_iu {
 	u8 iu_type;
@@ -407,6 +426,7 @@ struct sop_limited_cmd_iu {
 #define SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE 0x93
 
 #define	SOP_RESPONSE_INTERNAL_CMD_FAIL_IU_TYPE	0xE8
+#define	SOP_RESPONSE_TIMEOUT_CMD_FAIL_IU_TYPE	0xE9
 
 #pragma pack(1)
 struct sop_cmd_response {
