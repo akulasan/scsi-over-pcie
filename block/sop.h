@@ -395,7 +395,7 @@ struct sop_sync_cdb_req {
 	/* return value */
 	u16 scsi_satus;
 	u16 sense_code;
-	u8 *sense;
+	sg_io_hdr_t *sg_hdr;
 };
 
 #pragma pack(1)

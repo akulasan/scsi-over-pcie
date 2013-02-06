@@ -2318,20 +2318,29 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 	r->xfer_size = data_len;
 }
 
-static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
-			struct queue_info *qinfo, u16 request_id)
+static int process_direct_cdb_response(struct sop_device *h,
+			struct sop_sync_cdb_req *sio, struct queue_info *qinfo,
+			struct sop_request *sopr)
 {
-	struct sop_request *sopr = &qinfo->request[request_id];
 	volatile struct sop_cmd_response *resp =
 		(volatile struct sop_cmd_response *) sopr->response;
 	u8 iu_type;
 	int retval = -1;
 	u8 sense_off;
+	u8 opcode = sio->cdb[0];
 
+	sop_rem_timeout(qinfo, sopr->tmo_slot);
+	if (sio->data_dir != DMA_NONE) {
+		struct scatterlist *sgl;
+
+		sgl = &qinfo->sgl[sopr->request_id * MAX_SGLS];
+		dma_unmap_sg(&h->pdev->dev, sgl, sopr->num_sg,
+				sio->data_dir);
+	}
 	iu_type = resp->iu_type;
 
 	if (iu_type == SOP_RESPONSE_CMD_SUCCESS_IU_TYPE) {
-		free_request(h, qinfo_to_qid(qinfo), request_id);
+		free_request(h, qinfo_to_qid(qinfo), sopr->request_id);
 		return 0;
 	}
 
@@ -2382,7 +2391,7 @@ static int process_direct_cdb_response(struct sop_device *h, u8 opcode,
 		retval = -1;
 	}
 
-	free_request(h, qinfo_to_qid(qinfo), request_id);
+	free_request(h, qinfo_to_qid(qinfo), sopr->request_id);
 	return retval;
 }
 
@@ -2391,7 +2400,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 {
 	int queue_pair_index;
 	struct queue_info *qinfo;
-
+	struct sop_request *ser;
 	struct sop_limited_cmd_iu *r;
 	int request_id, cpu;
 	int retval = -EBUSY;
@@ -2413,27 +2422,31 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 			queue_pair_index, sio->cdb[0], PTR_ERR(r));
 		goto sync_alloc_elem_fail;
 	}
-	/* Prepare and fill the sg */
-	if (sio->iov_count > 0) {
-		int nsegs;
-		struct scatterlist *sgl;
-		int start_idx = sio->iovec_idx;
+	ser = &qinfo->request[request_id];
+	if (sio->data_dir != DMA_NONE) {
+		/* Prepare and fill the sg */
+		if (sio->iov_count > 0) {
+			int nsegs;
+			struct scatterlist *sgl;
+			int start_idx = sio->iovec_idx;
 
-		/* Prepare the sg from iov */
-		sgl = &qinfo->sgl[request_id * MAX_SGLS];
-		nsegs = sop_get_sync_cdb_scatterlist(sio, sgl);
-		nsegs = dma_map_sg(&h->pdev->dev, sgl, nsegs, sio->data_dir);
-		if (nsegs < 0) {
-			sio->iovec_idx = start_idx;
-			dev_warn(&h->pdev->dev, "dma_map failure CDB[0]=0x%x, SQ[%d].\n",
-				sio->cdb[0], qinfo_to_qid(qinfo));
-			goto sync_alloc_elem_fail;
+			/* Prepare the sg from iov */
+			sgl = &qinfo->sgl[request_id * MAX_SGLS];
+			nsegs = sop_get_sync_cdb_scatterlist(sio, sgl);
+			nsegs = dma_map_sg(&h->pdev->dev, sgl,
+						nsegs, sio->data_dir);
+			if (nsegs < 0) {
+				sio->iovec_idx = start_idx;
+				dev_warn(&h->pdev->dev, "dma_map failure CDB[0]=0x%x, SQ[%d].\n",
+					sio->cdb[0], qinfo_to_qid(qinfo));
+				goto sync_alloc_elem_fail;
+			}
+		} else {
+			/* Prepare single SG */
+			r->sg[0].address = cpu_to_le64(phy_addr);
+			r->sg[0].length = cpu_to_le32(sio->data_len);
+			r->sg[0].descriptor_type = PQI_SGL_DATA_BLOCK;
 		}
-	} else {
-		/* Prepare single SG */
-		r->sg[0].address = cpu_to_le64(phy_addr);
-		r->sg[0].length = cpu_to_le32(sio->data_len);
-		r->sg[0].descriptor_type = PQI_SGL_DATA_BLOCK;
 	}
 
 	/* Fill the rest of sop request */
@@ -2441,8 +2454,9 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 				request_id, sio->cdb,
 				sio->data_len, sio->data_dir);
 
+	ser->tmo_slot = sop_add_timeout(qinfo, sio->timeout);
 	send_sop_command(h, qinfo, request_id);
-	return process_direct_cdb_response(h, sio->cdb[0], qinfo, request_id);
+	return process_direct_cdb_response(h, sio, qinfo, ser);
 
 sync_alloc_elem_fail:
 	free_request(h, qinfo_to_qid(qinfo), request_id);
@@ -2473,6 +2487,7 @@ static int sop_get_disk_params(struct sop_device *h)
 	if (!vaddr)
 		return -ENOMEM;
 	data = (u32 *)vaddr;
+	sio.timeout = DEF_IO_TIMEOUT;
 
 	/* 0.1. Send Inquiry */
 	memset(sio.cdb, 0, MAX_CDB_SIZE);
@@ -2636,28 +2651,19 @@ static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
 #endif
 
 
-static void sop_complete_sgio_hdr(struct sop_device *h,
+static int sop_complete_sgio_hdr(struct sop_device *h,
 					struct bio *bio,
 					sg_io_hdr_t *hdr)
 {
 	struct sop_sg_io_context *sgio_context = bio_get_driver_context(bio);
 	struct sop_request *r = sgio_context->sop_request;
-	struct queue_info *qinfo = sgio_context->qinfo;
 	u16 sense_data_len;
 	u16 response_data_len;
 	u8 xfer_result;
 	u32 data_xferred;
-	struct scatterlist *sgl;
 	int result, ret;
 	struct sop_cmd_response *scr;
 
-	sop_rem_timeout(qinfo, r->tmo_slot);
-	hdr->duration = jiffies_to_msecs(jiffies) - hdr->duration;
-	sgl = &qinfo->sgl[r->request_id * MAX_SGLS];
-
-	if (sgio_context->data_dir != DMA_NONE)
-		dma_unmap_sg(&h->pdev->dev, sgl, r->num_sg,
-				sgio_context->data_dir);
 	result = 0;
 
 	switch (r->response[0]) {
@@ -2736,13 +2742,10 @@ static void sop_complete_sgio_hdr(struct sop_device *h,
 		break;
 	}
 
-	if (sgio_context->data_dir != DMA_NONE)
-		ret = blk_rq_unmap_user(bio);
-	free_request(h, qinfo_to_qid(qinfo), r->request_id);
 	if (!result)
 		result = ret;
 	/* FIXME, what to do with result */
-	return;
+	return result;
 }
 
 /*
