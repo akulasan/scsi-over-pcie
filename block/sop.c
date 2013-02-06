@@ -1960,7 +1960,7 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 		if (err < count) {
 			count = err;
 			err = -EFAULT;
-			goto put_iovac_pages;
+			goto put_iovec_pages;
 		}
 
 		/* Now fill up the sgl with these pages */
@@ -1979,7 +1979,7 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 	}
 	sg_mark_end(&sgl[nsegs-1]);
 
-	/* Store the current index of iovec processed to be processed next */
+	/* Store the current index of iovec to be processed next */
 	sio->iovec_idx = i;
 
 	/* We do not need the page map any more */
@@ -1987,7 +1987,7 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 
 	return nsegs;
 
-put_iovac_pages:
+put_iovec_pages:
 	for (j = 0; j < count; j++)
 		put_page(page_map[j]);
 	kfree(page_map);
@@ -2369,6 +2369,11 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 		goto sync_alloc_elem_fail;
 	}
 	ser = &qinfo->request[request_id];
+	/* Init fieldfs of sop request context */
+	ser->bio = NULL;
+	ser->num_sg = 0;
+	ser->xfer_size = sio->data_len;
+	ser->response_accumulated = 0;
 	if (sio->data_dir != DMA_NONE) {
 		/* Prepare and fill the sg */
 		if (sio->iov_count > 0) {
@@ -2387,6 +2392,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 					sio->cdb[0], qinfo_to_qid(qinfo));
 				goto sync_alloc_elem_fail;
 			}
+			ser->num_sg = nsegs;
 		} else {
 			/* Prepare single SG */
 			r->sg[0].address = cpu_to_le64(phy_addr);
