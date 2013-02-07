@@ -385,12 +385,12 @@ bailout_iq:
 static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
 				int nelements)
 {
-	u32 qciw;
+	u16 qciw;
 	u16 qci;
 	u32 nfree;
 
 	qciw = readw(q->ci);
-	qci = le16_to_cpu(*(u16 *) &qciw);
+	qci = le16_to_cpu(qciw);
 
 	if (q->unposted_index > qci)
 		nfree = q->nelements - q->unposted_index + qci - 1;
