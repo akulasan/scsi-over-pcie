@@ -705,7 +705,6 @@ static int __devinit sop_alloc_admin_queues(struct sop_device *h)
 		dev_warn(&h->pdev->dev,  "Unable to read pqi capability register\n");
 		return -1;
 	}
-	pqicap = readq(&h->pqireg->capability);
 	memcpy(&h->pqicap, &pqicap, sizeof(h->pqicap));
 
 	admin_iq_elem_count = admin_oq_elem_count = ADMIN_QUEUE_ELEMENT_COUNT;
