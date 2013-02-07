@@ -385,14 +385,10 @@ bailout_iq:
 static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
 				int nelements)
 {
-	u16 qciw;
 	u16 qci;
 	u32 nfree;
 
-	if (safe_readw(&q->registers->signature, &qciw, q->ci))
-		return 1;
-	qci = le16_to_cpu(qciw);
-
+	qci = le16_to_cpu(*q->ci);
 	if (q->unposted_index > qci)
 		nfree = q->nelements - q->unposted_index + qci - 1;
 	else if (q->unposted_index < qci)
@@ -402,14 +398,9 @@ static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
 	return (nfree < nelements);
 }
 
-static int pqi_from_device_queue_is_empty(struct pqi_device_queue *q)
+static inline int pqi_from_device_queue_is_empty(struct pqi_device_queue *q)
 {
-	u16 qpi;
-
-	if (safe_readw(&q->registers->signature, &qpi, q->pi))
-		return 1;
-	qpi = le32_to_cpu(qpi);
-	return qpi == q->unposted_index;
+	return le16_to_cpu(*q->pi) == q->unposted_index;
 }
 
 static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
