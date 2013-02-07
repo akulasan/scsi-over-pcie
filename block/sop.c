@@ -1337,7 +1337,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 	struct pqi_device_queue *ioq;
 	struct pqi_create_operational_queue_request *r;
 	int request_id;
-	volatile struct pqi_create_operational_queue_response *resp;
+	struct pqi_create_operational_queue_response *resp;
 	__iomem u16 *pi_or_ci;
 
 	if (direction == PQI_DIR_FROM_DEVICE)
@@ -1357,7 +1357,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 					direction == PQI_DIR_TO_DEVICE,
 					request_id, q->msix_entry);
 	send_admin_command(h, request_id);
-	resp = (volatile struct pqi_create_operational_queue_response *)
+	resp = (struct pqi_create_operational_queue_response *)
 		h->qinfo[0].request[request_id].response;
 	if (resp->status != 0) {
 		dev_warn(&h->pdev->dev, "Failed to create up OQ #%d\n",
@@ -1426,7 +1426,7 @@ static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
 	struct pqi_delete_operational_queue_request *r;
 	struct pqi_device_queue *aq = h->qinfo[0].iq;
 	u16 request_id;
-	volatile struct pqi_delete_operational_queue_response *resp;
+	struct pqi_delete_operational_queue_response *resp;
 	u16 qid;
 	int err = 0;
 
@@ -1445,7 +1445,7 @@ static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
 	qid = qpindex_to_qid(qpindex, to_device);
 	fill_delete_io_queue_request(h, r, qid, to_device, request_id);
 	send_admin_command(h, request_id);
-	resp = (volatile struct pqi_delete_operational_queue_response *)
+	resp = (struct pqi_delete_operational_queue_response *)
 		h->qinfo[0].request[request_id].response;
 	if (resp->status != 0) {
 		dev_warn(&h->pdev->dev, "Failed to tear down queue #%d (to=%d)\n",
