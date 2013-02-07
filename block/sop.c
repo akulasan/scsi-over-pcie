@@ -82,11 +82,12 @@ static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
 #endif
 static int sop_ioctl(struct block_device *dev, fmode_t mode,
 				unsigned int cmd, unsigned long arg);
+static int sop_revalidate(struct gendisk *disk);
 
 static const struct block_device_operations sop_fops = {
 	.owner			= THIS_MODULE,
-#if 0
 	.revalidate_disk	= sop_revalidate,
+#if 0
 	.getgeo			= sop_getgeo,
 #endif
 	.ioctl			= sop_ioctl,
@@ -3334,6 +3335,21 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 		/* Fail all commands waiting in internal queue */
 		sop_resubmit_waitq(q, true);
 	}
+}
+
+static int sop_revalidate(struct gendisk *disk)
+{
+	struct sop_device *h = disk->private_data;
+
+	if (!h)
+		return -1;
+
+	if (sop_get_disk_params(h))
+		return -1;
+
+	set_capacity(disk, h->capacity);
+	blk_queue_logical_block_size(h->rq, h->block_size);
+	return 0;
 }
 
 /* This gets optimized away, but will fail to compile if we mess up
