@@ -257,13 +257,6 @@ static int allocate_wait_queue(struct queue_info *q)
 	return 0;
 }
 
-static void free_wait_queue(struct queue_info *q)
-{
-	struct sop_wait_queue *wq = q->wq;
-
-	kfree(wq);
-}
-
 static int pqi_device_queue_alloc(struct sop_device *h,
 		struct pqi_device_queue **xq,
 		u16 n_q_elements, u8 q_element_size_over_16,
@@ -354,7 +347,7 @@ static void pqi_device_queue_free(struct sop_device *h,
 static void pqi_iq_buffer_free(struct sop_device *h, struct queue_info *qinfo)
 {
 	free_q_request_buffers(qinfo);
-	free_wait_queue(qinfo);
+	kfree(qinfo->wq);
 	free_sgl_area(h, qinfo);
 }
 
