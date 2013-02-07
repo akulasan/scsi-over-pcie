@@ -3002,7 +3002,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 	/* Process timeout by linear search of request bits in qinfo*/
 	maxid = q->qdepth - 1;
 	for_each_set_bit(rqid, q->request_bits, maxid) {
-		ser = &q->request[rqid & 0x00ff];
+		ser = &q->request[rqid];
 		if ((tmo_slot > 0) && (ser->tmo_slot != tmo_slot))
 			continue;
 
