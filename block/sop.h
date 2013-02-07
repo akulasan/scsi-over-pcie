@@ -77,8 +77,24 @@ struct pqi_device_register_set {
 
 struct pqi_device_queue {
 	__iomem void *queue_vaddr;
-	__iomem u16 *pi;		/* producer index */
-	__iomem u16 *ci;		/* consumer index */
+
+	/*
+	 * For to-device queues, the producer index (pi) is a register on the
+	 * device, and the consumer index (ci) is volatile in host memory.
+	 * For from-device queues, the producer index is volatile in host
+	 * memory, and the consumer index is a register on the device.
+	 */
+	union {
+		struct {
+			__iomem u16 *pi;
+			volatile u16 *ci;
+		} to_dev;
+		struct {
+			volatile u16 *pi;
+			__iomem u16 *ci;
+		} from_dev;
+	} index;
+
 	u16 unposted_index;		/* temporary host copy of pi or ci,
 					 * depending on direction of queue.
 					 */

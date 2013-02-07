@@ -293,13 +293,14 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 	(*xq)->vaddr = vaddr;
 	(*xq)->queue_vaddr = vaddr;
 
-	if (queue_direction == PQI_DIR_TO_DEVICE) {
-		(*xq)->ci = vaddr + q_element_size_over_16 * 16 * n_q_elements;
-		/* (*xq)->pi is unknown now, hardware will tell us later */
-	} else {
-		(*xq)->pi = vaddr + q_element_size_over_16 * 16 * n_q_elements;
-		/* (*xq)->ci is unknown now, hardware will tell us later */
-	}
+	if (queue_direction == PQI_DIR_TO_DEVICE)
+		(*xq)->index.to_dev.ci = vaddr +
+			q_element_size_over_16 * 16 * n_q_elements;
+		/* producer idx is unknown now, hardware will tell us later */
+	else
+		(*xq)->index.from_dev.pi = vaddr +
+			q_element_size_over_16 * 16 * n_q_elements;
+		/* consumer idx is unknown now, hardware will tell us later */
 	(*xq)->queue_id = qpindex_to_qid(queue_pair_index,
 				(queue_direction == PQI_DIR_TO_DEVICE));
 	(*xq)->unposted_index = 0;
@@ -319,10 +320,16 @@ bailout:
 }
 
 static void pqi_device_queue_init(struct pqi_device_queue *q,
-		__iomem u16 *pi, __iomem u16 *ci)
+		__iomem u16 *register_index, volatile u16 *volatile_index,
+		int direction)
 {
-	q->pi = pi;
-	q->ci = ci;
+	if (direction == PQI_DIR_TO_DEVICE) {
+		q->index.to_dev.pi = register_index;
+		q->index.to_dev.ci = volatile_index;
+	} else {
+		q->index.from_dev.pi = volatile_index;
+		q->index.from_dev.ci = register_index;
+	}
 	q->unposted_index = 0;
 	spin_lock_init(&q->qlock);
 	spin_lock_init(&q->index_lock);
@@ -388,7 +395,7 @@ static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
 	u16 qci;
 	u32 nfree;
 
-	qci = le16_to_cpu(*q->ci);
+	qci = le16_to_cpu(*q->index.to_dev.ci);
 	if (q->unposted_index > qci)
 		nfree = q->nelements - q->unposted_index + qci - 1;
 	else if (q->unposted_index < qci)
@@ -400,7 +407,7 @@ static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
 
 static inline int pqi_from_device_queue_is_empty(struct pqi_device_queue *q)
 {
-	return le16_to_cpu(*q->pi) == q->unposted_index;
+	return le16_to_cpu(*q->index.from_dev.pi) == q->unposted_index;
 }
 
 static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
@@ -410,7 +417,7 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
 	if (pqi_to_device_queue_is_full(q, nelements)) {
 		pr_warn("pqi device queue [%d] is full!\n", q->queue_id);
 		pr_warn("  unposted_index = %d, ci = %d, nelements=%d\n",
-			q->unposted_index, *(q->ci), q->nelements);
+			q->unposted_index, *(q->index.to_dev.ci), q->nelements);
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -592,7 +599,7 @@ static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 	 */
 	spin_lock_irqsave(&q->index_lock, flags);
 	q->local_pi = q->unposted_index;
-	writew(q->unposted_index, q->pi);
+	writew(q->unposted_index, q->index.to_dev.pi);
 	spin_unlock_irqrestore(&q->index_lock, flags);
 }
 
@@ -601,7 +608,7 @@ static void pqi_notify_device_queue_read(struct pqi_device_queue *q)
 	/*
 	 * Notify the device that the host has consumed data from the device
 	 */
-	writew(q->unposted_index, q->ci);
+	writew(q->unposted_index, q->index.from_dev.ci);
 }
 
 static int wait_for_admin_command_ack(struct sop_device *h)
@@ -762,7 +769,8 @@ static int sop_create_admin_queues(struct sop_device *h)
 	u8 function_and_status;
 	u8 pqi_device_state;
 	struct pqi_device_queue *admin_iq, *admin_oq;
-	u16 *admin_iq_ci, *admin_oq_pi, *admin_iq_pi, *admin_oq_ci;
+	volatile u16 *admin_iq_ci, *admin_oq_pi;
+	__iomem u16 *admin_iq_pi, *admin_oq_ci;
 	dma_addr_t admin_iq_ci_busaddr, admin_oq_pi_busaddr;
 	u16 msix_vector;
 	__iomem void *sig = &h->pqireg->signature;
@@ -777,8 +785,8 @@ static int sop_create_admin_queues(struct sop_device *h)
 	admin_iq = h->qinfo[0].iq;
 	admin_oq = h->qinfo[0].oq;
 
-	admin_iq_ci = admin_iq->ci;
-	admin_oq_pi = admin_oq->pi;
+	admin_iq_ci = admin_iq->index.to_dev.ci;
+	admin_oq_pi = admin_oq->index.from_dev.pi;
 
 	admin_iq_ci_busaddr = admin_iq->dhandle +
 				(h->pqicap.admin_iq_element_length * 16) *
@@ -844,8 +852,10 @@ static int sop_create_admin_queues(struct sop_device *h)
 	function_and_status = paf & 0xff;
 	pqi_device_state = status & 0xff;
 
-	pqi_device_queue_init(admin_oq, admin_oq_pi, admin_oq_ci);
-	pqi_device_queue_init(admin_iq, admin_iq_pi, admin_iq_ci);
+	pqi_device_queue_init(admin_oq, admin_oq_ci, admin_oq_pi,
+				PQI_DIR_FROM_DEVICE);
+	pqi_device_queue_init(admin_iq, admin_iq_pi, admin_iq_ci,
+				PQI_DIR_TO_DEVICE);
 
 	dev_warn(&h->pdev->dev, "Successfully created admin queues\n");
 	return 0;
@@ -1072,7 +1082,7 @@ int sop_msix_handle_ioq(struct queue_info *q)
 		if (rc) { /* queue is empty */
 			dev_warn(&h->pdev->dev,
 				"=-=-=- io OQ[%hhu] PI %d CI %d empty(rc=%d)\n",
-				q->oq->queue_id, *(q->oq->pi),
+				q->oq->queue_id, *(q->oq->index.from_dev.pi),
 				q->oq->unposted_index, rc);
 			break;
 		}
@@ -1373,9 +1383,11 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 
 	pi_or_ci = ((void *) h->pqireg) + le64_to_cpu(resp->index_offset);
 	if (direction == PQI_DIR_TO_DEVICE)
-		pqi_device_queue_init(ioq, pi_or_ci, ioq->ci);
+		pqi_device_queue_init(ioq, pi_or_ci, ioq->index.to_dev.ci,
+					direction);
 	else
-		pqi_device_queue_init(ioq, ioq->pi, pi_or_ci);
+		pqi_device_queue_init(ioq, pi_or_ci, ioq->index.from_dev.pi,
+					direction);
 	free_request(h, 0, request_id);
 	return 0;
 bail_out:
@@ -2224,7 +2236,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
 
 	/* Submit it to the device */
-	writew(qinfo->iq->unposted_index, qinfo->iq->pi);
+	writew(qinfo->iq->unposted_index, qinfo->iq->index.to_dev.pi);
 
 	return 0;
 
@@ -3143,8 +3155,8 @@ static void sop_reinit_all_ioq(struct sop_device *h)
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		q = &h->qinfo[i];
 
-		*(q->oq->pi) = q->oq->unposted_index = 0;
-		*(q->iq->ci) = q->iq->unposted_index = 0;
+		*(q->oq->index.to_dev.pi) = q->oq->unposted_index = 0;
+		*(q->iq->index.to_dev.ci) = q->iq->unposted_index = 0;
 		q->iq->local_pi = 0;
 	}
 }
