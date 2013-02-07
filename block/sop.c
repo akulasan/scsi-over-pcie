@@ -389,7 +389,8 @@ static int pqi_to_device_queue_is_full(struct pqi_device_queue *q,
 	u16 qci;
 	u32 nfree;
 
-	qciw = readw(q->ci);
+	if (safe_readw(&q->registers->signature, &qciw, q->ci))
+		return 1;
 	qci = le16_to_cpu(qciw);
 
 	if (q->unposted_index > qci)
@@ -405,8 +406,9 @@ static int pqi_from_device_queue_is_empty(struct pqi_device_queue *q)
 {
 	u16 qpi;
 
-	/* FIXME: shouldn't have to read this every time. */
-	qpi = le32_to_cpu(readw(q->pi));
+	if (safe_readw(&q->registers->signature, &qpi, q->pi))
+		return 1;
+	qpi = le32_to_cpu(qpi);
 	return qpi == q->unposted_index;
 }
 
@@ -616,6 +618,7 @@ static int wait_for_admin_command_ack(struct sop_device *h)
 	u64 paf;
 	u8 function_and_status;
 	int count = 0;
+	__iomem void *sig = &h->pqireg->signature;
 
 #define ADMIN_SLEEP_INTERVAL_MIN	100 /* microseconds */
 #define ADMIN_SLEEP_INTERVAL_MAX	150 /* microseconds */
@@ -625,7 +628,11 @@ static int wait_for_admin_command_ack(struct sop_device *h)
 	do {
 		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
 				ADMIN_SLEEP_INTERVAL_MAX);
-		paf = readq(&h->pqireg->process_admin_function);
+		if (safe_readq(sig, &paf, &h->pqireg->process_admin_function)) {
+			dev_warn(&h->pdev->dev,
+				"%s: Failed to read device memory\n", __func__);
+			return -1;
+		}
 		function_and_status = paf & 0xff;
 		if (function_and_status == 0x00)
 			return 0;
@@ -826,12 +833,23 @@ static int sop_create_admin_queues(struct sop_device *h)
 	}
 
 	/* Get the offsets of the hardware updated producer/consumer indices */
-	admin_iq_pi_offset = readq(&h->pqireg->admin_iq_pi_offset);
-	admin_oq_ci_offset = readq(&h->pqireg->admin_oq_ci_offset);
+	if (safe_readq(sig, &admin_iq_pi_offset,
+				&h->pqireg->admin_iq_pi_offset)) {
+		msg = "Unable to read admin iq pi offset register";
+		goto bailout;
+	}
+	if (safe_readq(sig, &admin_oq_ci_offset,
+				&h->pqireg->admin_oq_ci_offset)) {
+		msg = "Unable to read admin oq ci offset register";
+		goto bailout;
+	}
 	admin_iq_pi = ((void *) h->pqireg) + admin_iq_pi_offset;
 	admin_oq_ci = ((void *) h->pqireg) + admin_oq_ci_offset;
 
-	status = readl(&h->pqireg->pqi_device_status);
+	if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
+		msg = "Failed to read device status register";
+		goto bailout;
+	}
 	function_and_status = paf & 0xff;
 	pqi_device_state = status & 0xff;
 
@@ -851,6 +869,7 @@ static int sop_delete_admin_queues(struct sop_device *h)
 	u64 paf;
 	u32 status;
 	u8 function_and_status;
+	__iomem void *sig = &h->pqireg->signature;
 
 	if (wait_for_admin_queues_to_become_idle(h, ADMIN_SLEEP_TMO_MS,
 						PQI_READY_FOR_IO))
@@ -862,17 +881,20 @@ static int sop_delete_admin_queues(struct sop_device *h)
 	}
 
 	/* Try to get some clues about why it failed. */
-	paf = readq(&h->pqireg->process_admin_function);
+	if (safe_readq(sig, &paf, &h->pqireg->process_admin_function)) {
+		dev_warn(&h->pdev->dev, "Failed to delete admin queues\n");
+		return -1;
+	}
 	function_and_status = paf & 0xff;
 	dev_warn(&h->pdev->dev,
 		"Failed to delete admin queues: function_and_status = 0x%02x\n",
 		function_and_status);
 	if (function_and_status == 0)
 		return -1;
-	status = readl(&h->pqireg->pqi_device_status);
-	dev_warn(&h->pdev->dev, "Device status = 0x%08x\n",
-			status);
-
+	if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
+		dev_warn(&h->pdev->dev, "Failed to read device status register\n");
+		return -1;
+	}
 	dev_warn(&h->pdev->dev, "Device status = 0x%08x\n", status);
 	return -1;
 }
@@ -1566,6 +1588,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	struct sop_device *h;
 	u64 signature;
 	int i, rc;
+	__iomem void *sig;
 
 	dev_warn(&pdev->dev, SOP ": Found device: %04x:%04x/%04x:%04x\n",
 			pdev->vendor, pdev->device,
@@ -1612,6 +1635,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		rc = -ENOMEM;
 		goto bail_request_regions;
 	}
+	sig = &h->pqireg->signature;	
 	rc = sop_init_time_host_reset(h);
 	if (rc) {
 		dev_err(&pdev->dev, "Failed to Reset Device\n");
@@ -1622,8 +1646,10 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		dev_err(&pdev->dev, "Failed to set DMA mask\n");
 		goto bail_remap_bar;
 	}
-
-	signature = readq(&h->pqireg->signature);
+	if (safe_readq(sig, &signature, &h->pqireg->signature)) {
+		dev_warn(&pdev->dev, "Unable to read PQI signature\n");
+		goto bail_remap_bar;
+	}
 	if (memcmp(SOP_SIGNATURE_STR, &signature, sizeof(signature)) != 0) {
 		dev_warn(&pdev->dev, "Device does not appear to be a PQI device\n");
 		goto bail_remap_bar;
