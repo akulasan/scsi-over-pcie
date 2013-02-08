@@ -1677,6 +1677,9 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail_admin_created;
 	}
 
+	/* Mark the ADMIn queue as ready so that timeout can occur on them */
+	set_bit(SOP_FLAGS_BITPOS_ADMIN_RDY, (unsigned long *)&h->flags);
+
 	rc = sop_setup_io_queue_pairs(h);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "Bailing out in probe - Creating i/o queues\n");
@@ -1686,6 +1689,9 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	rc = sop_request_io_irqs(h, sop_ioq_msix_handler);
 	if (rc)
 		goto bail_io_q_created;
+
+	/* Mark the IO queues as ready so that timeout can occur on them */
+	set_bit(SOP_FLAGS_BITPOS_IOQ_RDY, (unsigned long *)&h->flags);
 
 	h->max_hw_sectors = 2048;	/* TODO: For now hard code it */
 	rc = sop_get_disk_params(h);
@@ -2986,7 +2992,7 @@ static int sop_device_error_state(struct sop_device *h)
 	u16 state = 0;
 
 	/* Do not check HW if any action is pending */
-	if (SOP_DEVICE_BUSY(h))
+	if (SOP_DEVICE_BUSY(h) || !SOP_DEVICE_READY(h))
 		return SOP_ERR_NONE;
 
 	/* Detect Surprise removal */
@@ -3204,8 +3210,7 @@ start_reset:
 		sop_resubmit_waitq(&h->qinfo[i], false);
 
 	dev_warn(&h->pdev->dev, "Reset Complete\n");
-	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND,
-			(volatile unsigned long *)&h->flags);
+	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, (unsigned long *)&h->flags);
 	return;
 
 reset_err:
@@ -3215,9 +3220,11 @@ reset_err:
 	if (reset_count < MAX_RESET_COUNT)
 		goto start_reset;
 
-	/* TODO: Error handling: Mark Dead? */
-	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND,
-			(volatile unsigned long *) &h->flags);
+	/* Error handling: Mark Removed/Dead */
+	set_bit(SOP_FLAGS_BITPOS_DO_REM, (unsigned long *) &h->flags);
+
+	/* Reset processing is done - clear that flag */
+	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, (unsigned long *) &h->flags);
 	return;
 
 }
@@ -3267,31 +3274,35 @@ static void sop_process_dev_timer(struct sop_device *h)
 	/* Decide if there is any global errofr */
 	action = sop_device_error_state(h);
 
-	/* Admin queue */
-	spin_lock_irq(&q->oq->qlock);
-	sop_msix_handle_adminq(q);
-	sop_timeout_admin(h);
-	spin_unlock_irq(&q->oq->qlock);
-
-	/* Io Queue */
-	for (i = 1; i < h->nr_queue_pairs; i++) {
-		q = &h->qinfo[i];
-
-		if (!q)
-			continue;
-
+	if ((h->flags & SOP_FLAGS_MASK_ADMIN_RDY)) {
+		/* Admin queue */
 		spin_lock_irq(&q->oq->qlock);
-
-		/* Process any pending ISR */
-		sop_msix_handle_ioq(q);
-
-		/* Handle errors */
-		sop_timeout_ios(q, action);
+		sop_msix_handle_adminq(q);
+		sop_timeout_admin(h);
 		spin_unlock_irq(&q->oq->qlock);
+	}
 
-		if (!SOP_DEVICE_BUSY(h)) {
-			/* Process wait queue */
-			sop_resubmit_waitq(q, false);
+	if ((h->flags & SOP_FLAGS_MASK_IOQ_RDY)) {
+		/* Io Queue */
+		for (i = 1; i < h->nr_queue_pairs; i++) {
+			q = &h->qinfo[i];
+
+			if (!q)
+				continue;
+
+			spin_lock_irq(&q->oq->qlock);
+
+			/* Process any pending ISR */
+			sop_msix_handle_ioq(q);
+
+			/* Handle errors */
+			sop_timeout_ios(q, action);
+			spin_unlock_irq(&q->oq->qlock);
+
+			if (!SOP_DEVICE_BUSY(h)) {
+				/* Process wait queue */
+				sop_resubmit_waitq(q, false);
+			}
 		}
 	}
 
@@ -3303,7 +3314,7 @@ static void sop_process_dev_timer(struct sop_device *h)
 		h->flags &= ~SOP_FLAGS_MASK_DO_RESET;
 
 		if (!test_and_set_bit(SOP_FLAGS_BITPOS_RESET_PEND,
-			(volatile unsigned long *) &h->flags)) {
+			(unsigned long *)&h->flags)) {
 
 			/* Reset the controller */
 			dev_warn(&h->pdev->dev,
