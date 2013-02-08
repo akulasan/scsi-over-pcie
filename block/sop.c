@@ -437,8 +437,8 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
 			return ERR_PTR(-ENOMEM);
 		}
 		p = q->vaddr + q->unposted_index * q->element_size;
-		memset(p, 0, (q->nelements - q->unposted_index) *
-						q->element_size);
+		memset(p, 0, (q->nelements - (u64) q->unposted_index) *
+						(u64) q->element_size);
 		q->unposted_index = 0;
 	}
 	p = q->vaddr + q->unposted_index * q->element_size;
@@ -1280,7 +1280,7 @@ static void fill_create_io_queue_request(struct sop_device *h,
 	r->queue_id = cpu_to_le16(q->queue_id);
 	r->element_array_addr = cpu_to_le64(q->dhandle);
 	r->index_addr = cpu_to_le64(q->dhandle +
-			q->nelements * q->element_size);
+			(u64) q->nelements * (u64) q->element_size);
 	r->nelements = cpu_to_le16((u16) q->nelements);
 	r->element_length = cpu_to_le16((u16) (q->element_size/16));
 	if (to_device) {
