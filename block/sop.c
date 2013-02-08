@@ -1053,7 +1053,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 	free_request(h, qinfo_to_qid(qinfo), r->request_id);
 }
 
-int sop_msix_handle_ioq(struct queue_info *q)
+static int sop_msix_handle_ioq(struct queue_info *q)
 {
 	u16 request_id;
 	u8 iu_type;
@@ -1110,7 +1110,7 @@ int sop_msix_handle_ioq(struct queue_info *q)
 	return IRQ_HANDLED;
 }
 
-int sop_msix_handle_adminq(struct queue_info *q)
+static int sop_msix_handle_adminq(struct queue_info *q)
 {
 	u8 iu_type;
 	u16 request_id;
@@ -1145,7 +1145,7 @@ int sop_msix_handle_adminq(struct queue_info *q)
 	return IRQ_HANDLED;
 }
 
-irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
+static irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 {
 	struct queue_info *q = devid;
 	int ret;
@@ -1157,7 +1157,7 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 	return ret;
 }
 
-irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
+static irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 {
 	struct queue_info *q = devid;
 	int ret;
