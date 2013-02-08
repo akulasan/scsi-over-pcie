@@ -1060,7 +1060,6 @@ int sop_msix_handle_ioq(struct queue_info *q)
 	u8 iu_type;
 	int rc;
 	struct sop_device *h = q->h;
-	int ncmd = 0;
 	struct sop_request *r;
 
 	if (pqi_from_device_queue_is_empty(q->oq))
@@ -1078,7 +1077,6 @@ int sop_msix_handle_ioq(struct queue_info *q)
 		}
 		rc = pqi_dequeue_from_device(q->oq,
 				&r->response[r->response_accumulated]);
-		ncmd++;
 		if (rc) { /* queue is empty */
 			dev_warn(&h->pdev->dev,
 				"=-=-=- io OQ[%hhu] PI %d CI %d empty(rc=%d)\n",
