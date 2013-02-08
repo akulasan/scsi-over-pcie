@@ -1751,7 +1751,7 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	sop_delete_io_queues(h);
 	sop_free_irqs_and_disable_msix(h);
 	sop_delete_admin_queues(h);
-	if (h && h->pqireg)
+	if (h->pqireg)
 		iounmap(h->pqireg);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
