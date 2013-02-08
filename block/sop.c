@@ -773,6 +773,7 @@ static int sop_create_admin_queues(struct sop_device *h)
 	dma_addr_t admin_iq_ci_busaddr, admin_oq_pi_busaddr;
 	u16 msix_vector;
 	__iomem void *sig = &h->pqireg->signature;
+	__iomem void *tmpptr;
 	int rc;
 	char *msg = "";
 
@@ -841,8 +842,10 @@ static int sop_create_admin_queues(struct sop_device *h)
 		msg = "Unable to read admin oq ci offset register";
 		goto bailout;
 	}
-	admin_iq_pi = ((void *) h->pqireg) + admin_iq_pi_offset;
-	admin_oq_ci = ((void *) h->pqireg) + admin_oq_ci_offset;
+
+	tmpptr = (__iomem void *) h->pqireg;
+	admin_iq_pi = (__iomem u16 *) (tmpptr + admin_iq_pi_offset);
+	admin_oq_ci = (__iomem u16 *) (tmpptr + admin_oq_ci_offset);
 
 	if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
 		msg = "Failed to read device status register";
@@ -1378,7 +1381,8 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 		goto bail_out;
 	}
 
-	pi_or_ci = ((void *) h->pqireg) + le64_to_cpu(resp->index_offset);
+	pi_or_ci = ((__iomem void *) h->pqireg) +
+					le64_to_cpu(resp->index_offset);
 	if (direction == PQI_DIR_TO_DEVICE)
 		pqi_device_queue_init(ioq, pi_or_ci, ioq->index.to_dev.ci,
 					direction);
@@ -1877,7 +1881,7 @@ static int sop_prepare_cdb(u8 *cdb, struct bio *bio)
 	num_sec = bio_sectors(bio);
 	lba = cpu_to_le64(bio->bi_sector);
 
-	if (lba < (u64)(0x100000000)) {
+	if (lba < 0x100000000ULL) {
 		if (num_sec < 0x10000) {
 			/* Can use RW_10 */
 			cdb[0] = (SCSI_CMD_RW_10_PRE | cmd_low);
