@@ -766,7 +766,6 @@ static int sop_create_admin_queues(struct sop_device *h)
 	u64 paf, admin_iq_pi_offset, admin_oq_ci_offset;
 	u32 status, admin_queue_param;
 	u8 function_and_status;
-	u8 pqi_device_state;
 	struct pqi_device_queue *admin_iq, *admin_oq;
 	volatile u16 *admin_iq_ci, *admin_oq_pi;
 	__iomem u16 *admin_iq_pi, *admin_oq_ci;
@@ -846,13 +845,6 @@ static int sop_create_admin_queues(struct sop_device *h)
 	tmpptr = (__iomem void *) h->pqireg;
 	admin_iq_pi = (__iomem u16 *) (tmpptr + admin_iq_pi_offset);
 	admin_oq_ci = (__iomem u16 *) (tmpptr + admin_oq_ci_offset);
-
-	if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
-		msg = "Failed to read device status register";
-		goto bailout;
-	}
-	function_and_status = paf & 0xff;
-	pqi_device_state = status & 0xff;
 
 	pqi_device_queue_init(admin_oq, admin_oq_ci, admin_oq_pi,
 				PQI_DIR_FROM_DEVICE);
