@@ -291,7 +291,6 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 	}
 	(*xq)->dhandle = dhandle;
 	(*xq)->vaddr = vaddr;
-	(*xq)->queue_vaddr = vaddr;
 
 	if (queue_direction == PQI_DIR_TO_DEVICE)
 		(*xq)->index.to_dev.ci = vaddr +
@@ -437,12 +436,12 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
 				extra_elements);
 			return ERR_PTR(-ENOMEM);
 		}
-		p = q->queue_vaddr + q->unposted_index * q->element_size;
+		p = q->vaddr + q->unposted_index * q->element_size;
 		memset(p, 0, (q->nelements - q->unposted_index) *
 						q->element_size);
 		q->unposted_index = 0;
 	}
-	p = q->queue_vaddr + q->unposted_index * q->element_size;
+	p = q->vaddr + q->unposted_index * q->element_size;
 	q->unposted_index = (q->unposted_index + nelements) % q->nelements;
 	return p;
 }
@@ -461,7 +460,7 @@ static int pqi_dequeue_from_device(struct pqi_device_queue *q, void *element)
 	if (pqi_from_device_queue_is_empty(q))
 		return PQI_QUEUE_EMPTY;
 
-	p = q->queue_vaddr + q->unposted_index * q->element_size;
+	p = q->vaddr + q->unposted_index * q->element_size;
 	/* printk(KERN_WARNING "DQ: p = %p, q->unposted_index = %hu, n = %hu\n",
 				p, q->unposted_index, q->nelements); */
 	memcpy(element, p, q->element_size);
@@ -475,14 +474,14 @@ static u8 pqi_peek_ui_type_from_device(struct pqi_device_queue *q)
 {
 	u8 *p;
 
-	p = q->queue_vaddr + q->unposted_index * q->element_size;
+	p = q->vaddr + q->unposted_index * q->element_size;
 	return *p;
 }
 static u16 pqi_peek_request_id_from_device(struct pqi_device_queue *q)
 {
 	u8 *p;
 
-	p = q->queue_vaddr + q->unposted_index * q->element_size + 8;
+	p = q->vaddr + q->unposted_index * q->element_size + 8;
 	return *(u16 *) p;
 }
 
@@ -572,18 +571,18 @@ static void __attribute__((unused))
 	}
 	if (pi < q->unposted_index) {
 		for (i = pi; i < q->unposted_index; i++) {
-			iu = (unsigned char *) q->queue_vaddr +
+			iu = (unsigned char *) q->vaddr +
 					(i * IQ_IU_SIZE);
 			print_iu(iu);
 		}
 	} else {
 		for (i = pi; i < q->nelements; i++) {
-			iu = (unsigned char *) q->queue_vaddr +
+			iu = (unsigned char *) q->vaddr +
 					(i * IQ_IU_SIZE);
 			print_iu(iu);
 		}
 		for (i = 0; i < q->unposted_index; i++) {
-			iu = (unsigned char *) q->queue_vaddr +
+			iu = (unsigned char *) q->vaddr +
 					(i * IQ_IU_SIZE);
 			print_iu(iu);
 		}

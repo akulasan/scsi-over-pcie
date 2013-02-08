@@ -76,7 +76,7 @@ struct pqi_device_register_set {
 #pragma pack()
 
 struct pqi_device_queue {
-	__iomem void *queue_vaddr;
+	void *vaddr;
 
 	/*
 	 * For to-device queues, the producer index (pi) is a register on the
@@ -112,7 +112,6 @@ struct pqi_device_queue {
 	struct pqi_device_register_set *registers;
 	spinlock_t qlock;
 	dma_addr_t dhandle;
-	void *vaddr;
 };
 
 #define PQI_QUEUE_FULL (-1)
