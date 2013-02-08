@@ -3155,7 +3155,7 @@ static void sop_reinit_all_ioq(struct sop_device *h)
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		q = &h->qinfo[i];
 
-		*(q->oq->index.to_dev.pi) = q->oq->unposted_index = 0;
+		*(q->oq->index.from_dev.pi) = q->oq->unposted_index = 0;
 		*(q->iq->index.to_dev.ci) = q->iq->unposted_index = 0;
 		q->iq->local_pi = 0;
 	}
