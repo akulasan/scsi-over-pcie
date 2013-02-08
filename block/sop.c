@@ -2879,7 +2879,7 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	 * FIXME I think I need to do some kind of kref_get() here to
 	 * make sure we know the device is in use.
 	 */
-	send_sync_cdb(h, scdb, 0);
+	rc = send_sync_cdb(h, scdb, 0);
 
 	/*
 	 * FIXME I think I need to do some kind of kref_put() here to
