@@ -1447,7 +1447,7 @@ static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
 
 	r = pqi_alloc_elements(aq, 1);
 	request_id = alloc_request(h, 0);
-	if (request_id < 0) {
+	if (request_id == (u16) -EBUSY) {
 		dev_warn(&h->pdev->dev, "Requests unexpectedly exhausted\n");
 		err = -ENOMEM;
 		goto bail_out;
