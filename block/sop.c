@@ -1618,6 +1618,10 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	h->pdev = pdev;
 	pci_set_drvdata(pdev, h);
 
+	spin_lock(&dev_list_lock);
+	list_add(&h->node, &dev_list);
+	spin_unlock(&dev_list_lock);
+
 	rc = pci_enable_device(pdev);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "Unable to enable PCI device\n");
@@ -1708,10 +1712,6 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 
 	dev_warn(&h->pdev->dev, "Successfully loaded device '%s'\n", h->devname);
 
-	spin_lock(&dev_list_lock);
-	list_add(&h->node, &dev_list);
-	spin_unlock(&dev_list_lock);
-
 	return 0;
 
 bail_io_irq:
@@ -1735,6 +1735,10 @@ bail_request_regions:
 bail_pci_enable:
 	pci_disable_device(pdev);
 bail_set_drvdata:
+	spin_lock(&dev_list_lock);
+	list_del(&h->node);
+	spin_unlock(&dev_list_lock);
+
 	pci_set_drvdata(pdev, NULL);
 	sop_release_instance(h);
 bail_alloc_drvdata:
@@ -1769,6 +1773,11 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 		iounmap(h->pqireg);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
+
+	spin_lock(&dev_list_lock);
+	list_del(&h->node);
+	spin_unlock(&dev_list_lock);
+
 	pci_set_drvdata(pdev, NULL);
 	sop_release_instance(h);
 	dev_warn(&pdev->dev, "Device Removed\n");
@@ -2688,11 +2697,6 @@ static int sop_add_disk(struct sop_device *h)
 
 static void sop_remove_disk(struct sop_device *h)
 {
-	/* Cleanup the node info */
-	spin_lock(&dev_list_lock);
-	list_del(&h->node);
-	spin_unlock(&dev_list_lock);
-
 	/* First free the disk */
 	del_gendisk(h->disk);
 
