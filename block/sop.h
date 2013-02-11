@@ -166,6 +166,7 @@ struct pqi_create_operational_queue_request {
 
 struct pqi_create_operational_queue_response {
 	u8 ui_type;
+#define ADMIN_RESPONSE_IU_TYPE		0xE0
 	u8 compatible_features;
 	u16 ui_length;
 	u16 response_oq;

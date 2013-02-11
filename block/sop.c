@@ -1001,7 +1001,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 		response_data_len = le16_to_cpu(scr->response_data_len);
 		if (unlikely(response_data_len && sense_data_len))
 			dev_warn(&h->pdev->dev,
-				"Both sense and response data not expected.\n");
+			"BIO: Both sense and response data not expected.\n");
 
 		/* copy the sense data */
 		if (sense_data_len) {
@@ -1017,7 +1017,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 		/* paranoia, check for out of spec firmware */
 		if (scr->data_in_xfer_result && scr->data_out_xfer_result)
 			dev_warn(&h->pdev->dev,
-				"Unexpected bidirectional cmd with status in and out\n");
+			"BIO: Unexpected bidirectional cmd with status in and out\n");
 
 		/* Calculate residual count */
 		if (scr->data_in_xfer_result) {
@@ -1033,13 +1033,13 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 		if (response_data_len) {
 			/* FIXME need to do something correct here... */
 			result = -EIO;
-			dev_warn(&h->pdev->dev, "Got response data... what to do with it?\n");
+			dev_warn(&h->pdev->dev, "BIO: Got response data... what to do with it?\n");
 		}
 		break;
 
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 		result = -EIO;
-		dev_warn(&h->pdev->dev, "got unhandled response type...\n");
+		dev_warn(&h->pdev->dev, "BIO: got unhandled response type...\n");
 		break;
 
 	case SOP_RESPONSE_INTERNAL_CMD_FAIL_IU_TYPE:
@@ -1048,7 +1048,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 
 	default:
 		result = -EIO;
-		dev_warn(&h->pdev->dev, "got UNKNOWN response type...\n");
+		dev_warn(&h->pdev->dev, "BIO: got UNKNOWN response type...\n");
 		break;
 	}
 
@@ -1326,6 +1326,7 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	DECLARE_COMPLETION_ONSTACK(wait);
 
 	request = &qinfo->request[request_id];
+	memset(request, 0, sizeof(*request));
 	request->waiting = &wait;
 	request->response_accumulated = 0;
 	request->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
@@ -1377,7 +1378,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 	send_admin_command(h, request_id);
 	resp = (struct pqi_create_operational_queue_response *)
 		h->qinfo[0].request[request_id].response;
-	if (resp->status != 0) {
+	if (resp->ui_type != ADMIN_RESPONSE_IU_TYPE || resp->status != 0) {
 		dev_warn(&h->pdev->dev, "Failed to create up OQ #%d\n",
 			queue_pair_index);
 		free_request(h, 0, request_id);
@@ -1468,7 +1469,7 @@ static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
 	send_admin_command(h, request_id);
 	resp = (struct pqi_delete_operational_queue_response *)
 		h->qinfo[0].request[request_id].response;
-	if (resp->status != 0) {
+	if (resp->ui_type != ADMIN_RESPONSE_IU_TYPE || resp->status != 0) {
 		dev_warn(&h->pdev->dev, "Failed to tear down queue #%d (to=%d)\n",
 			qpindex, to_device);
 		err = -EIO;
@@ -2389,7 +2390,8 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		response_data_len = le16_to_cpu(scr->response_data_len);
 		if (unlikely(response_data_len && sense_data_len))
 			dev_warn(&h->pdev->dev,
-				"Both sense and response data not expected.\n");
+			"SCDB[%02x]: Both sense and response data not expected.\n",
+			scdb->cdb[0]);
 
 		/* copy the sense data */
 		if (sense_data_len) {
@@ -2408,7 +2410,8 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		/* paranoia, check for out of spec firmware */
 		if (scr->data_in_xfer_result && scr->data_out_xfer_result)
 			dev_warn(&h->pdev->dev,
-				"Unexpected bidirectional cmd with status in and out\n");
+			"SCDB[%02x]: Unexpected bidirectional cmd with status in and out\n",
+			scdb->cdb[0]);
 
 		/* Calculate residual count */
 		if (scr->data_in_xfer_result) {
@@ -2424,20 +2427,21 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		if (response_data_len) {
 			/* FIXME need to do something correct here... */
 			result = -EIO;
-			dev_warn(&h->pdev->dev, "Got response data... what to do with it?\n");
+			dev_warn(&h->pdev->dev, "SCDB[%02x]: Got response data... "
+				"what to do with it?\n", scdb->cdb[0]);
 		}
 		break;
 
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 		result = -EIO;
-		dev_warn(&h->pdev->dev, "got unhandled response type 0x%x...\n",
-			r->response[0]);
+		dev_warn(&h->pdev->dev, "SCDB[%02x]: got unhandled response type 0x%x...\n",
+			scdb->cdb[0], r->response[0]);
 		break;
 
 	default:
 		result = -EIO;
-		dev_warn(&h->pdev->dev, "got UNKNOWN response type 0x%x...\n",
-			r->response[0]);
+		dev_warn(&h->pdev->dev, "SCDB[%02x]: got UNKNOWN response type 0x%x...\n",
+			scdb->cdb[0], r->response[0]);
 		break;
 	}
 
@@ -2960,15 +2964,8 @@ static void sop_fail_cmd(struct queue_info *q, struct sop_request *r)
 	r->response[0] = SOP_RESPONSE_INTERNAL_CMD_FAIL_IU_TYPE;
 	r->response_accumulated = 1;
 
-	if ((r->bio))
-		/* Call complete bio with this parameter */
-		sop_complete_bio(q->h, q, r);
-	else if ((r->waiting))
-		complete(r->waiting);
-	else
-		dev_err(&q->h->pdev->dev, "Fail: bio and waiting both NULL "
-				"for Q[%d], rqid %d\n",
-				q->oq->queue_id, r->request_id);
+	/* Call complete bio with this parameter */
+	sop_complete_bio(q->h, q, r);
 }
 
 /* To be called instead of sop_process_bio in case of abort */
@@ -3054,7 +3051,10 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 
 		switch (action) {
 		case SOP_ERR_DEV_REM:
-			sop_fail_cmd(q, ser);
+			if (ser->bio)
+				sop_fail_cmd(q, ser);
+			else
+				sop_timeout_sync_cmd(q, ser);
 			break;
 
 		case SOP_ERR_NONE:
@@ -3092,8 +3092,8 @@ static void sop_timeout_ios(struct queue_info *q, int action)
 	if (cmd_pend == 0)
 		return;
 
-	dev_warn(&q->h->pdev->dev, "SOP timeout!! %d cmds left on slot[%d]\n",
-				cmd_pend, cur_slot);
+	dev_warn(&q->h->pdev->dev, "SOP timeout!! %d cmds left on Q[%d] slot[%d]\n",
+				cmd_pend, qinfo_to_qid(q), cur_slot);
 
 	/* Process timeout */
 	cmd_pend -= sop_timeout_queued_cmds(q, cur_slot, action);
@@ -3115,7 +3115,7 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 	wq = qinfo->wq;
 	if (!wq) {
 		dev_warn(&h->pdev->dev, "sop_resubmit_waitq: wq null for SubmitQ[%d]!\n",
-					qinfo->iq->queue_id);
+					qinfo_to_qid(qinfo));
 		return;
 	}
 
