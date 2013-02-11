@@ -332,7 +332,7 @@ struct sop_device {
 #define SOP_FLAGS_MASK_ADMIN_RDY	0x0100
 #define SOP_FLAGS_BITPOS_IOQ_RDY	9
 #define SOP_FLAGS_MASK_IOQ_RDY		0x0200
-	u32 flags;
+	unsigned long flags;
 #define MAX_IO_QUEUE_PAIRS 32
 #define MAX_TOTAL_QUEUE_PAIRS (MAX_IO_QUEUE_PAIRS + 1)
 	int nr_queue_pairs; /* total number of *pairs* of queues */

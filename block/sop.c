@@ -1682,7 +1682,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	}
 
 	/* Mark the ADMIn queue as ready so that timeout can occur on them */
-	set_bit(SOP_FLAGS_BITPOS_ADMIN_RDY, (unsigned long *)&h->flags);
+	set_bit(SOP_FLAGS_BITPOS_ADMIN_RDY, &h->flags);
 
 	rc = sop_setup_io_queue_pairs(h);
 	if (rc) {
@@ -1695,7 +1695,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail_io_q_created;
 
 	/* Mark the IO queues as ready so that timeout can occur on them */
-	set_bit(SOP_FLAGS_BITPOS_IOQ_RDY, (unsigned long *)&h->flags);
+	set_bit(SOP_FLAGS_BITPOS_IOQ_RDY, &h->flags);
 
 	h->max_hw_sectors = 2048;	/* TODO: For now hard code it */
 	rc = sop_get_disk_params(h);
@@ -2180,9 +2180,9 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	int prev_index, num_sg;
 	int nsegs;
 
-	/* FIXME: Temporarily limit the outstanding FW commands to 128 */
-	if (atomic_read(&h->cmd_pending) >= 128)
-		return -EBUSY;
+	/* Check if the drive is dead/ marked to be removed */
+	if (h->flags & SOP_FLAGS_MASK_DO_REM)
+		return -EIO;
 
 	request_id = alloc_request(h, qinfo_to_qid(qinfo));
 	if (request_id == (u16) -EBUSY)
@@ -3214,7 +3214,7 @@ start_reset:
 		sop_resubmit_waitq(&h->qinfo[i], false);
 
 	dev_warn(&h->pdev->dev, "Reset Complete\n");
-	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, (unsigned long *)&h->flags);
+	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, &h->flags);
 	return;
 
 reset_err:
@@ -3225,10 +3225,10 @@ reset_err:
 		goto start_reset;
 
 	/* Error handling: Mark Removed/Dead */
-	set_bit(SOP_FLAGS_BITPOS_DO_REM, (unsigned long *) &h->flags);
+	set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
 
 	/* Reset processing is done - clear that flag */
-	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, (unsigned long *) &h->flags);
+	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, &h->flags);
 	return;
 
 }
@@ -3315,10 +3315,10 @@ static void sop_process_dev_timer(struct sop_device *h)
 	if ((h->flags & SOP_FLAGS_MASK_DO_RESET)) {
 
 		/* Reset is being handled - clear the flag */
-		h->flags &= ~SOP_FLAGS_MASK_DO_RESET;
+		clear_bit(SOP_FLAGS_BITPOS_DO_RESET, &h->flags);
 
 		if (!test_and_set_bit(SOP_FLAGS_BITPOS_RESET_PEND,
-			(unsigned long *)&h->flags)) {
+					&h->flags)) {
 
 			/* Reset the controller */
 			dev_warn(&h->pdev->dev,
