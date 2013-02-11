@@ -1322,13 +1322,16 @@ static void fill_delete_io_queue_request(struct sop_device *h,
 static void send_admin_command(struct sop_device *h, u16 request_id)
 {
 	struct sop_request *request;
+	struct queue_info *qinfo = &h->qinfo[0];
 	DECLARE_COMPLETION_ONSTACK(wait);
 
-	request = &h->qinfo[0].request[request_id];
+	request = &qinfo->request[request_id];
 	request->waiting = &wait;
 	request->response_accumulated = 0;
-	pqi_notify_device_queue_written(h->qinfo[0].iq);
+	request->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
+	pqi_notify_device_queue_written(qinfo->iq);
 	wait_for_completion(&wait);
+	sop_rem_timeout(qinfo, request->tmo_slot);
 }
 
 static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
