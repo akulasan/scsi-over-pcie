@@ -2960,8 +2960,15 @@ static void sop_fail_cmd(struct queue_info *q, struct sop_request *r)
 	r->response[0] = SOP_RESPONSE_INTERNAL_CMD_FAIL_IU_TYPE;
 	r->response_accumulated = 1;
 
-	/* Call complete bio with this parameter */
-	sop_complete_bio(q->h, q, r);
+	if ((r->bio))
+		/* Call complete bio with this parameter */
+		sop_complete_bio(q->h, q, r);
+	else if ((r->waiting))
+		complete(r->waiting);
+	else
+		dev_err(&q->h->pdev->dev, "Fail: bio and waiting both NULL "
+				"for Q[%d], rqid %d\n",
+				q->oq->queue_id, r->request_id);
 }
 
 /* To be called instead of sop_process_bio in case of abort */
@@ -2984,7 +2991,8 @@ static void sop_timeout_sync_cmd(struct queue_info *q, struct sop_request *r)
 	if (r->waiting)
 		complete(r->waiting);
 	else
-		dev_err(&q->h->pdev->dev, "bio and waiting both NULL for Q[%d], rqid %d\n",
+		dev_err(&q->h->pdev->dev, "TMO: bio and waiting both NULL "
+				"for Q[%d], rqid %d\n",
 				q->oq->queue_id, r->request_id);
 }
 
@@ -3093,10 +3101,6 @@ static void sop_timeout_ios(struct queue_info *q, int action)
 	if ((action == SOP_ERR_NONE) && cmd_pend)
 		dev_warn(&q->h->pdev->dev, "SOP timeout!! Cannot account for %d cmds\n",
 				cmd_pend);
-}
-
-static void sop_timeout_admin(struct sop_device *h)
-{
 }
 
 static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
@@ -3285,7 +3289,7 @@ static void sop_process_dev_timer(struct sop_device *h)
 		/* Admin queue */
 		spin_lock_irq(&q->oq->qlock);
 		sop_msix_handle_adminq(q);
-		sop_timeout_admin(h);
+		sop_timeout_ios(&h->qinfo[0], action);
 		spin_unlock_irq(&q->oq->qlock);
 	}
 
@@ -3354,26 +3358,32 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 	int i;
 	struct queue_info *q = &h->qinfo[0];
 
-	spin_lock_irq(&q->oq->qlock);
-	/* TODO: Handle Admin commands */
-	spin_unlock_irq(&q->oq->qlock);
-
-	/* Io Queue */
-	for (i = 1; i < h->nr_queue_pairs; i++) {
-		q = &h->qinfo[i];
-
-		if (!q)
-			continue;
-
+	if ((h->flags & SOP_FLAGS_MASK_ADMIN_RDY)) {
 		spin_lock_irq(&q->oq->qlock);
 		/* Process any pending ISR */
-		sop_msix_handle_ioq(q);
-		/* Fail all outstanding commands given to HW queue */
-		sop_timeout_queued_cmds(q, -1, SOP_ERR_DEV_REM);
+		sop_msix_handle_adminq(q);
+		sop_timeout_queued_cmds(&h->qinfo[0], -1, SOP_ERR_DEV_REM);
 		spin_unlock_irq(&q->oq->qlock);
+	}
 
-		/* Fail all commands waiting in internal queue */
-		sop_resubmit_waitq(q, true);
+	/* Io Queue */
+	if ((h->flags & SOP_FLAGS_MASK_IOQ_RDY)) {
+		for (i = 1; i < h->nr_queue_pairs; i++) {
+			q = &h->qinfo[i];
+
+			if (!q)
+				continue;
+
+			spin_lock_irq(&q->oq->qlock);
+			/* Process any pending ISR */
+			sop_msix_handle_ioq(q);
+			/* Fail all outstanding commands given to HW queue */
+			sop_timeout_queued_cmds(q, -1, SOP_ERR_DEV_REM);
+			spin_unlock_irq(&q->oq->qlock);
+
+			/* Fail all commands waiting in internal queue */
+			sop_resubmit_waitq(q, true);
+		}
 	}
 }
 
