@@ -860,6 +860,9 @@ static int sop_create_admin_queues(struct sop_device *h)
 	pqi_device_queue_init(admin_iq, admin_iq_pi, admin_iq_ci,
 				PQI_DIR_TO_DEVICE);
 
+	/* Mark the ADMIn queue as ready so that timeout can occur on them */
+	set_bit(SOP_FLAGS_BITPOS_ADMIN_RDY, &h->flags);
+
 	dev_warn(&h->pdev->dev, "Successfully created admin queues\n");
 	return 0;
 
@@ -874,6 +877,9 @@ static int sop_delete_admin_queues(struct sop_device *h)
 	u32 status;
 	u8 function_and_status;
 	__iomem void *sig = &h->pqireg->signature;
+
+	/* Mark the ADMIN queues as NOT ready so that timeout is disabled */
+	clear_bit(SOP_FLAGS_BITPOS_ADMIN_RDY, &h->flags);
 
 	if (wait_for_admin_queues_to_become_idle(h, ADMIN_SLEEP_TMO_MS,
 						PQI_READY_FOR_IO))
@@ -1435,6 +1441,9 @@ static int sop_setup_io_queue_pairs(struct sop_device *h)
 		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_TO_DEVICE))
 			goto bail_out;
 	}
+	/* Mark the IO queues as ready so that timeout can occur on them */
+	set_bit(SOP_FLAGS_BITPOS_IOQ_RDY, &h->flags);
+
 	dev_warn(&h->pdev->dev, "Successfully created %d IO queue pairs\n",
 		h->nr_queue_pairs - 1);
 	return 0;
@@ -1485,6 +1494,9 @@ bail_out:
 static int sop_delete_io_queues(struct sop_device *h)
 {
 	int i;
+
+	/* Mark the IO queues as NOT ready so that timeout is disabled */
+	clear_bit(SOP_FLAGS_BITPOS_IOQ_RDY, &h->flags);
 
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		if (sop_delete_io_queue(h, i, 1))
@@ -1686,9 +1698,6 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail_admin_created;
 	}
 
-	/* Mark the ADMIn queue as ready so that timeout can occur on them */
-	set_bit(SOP_FLAGS_BITPOS_ADMIN_RDY, &h->flags);
-
 	rc = sop_setup_io_queue_pairs(h);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "Bailing out in probe - Creating i/o queues\n");
@@ -1698,9 +1707,6 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	rc = sop_request_io_irqs(h, sop_ioq_msix_handler);
 	if (rc)
 		goto bail_io_q_created;
-
-	/* Mark the IO queues as ready so that timeout can occur on them */
-	set_bit(SOP_FLAGS_BITPOS_IOQ_RDY, &h->flags);
 
 	h->max_hw_sectors = 2048;	/* TODO: For now hard code it */
 	rc = sop_get_disk_params(h);
@@ -3200,6 +3206,10 @@ static void sop_reset_controller(struct work_struct *work)
 
 start_reset:
 	dev_warn(&h->pdev->dev, "%s: Starting Reset\n", h->devname);
+	/* Skip reset if ADMIn queue was not ready */
+	if (!(h->flags & SOP_FLAGS_MASK_ADMIN_RDY))
+		goto end_reset;
+
 	rc = sop_init_time_host_reset(h);
 	if (rc)
 		goto reset_err;
@@ -3210,6 +3220,10 @@ start_reset:
 	rc = sop_create_admin_queues(h);
 	if (rc)
 		goto reset_err;
+
+	/* Skip IO queue creation if IO queue was not ready */
+	if (!(h->flags & SOP_FLAGS_MASK_IOQ_RDY))
+		goto end_reset;
 
 	dev_warn(&h->pdev->dev, "Re creating %d I/O queue pairs\n",
 		h->nr_queue_pairs-1);
@@ -3227,6 +3241,7 @@ start_reset:
 	for (i = 1; i < h->nr_queue_pairs; i++)
 		sop_resubmit_waitq(&h->qinfo[i], false);
 
+end_reset:
 	dev_warn(&h->pdev->dev, "Reset Complete\n");
 	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, &h->flags);
 	return;
@@ -3289,8 +3304,10 @@ static void sop_process_dev_timer(struct sop_device *h)
 	struct queue_info *q = &h->qinfo[0];
 	int action;
 
-	/* Decide if there is any global errofr */
+	/* Decide if there is any global error */
 	action = sop_device_error_state(h);
+	if (action == SOP_ERR_DEV_REM)
+		set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
 
 	if ((h->flags & SOP_FLAGS_MASK_ADMIN_RDY)) {
 		/* Admin queue */
@@ -3364,6 +3381,9 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 {
 	int i;
 	struct queue_info *q = &h->qinfo[0];
+
+	/* Mark Drive is being removed */
+	set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
 
 	if ((h->flags & SOP_FLAGS_MASK_ADMIN_RDY)) {
 		spin_lock_irq(&q->oq->qlock);
