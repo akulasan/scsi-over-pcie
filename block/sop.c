@@ -1380,7 +1380,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 	resp = (struct pqi_create_operational_queue_response *)
 		h->qinfo[0].request[request_id].response;
 	if (resp->ui_type != ADMIN_RESPONSE_IU_TYPE || resp->status != 0) {
-		dev_warn(&h->pdev->dev, "Failed to create up OQ #%d\n",
+		dev_warn(&h->pdev->dev, "Failed to create OQ #%d\n",
 			queue_pair_index);
 		free_request(h, 0, request_id);
 		goto bail_out;
@@ -1726,6 +1726,8 @@ bail_io_q_created:
 	sop_delete_io_queues(h);
 bail_admin_irq:
 	sop_free_irq(h, 0);
+	dev_warn(&h->pdev->dev, "Cancelling any pending work...\n");
+	cancel_delayed_work_sync(&h->dwork);
 bail_admin_created:
 	sop_delete_admin_queues(h);
 bail_admin_allocated:
@@ -1768,10 +1770,10 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 
 	dev_warn(&pdev->dev, "Remove called.\n");
 	h = pci_get_drvdata(pdev);
-	cancel_delayed_work_sync(&h->dwork);
 	sop_fail_all_outstanding_io(h);
 	sop_remove_disk(h);
 	sop_delete_io_queues(h);
+	cancel_delayed_work_sync(&h->dwork);
 	sop_free_irqs_and_disable_msix(h);
 	sop_delete_admin_queues(h);
 	if (h && h->pqireg)
