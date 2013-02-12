@@ -2481,6 +2481,10 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	struct scatterlist *sgl;
 	struct page **page_map;
 
+	/* Check for device busy (RESET/FAIL/etc) */
+	if (SOP_DEVICE_BUSY(h))
+		return -EBUSY;
+
 	if (sio->data_dir != DMA_NONE && sio->iov_count > 0) {
 		/* Must alloc prior to get_cpu() because we might sleep. */
 		page_map = kcalloc(MAX_SGLS, sizeof(*page_map), GFP_KERNEL);
