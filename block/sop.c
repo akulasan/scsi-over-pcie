@@ -330,6 +330,7 @@ static void pqi_device_queue_init(struct pqi_device_queue *q,
 		q->index.from_dev.ci = register_index;
 	}
 	q->unposted_index = 0;
+	*volatile_index = 0;
 	spin_lock_init(&q->qlock);
 	spin_lock_init(&q->index_lock);
 }
