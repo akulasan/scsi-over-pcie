@@ -2018,11 +2018,11 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 				 * table on each mapping. We KNOW that there
 				 * must be more entries here or the driver
 				 * would be buggy, so force clear the
-				 * termination bit to avoid doing a full
+				 * termination and chain bit to avoid doing a full
 				 * sg_init_table() in drivers for each command.
 				 */
-				cur_sg->page_link &= ~0x02;
-				cur_sg = sg_next(cur_sg);
+				cur_sg->page_link &= ~0x03;
+				cur_sg++;
 			}
 
 			sg_set_page(cur_sg, page_map[j],
@@ -2077,11 +2077,11 @@ static int sop_prepare_scatterlist(struct bio *bio, struct sop_request *ser,
 				 * table on each mapping. We KNOW that there
 				 * must be more entries here or the driver
 				 * would be buggy, so force clear the
-				 * termination bit to avoid doing a full
+				 * termination and chain bit to avoid doing a full
 				 * sg_init_table() in drivers for each command.
 				 */
-				cur_sg->page_link &= ~0x02;
-				cur_sg = sg_next(cur_sg);
+				cur_sg->page_link &= ~0x03;
+				cur_sg++;
 			}
 			sg_set_page(cur_sg, bv->bv_page, bv->bv_len,
 				bv->bv_offset);
