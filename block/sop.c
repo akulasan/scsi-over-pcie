@@ -1732,8 +1732,6 @@ bail_io_q_created:
 	sop_delete_io_queues(h);
 bail_admin_irq:
 	sop_free_irq(h, 0);
-	dev_warn(&h->pdev->dev, "Cancelling any pending work...\n");
-	cancel_delayed_work_sync(&h->dwork);
 bail_admin_created:
 	sop_delete_admin_queues(h);
 bail_admin_allocated:
@@ -1750,6 +1748,7 @@ bail_pci_enable:
 bail_set_drvdata:
 	spin_lock(&dev_list_lock);
 	list_del(&h->node);
+	cancel_delayed_work_sync(&h->dwork);
 	spin_unlock(&dev_list_lock);
 
 	pci_set_drvdata(pdev, NULL);
@@ -1779,7 +1778,6 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	sop_fail_all_outstanding_io(h);
 	sop_remove_disk(h);
 	sop_delete_io_queues(h);
-	cancel_delayed_work_sync(&h->dwork);
 	sop_free_irqs_and_disable_msix(h);
 	sop_delete_admin_queues(h);
 	if (h && h->pqireg)
@@ -1789,6 +1787,7 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 
 	spin_lock(&dev_list_lock);
 	list_del(&h->node);
+	cancel_delayed_work_sync(&h->dwork);
 	spin_unlock(&dev_list_lock);
 
 	pci_set_drvdata(pdev, NULL);
