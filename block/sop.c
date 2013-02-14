@@ -1981,10 +1981,11 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 
 		/* Basic field check */
 		err = -EINVAL;
-		if (addr & 3)
+		if ((addr & 3) || (len == 0)) {
+			printk(KERN_ERR "sop_sync: Invalid IOV(0x%lx, 0x%x)\n",
+				addr, len);
 			goto err_iovec;
-		if (len == 0)
-			goto err_iovec;
+		}
 
 		/* Try to map the pages in this iov */
 		offset = offset_in_page(addr);
@@ -1996,6 +1997,9 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 
 		err = get_user_pages_fast(addr, count, write, page_map);
 		if (err < count) {
+			printk(KERN_ERR "sop_sync: Failed to get user pages "
+				"IOV(0x%lx, 0x%x) count=%d\n",
+				addr, len, count);
 			count = err;
 			err = -EFAULT;
 			goto put_iovec_pages;
@@ -2040,10 +2044,15 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 	return nsegs;
 
 put_iovec_pages:
+	/* Unmap current mapping */
 	for (j = 0; j < count; j++)
 		put_page(page_map[j]);
 
 err_iovec:
+	/* Unmap previously mapped pages */
+	for (i = 0; i < nsegs; i++)
+		put_page(sg_page(&sgl[i]));
+
 	/* Start all over next time,  sio->iovec_idx is not changed*/
 	return err;
 }
@@ -2466,10 +2475,14 @@ static int process_direct_cdb_response(struct sop_device *h,
 	sop_rem_timeout(qinfo, sopr->tmo_slot);
 	if (sio->data_dir != DMA_NONE) {
 		struct scatterlist *sgl;
+		int i;
 
 		sgl = &qinfo->sgl[sopr->request_id * MAX_SGLS];
 		dma_unmap_sg(&h->pdev->dev, sgl, sopr->num_sg,
 				sio->data_dir);
+
+		for (i = 0; i < sopr->num_sg; i++)
+			put_page(sg_page(&sgl[i]));
 	}
 	retval = sop_complete_sgio_hdr(h, sio, sopr);
 
@@ -2534,17 +2547,17 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 			/* Prepare the sg from iov */
 			nsegs = sop_get_sync_cdb_scatterlist(sio, sgl,
 								page_map);
-			kfree(page_map);
-			if (nsegs > 0)
+			if (nsegs > 0) {
+				ser->num_sg = nsegs;
 				nsegs = dma_map_sg(&h->pdev->dev, sgl, nsegs,
 							sio->data_dir);
-			if (nsegs < 0) {
+			}
+			if (nsegs <= 0) {
 				sio->iovec_idx = start_idx;
 				dev_warn(&h->pdev->dev, "sg prep failure %d CDB[0]=0x%x, SQ[%d].\n",
 					nsegs, sio->cdb[0], qinfo_to_qid(qinfo));
-				goto sync_alloc_elem_fail;
+				goto sync_dma_map_fail;
 			}
-			ser->num_sg = nsegs;
 		} else {
 			/* Prepare single SG */
 			nsegs = 1;
@@ -2554,6 +2567,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 		}
 	} else
 		nsegs = 0;
+	kfree(page_map);
 	/* Now prepare the sg in sop queue request */
 	sop_scatter_gather(h, qinfo, nsegs, r, sgl, &ser->xfer_size);
 
@@ -2565,6 +2579,11 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	ser->tmo_slot = sop_add_timeout(qinfo, sio->timeout);
 	send_sop_command(h, qinfo, ser);
 	return process_direct_cdb_response(h, sio, qinfo, ser);
+
+sync_dma_map_fail:
+	/* Free the memory and else allocated */
+	kfree(page_map);
+	pqi_unalloc_elements(qinfo->iq, 1);
 
 sync_alloc_elem_fail:
 	free_request(h, qinfo_to_qid(qinfo), request_id);
