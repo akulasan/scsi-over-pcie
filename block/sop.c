@@ -98,10 +98,42 @@ static const struct block_device_operations sop_fops = {
 
 static u32 sop_dbg_lvl;
 
+#define	SOP_MAX_LINE_LEN	256
 static ssize_t
 sop_sysfs_show_dbg_lvl(struct device_driver *dd, char *buf)
 {
-	return sprintf(buf, "%u\n", sop_dbg_lvl);
+	ssize_t	size;
+	struct sop_device *h;
+	char line[SOP_MAX_LINE_LEN];
+	int dev_num=0;
+
+	size = snprintf(buf, SOP_MAX_LINE_LEN, "<%s Driver: Level=%d>\n",
+		SOP, sop_dbg_lvl);
+	spin_lock(&dev_list_lock);
+	list_for_each_entry(h, &dev_list, node) {
+		int i;
+
+		dev_num++;
+		size += snprintf(line, SOP_MAX_LINE_LEN,
+				"Dev(%d): Flag=0x%08lx Total Bio = %d "
+				"Issued = %d Max = %d\n",
+				dev_num, h->flags,
+				atomic_read(&h->bio_count),
+				atomic_read(&h->cmd_pending),
+				h->max_cmd_pending);
+		strcat(buf, line);
+		for (i = 1; i < h->nr_queue_pairs; i++) {
+			size += snprintf(line, SOP_MAX_LINE_LEN,
+				"    OQ depth[%02d] = %d, Max %d, Wait %d\n",
+				i, atomic_read(&h->qinfo[i].cur_qdepth),
+				h->qinfo[i].max_qdepth,
+				h->qinfo[i].waitq_depth);
+			strcat(buf, line);
+		}
+	}
+	spin_unlock(&dev_list_lock);
+
+	return size;
 }
 
 static ssize_t sop_sysfs_set_dbg_lvl(struct device_driver *dd, const char *buf,
@@ -1051,6 +1083,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 		break;
 	}
 
+	atomic_dec(&h->bio_count);
 	bio_endio(r->bio, result);
 	free_request(h, qinfo_to_qid(qinfo), r->request_id);
 }
@@ -2277,11 +2310,15 @@ alloc_elem_fail:
 	return -EBUSY;
 }
 
-static void sop_queue_cmd(struct sop_wait_queue *wq, struct bio *bio)
+static void sop_queue_cmd(struct queue_info *qinfo, struct bio *bio)
 {
+	struct sop_wait_queue *wq = qinfo->wq;
+
 	if (bio_list_empty(&wq->iq_cong))
 		add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
 	bio_list_add(&wq->iq_cong, bio);
+	
+	qinfo->waitq_depth++;
 }
 
 static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
@@ -2292,6 +2329,8 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 	int qpindex;
 	struct queue_info *qinfo;
 	struct sop_wait_queue *wq;
+
+	atomic_inc(&h->bio_count);
 
 	/* Prepare the SOP IU and fire */
 	cpu = get_cpu();
@@ -2310,7 +2349,7 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 		result = sop_process_bio(h, bio, qinfo);
 
 	if (unlikely(result))
-		sop_queue_cmd(wq, bio);
+		sop_queue_cmd(qinfo, bio);
 
 	spin_unlock_irq(&qinfo->iq->qlock);
 
@@ -2996,6 +3035,7 @@ static int sop_fail_bio(struct sop_device *h, struct bio *bio,
 			struct queue_info *q)
 {
 	/* Call complete bio with error */
+	atomic_dec(&h->bio_count);
 	bio_endio(bio, -EIO);
 
 	return 0;
@@ -3091,7 +3131,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 			 * reset the controller at end
 			 */
 			if (ser->bio)
-				sop_queue_cmd(q->wq, ser->bio);
+				sop_queue_cmd(q, ser->bio);
 			else
 				sop_timeout_sync_cmd(q, ser);
 			break;
@@ -3158,6 +3198,7 @@ static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
 			bio_list_add_head(&wq->iq_cong, bio);
 			break;
 		}
+		qinfo->waitq_depth--;
 	}
 	if (at_least_one_bio && bio_list_empty(&wq->iq_cong))
 		remove_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
@@ -3275,19 +3316,10 @@ reset_err:
 static void sop_process_driver_debug(struct sop_device *h)
 {
 	if (sop_dbg_lvl == 1) {
-		int i;
-
+		/* Reset the level */
 		sop_dbg_lvl = 0;
-		dev_warn(&h->pdev->dev,
-				"@@@@ Total CMD Pending= %d Max = %d @@@@\n",
-				atomic_read(&h->cmd_pending),
-				h->max_cmd_pending);
-		for (i = 1; i < h->nr_queue_pairs; i++) {
-			dev_warn(&h->pdev->dev,
-				"        OQ depth[%d] = %d, Max %d\n", i,
-				atomic_read(&h->qinfo[i].cur_qdepth),
-				h->qinfo[i].max_qdepth);
-		}
+
+		h->flags |= SOP_FLAGS_MASK_DO_RESET;
 	}
 
 	if (sop_dbg_lvl == 2) {
@@ -3298,14 +3330,6 @@ static void sop_process_driver_debug(struct sop_device *h)
 		/* Perform illegal write to BAR */
 		writel(0x10, &h->pqireg->error_data);
 	}
-
-	if (sop_dbg_lvl == 3) {
-		/* Reset the level */
-		sop_dbg_lvl = 0;
-
-		h->flags |= SOP_FLAGS_MASK_DO_RESET;
-	}
-
 }
 
 static void sop_process_dev_timer(struct sop_device *h)

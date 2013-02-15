@@ -305,6 +305,7 @@ struct queue_info {
 	u16 qdepth;
 	atomic_t cur_qdepth;
 	u32 max_qdepth;
+	u32 waitq_depth;
 	struct sop_request *request;
 	unsigned long *request_bits;
 	struct pqi_device_queue *iq;
@@ -347,6 +348,7 @@ struct sop_device {
 	struct pqi_device_queue *io_q_to_dev;
 	struct pqi_device_queue *io_q_from_dev;
 	u16 current_id;
+	atomic_t bio_count;
 	atomic_t cmd_pending;
 	u32  max_cmd_pending;
 	struct queue_info qinfo[MAX_TOTAL_QUEUE_PAIRS];
