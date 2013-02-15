@@ -739,10 +739,10 @@ static int __devinit sop_alloc_admin_queues(struct sop_device *h)
 	if (h->qinfo[0].iq->dhandle % PQI_REG_ALIGNMENT != 0 ||
 		h->qinfo[0].oq->dhandle % PQI_REG_ALIGNMENT != 0) {
 		dev_warn(&h->pdev->dev, "Admin queues are not properly aligned.\n");
-		dev_warn(&h->pdev->dev, "admin_iq_busaddr = %p\n",
-				(void *) h->qinfo[0].iq->dhandle);
-		dev_warn(&h->pdev->dev, "admin_oq_busaddr = %p\n",
-				(void *) h->qinfo[0].oq->dhandle);
+		dev_warn(&h->pdev->dev, "admin_iq_busaddr = %llx\n",
+				h->qinfo[0].iq->dhandle);
+		dev_warn(&h->pdev->dev, "admin_oq_busaddr = %llx\n",
+				h->qinfo[0].oq->dhandle);
 	}
 
 	/* Allocate request buffers for admin queues */
