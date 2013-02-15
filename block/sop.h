@@ -166,6 +166,7 @@ struct pqi_create_operational_queue_request {
 
 struct pqi_create_operational_queue_response {
 	u8 ui_type;
+#define ADMIN_RESPONSE_IU_TYPE		0xE0
 	u8 compatible_features;
 	u16 ui_length;
 	u16 response_oq;
@@ -322,12 +323,17 @@ struct sop_device {
 	struct pqi_capability pqicap;
 	__iomem struct pqi_device_register_set *pqireg;
 #define SOP_FLAGS_BITPOS_DO_RESET	0
-#define SOP_FLAGS_MASK_DO_RESET		1
+#define SOP_FLAGS_MASK_DO_RESET		0x0001
 #define SOP_FLAGS_BITPOS_DO_REM		1
-#define SOP_FLAGS_MASK_DO_REM		2
+#define SOP_FLAGS_MASK_DO_REM		0x0002
 #define SOP_FLAGS_BITPOS_RESET_PEND	2
-#define SOP_FLAGS_MASK_RESET_PEND	4
-	u32 flags;
+#define SOP_FLAGS_MASK_RESET_PEND	0x0004
+
+#define SOP_FLAGS_BITPOS_ADMIN_RDY	8
+#define SOP_FLAGS_MASK_ADMIN_RDY	0x0100
+#define SOP_FLAGS_BITPOS_IOQ_RDY	9
+#define SOP_FLAGS_MASK_IOQ_RDY		0x0200
+	unsigned long flags;
 #define MAX_IO_QUEUE_PAIRS 32
 #define MAX_TOTAL_QUEUE_PAIRS (MAX_IO_QUEUE_PAIRS + 1)
 	int nr_queue_pairs; /* total number of *pairs* of queues */
@@ -361,6 +367,8 @@ struct sop_device {
 					SOP_FLAGS_MASK_DO_RESET | \
 					SOP_FLAGS_MASK_DO_REM | \
 					SOP_FLAGS_MASK_RESET_PEND))
+#define	SOP_DEVICE_READY(_h)	(((_h)->flags & SOP_FLAGS_MASK_ADMIN_RDY) && \
+					((_h)->flags & SOP_FLAGS_MASK_IOQ_RDY))
 
 #pragma pack()
 

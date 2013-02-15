@@ -1,8 +1,7 @@
 *.o
 *.ko
-.sop.ko.cmd
-.sop.mod.o.cmd
-.sop.o.cmd
+*.unsigned
+*.cmd
 .tmp_versions/
 Module.symvers
 modules.order
