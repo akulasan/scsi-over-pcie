@@ -75,6 +75,7 @@ static int sop_thread_proc(void *data);
 static int sop_add_timeout(struct queue_info *q, uint timeout);
 static void sop_rem_timeout(struct queue_info *q, uint tmo_slot);
 static void sop_fail_all_outstanding_io(struct sop_device *h);
+static void sop_resubmit_waitq(struct queue_info *qinfo, int fail);
 
 #ifdef CONFIG_COMPAT
 static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
@@ -1188,6 +1189,13 @@ static irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 	spin_lock(&q->oq->qlock);
 	ret = sop_msix_handle_ioq(q);
 	spin_unlock(&q->oq->qlock);
+
+	/*
+	 * If a command is completed above, try to fire
+	 * any pending commands in the wait Q
+	 */
+	if (ret == IRQ_HANDLED)
+		sop_resubmit_waitq(q, false);
 
 	return ret;
 }
