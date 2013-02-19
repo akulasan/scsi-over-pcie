@@ -1194,7 +1194,7 @@ static irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 	 * If a command is completed above, try to fire
 	 * any pending commands in the wait Q
 	 */
-	if (ret == IRQ_HANDLED)
+	if (ret == IRQ_HANDLED && !SOP_DEVICE_BUSY(q->h))
 		sop_resubmit_waitq(q, false);
 
 	return ret;
@@ -2234,10 +2234,6 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	int prev_index, num_sg;
 	int nsegs;
 
-	/* Check if the drive is dead/ marked to be removed */
-	if (h->flags & SOP_FLAGS_MASK_DO_REM)
-		return -EIO;
-
 	request_id = alloc_request(h, qinfo_to_qid(qinfo));
 	if (request_id == (u16) -EBUSY)
 		return -EBUSY;
@@ -2339,6 +2335,13 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 	struct sop_wait_queue *wq;
 
 	atomic_inc(&h->bio_count);
+
+	/* Check if the drive is dead/ marked to be removed */
+	if (h->flags & SOP_FLAGS_MASK_DO_REM) {
+		atomic_dec(&h->bio_count);
+		bio_endio(bio, -EIO);
+		return MRFN_RET;
+	}
 
 	/* Prepare the SOP IU and fire */
 	cpu = get_cpu();
@@ -3089,7 +3092,8 @@ static int sop_device_error_state(struct sop_device *h)
 	if (safe_readw(sig, &state, &h->pqireg->pqi_device_status))
 		return SOP_ERR_DEV_REM;
 	if (state == PQI_ERROR) {
-		h->flags |= SOP_FLAGS_MASK_DO_RESET;
+		dev_warn(&h->pdev->dev, "Device Fault! Will reset...\n");
+		set_bit(SOP_FLAGS_BITPOS_DO_RESET, &h->flags);
 		return SOP_ERR_DEV_RESET;
 	}
 
@@ -3315,6 +3319,11 @@ reset_err:
 	/* Error handling: Mark Removed/Dead */
 	set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
 
+	dev_warn(&h->pdev->dev, "Aborting pending commands\n");
+	/* Next: sop_resubmit_waitq for all Q */
+	for (i = 1; i < h->nr_queue_pairs; i++)
+		sop_resubmit_waitq(&h->qinfo[i], true);
+
 	/* Reset processing is done - clear that flag */
 	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, &h->flags);
 	return;
@@ -3348,8 +3357,10 @@ static void sop_process_dev_timer(struct sop_device *h)
 
 	/* Decide if there is any global error */
 	action = sop_device_error_state(h);
-	if (action == SOP_ERR_DEV_REM)
+	if (action == SOP_ERR_DEV_REM) {
+		dev_warn(&h->pdev->dev, "Detected drive removed!!\n");
 		set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
+	}
 
 	if ((h->flags & SOP_FLAGS_MASK_ADMIN_RDY)) {
 		/* Admin queue */
