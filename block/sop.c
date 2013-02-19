@@ -3148,6 +3148,8 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 				sop_timeout_sync_cmd(q, ser);
 			break;
 		}
+		/* Free the sop request now */
+		clear_bit(rqid, q->request_bits);
 	}
 
 	return count;
