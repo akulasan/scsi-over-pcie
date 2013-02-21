@@ -994,8 +994,100 @@ static int sop_response_accumulated(struct sop_request *r)
 	return (r->response_accumulated >= iu_length);
 }
 
+static void evaluate_unit_attention(struct sop_device *h, u8 asc, u8 ascq)
+{
+	if (asc == 0x2a && ascq == 0x09) /* capacity has changed */
+		set_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
+}
+
+#define NO_ACTION 0
+#define RETRY_ACTION 1
+#define FAIL_ACTION 2
+	
+static int evaluate_sense_data(struct sop_device *h,
+				struct sop_cmd_response *scr)
+{
+	u8 sense_key;
+	u16 sense_data_len;
+	int disposition;
+	u8 asc, ascq;
+
+	sense_data_len  = le16_to_cpu(scr->sense_data_len);
+	if (scr->sense_data_len < 3)
+		return NO_ACTION;
+	sense_key = scr->sense[2] & 0x0f;
+
+	switch (sense_key) {
+	case NO_SENSE:
+		disposition = NO_ACTION;
+		break;
+	case RECOVERED_ERROR:
+		disposition = NO_ACTION;
+		break;
+	case NOT_READY:
+		disposition = RETRY_ACTION;
+		break;
+	case MEDIUM_ERROR:
+		disposition = FAIL_ACTION;
+		break;
+	case HARDWARE_ERROR:
+		disposition = FAIL_ACTION;
+		break;
+	case ILLEGAL_REQUEST:
+		disposition = FAIL_ACTION;
+		break;
+	case UNIT_ATTENTION:
+		if (sense_data_len >= 13) {
+			asc = scr->sense[12];
+			if (sense_data_len >= 14)
+				ascq = scr->sense[13];
+			else
+				ascq = 0;
+			evaluate_unit_attention(h, asc, ascq);
+		}
+		disposition = RETRY_ACTION;
+		break;
+	case DATA_PROTECT:
+		disposition = FAIL_ACTION;
+		break;
+	case BLANK_CHECK:
+		disposition = FAIL_ACTION;
+		break;
+	case COPY_ABORTED:
+		disposition = FAIL_ACTION;
+		break;
+	case ABORTED_COMMAND:
+		disposition = FAIL_ACTION;
+		break;
+	case VOLUME_OVERFLOW:
+		disposition = FAIL_ACTION;
+		break;
+	case MISCOMPARE:
+		disposition = FAIL_ACTION;
+		break;
+	default: 
+		disposition = FAIL_ACTION;
+		break;
+	}
+	return disposition;
+}
+
 static void free_request(struct sop_device *h, u8 queue_pair_index,
 				u16 request_id);
+
+static void sop_queue_cmd(struct queue_info *qinfo, struct bio *bio);
+
+static void retry_sop_request(struct sop_device *h, struct queue_info *qinfo,
+				struct sop_request *r)
+{
+	struct bio *bio;
+
+	bio = r->bio;
+	free_request(h, qinfo_to_qid(qinfo), r->request_id);
+	spin_lock_irq(&qinfo->iq->qlock);
+	sop_queue_cmd(qinfo, bio);
+	spin_unlock_irq(&qinfo->iq->qlock);
+}
 
 static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 				struct sop_request *r)
@@ -1035,15 +1127,22 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 			dev_warn(&h->pdev->dev,
 			"BIO: Both sense and response data not expected.\n");
 
-		/* copy the sense data */
 		if (sense_data_len) {
-			/* Nowhere to transfer sense data in block */
-			/*
-			if (SCSI_SENSE_BUFFERSIZE < sense_data_len)
-				sense_data_len = SCSI_SENSE_BUFFERSIZE;
-			memset(scmd->sense_buffer, 0, SCSI_SENSE_BUFFERSIZE);
-			memcpy(scmd->sense_buffer, scr->sense, sense_data_len);
-			*/
+			int disposition;
+
+			disposition = evaluate_sense_data(h, scr);
+
+			switch (disposition) {
+			case NO_ACTION:
+				retry_sop_request(h, qinfo, r);
+				return;
+			case RETRY_ACTION:
+				break;
+			case FAIL_ACTION:
+			default:
+				result = -EIO;
+				break;
+			}
 		}
 
 		/* paranoia, check for out of spec firmware */
@@ -2464,6 +2563,11 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 			else
 				result = -EFAULT;
 #endif
+			/*
+			 * ignore return value, we pass sense data back to user
+			 * we just want to snoop for capacity change unit attn.
+			 */
+			(void) evaluate_sense_data(h, scr);
 		}
 
 		/* paranoia, check for out of spec firmware */
@@ -3425,6 +3529,13 @@ static int sop_thread_proc(void *data)
 		list_for_each_entry(h, &dev_list, node)
 			sop_process_dev_timer(h);
 		spin_unlock(&dev_list_lock);
+
+		/* react to capacity changed unit attention events */
+		if (test_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags)) {
+			clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
+			sop_revalidate(h->disk);
+		}
+
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule_timeout(HZ);
 	}
