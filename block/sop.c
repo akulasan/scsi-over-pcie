@@ -3246,8 +3246,11 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 			 * Requeue this command and
 			 * reset the controller at end
 			 */
-			if (ser->bio)
+			if (ser->bio) {
+				spin_lock_irq(&q->iq->qlock);
 				sop_queue_cmd(q, ser->bio);
+				spin_unlock_irq(&q->iq->qlock);
+			}
 			else
 				sop_timeout_sync_cmd(q, ser);
 			break;
