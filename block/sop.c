@@ -3239,7 +3239,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 		case SOP_ERR_NONE:
 			/* TODO: Need to abort this command */
 			/* For now, fall thru and reset as below */
-			q->h->flags |= SOP_FLAGS_MASK_DO_RESET;
+			set_bit(SOP_FLAGS_BITPOS_DO_RESET, &q->h->flags);
 
 		case SOP_ERR_DEV_RESET:
 			/*
@@ -3445,7 +3445,7 @@ static void sop_process_driver_debug(struct sop_device *h)
 		/* Reset the level */
 		sop_dbg_lvl = 0;
 
-		h->flags |= SOP_FLAGS_MASK_DO_RESET;
+		set_bit(SOP_FLAGS_BITPOS_DO_RESET, &h->flags);
 	}
 
 	if (sop_dbg_lvl == 2) {
