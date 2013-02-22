@@ -1133,10 +1133,10 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 			disposition = evaluate_sense_data(h, scr);
 
 			switch (disposition) {
-			case NO_ACTION:
+			case RETRY_ACTION:
 				retry_sop_request(h, qinfo, r);
 				return;
-			case RETRY_ACTION:
+			case NO_ACTION:
 				break;
 			case FAIL_ACTION:
 			default:
