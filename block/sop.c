@@ -1083,6 +1083,7 @@ static void retry_sop_request(struct sop_device *h, struct queue_info *qinfo,
 	struct bio *bio;
 
 	bio = r->bio;
+	bio->bi_idx = r->orig_bi_idx;
 	free_request(h, qinfo_to_qid(qinfo), r->request_id);
 	spin_lock_irq(&qinfo->iq->qlock);
 	sop_queue_cmd(qinfo, bio);
@@ -2332,7 +2333,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	enum dma_data_direction dma_dir;
 	struct scatterlist *sgl;
 	u16 request_id;
-	int prev_index, num_sg;
+	int num_sg;
 	int nsegs;
 
 	request_id = alloc_request(h, qinfo_to_qid(qinfo));
@@ -2372,13 +2373,13 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	sop_prepare_cdb(r->cdb, bio);
 
 	/* Prepare the scatterlist */
-	prev_index = bio->bi_idx;
+	ser->orig_bi_idx = bio->bi_idx;
 	num_sg = sop_prepare_scatterlist(bio, ser, sgl, nsegs);
 
 	/* Map the SG */
 	num_sg = dma_map_sg(&h->pdev->dev, sgl, num_sg, dma_dir);
 	if (num_sg < 0) {
-		bio->bi_idx = prev_index;
+		bio->bi_idx = ser->orig_bi_idx;
 		dev_warn(&h->pdev->dev, "dma_map failure bio %p, SQ[%d].\n",
 			bio, qinfo_to_qid(qinfo));
 		goto sg_map_fail;
