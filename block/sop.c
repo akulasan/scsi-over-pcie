@@ -1852,6 +1852,8 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		dev_warn(&h->pdev->dev, "Bailing out in probe - Cannot add disk\n");
 		goto bail_io_irq;
 	}
+	/* enable unit attn processing */
+	set_bit(SOP_FLAGS_BITPOS_INITIALIZED, &h->flags);
 
 	dev_warn(&h->pdev->dev, "Successfully loaded device '%s'\n", h->devname);
 
@@ -3382,6 +3384,8 @@ start_reset:
 	if (!(h->flags & SOP_FLAGS_MASK_ADMIN_RDY))
 		goto end_reset;
 
+	/* disable unit attn processing */
+	clear_bit(SOP_FLAGS_BITPOS_INITIALIZED, &h->flags);
 	rc = sop_init_time_host_reset(h);
 	if (rc)
 		goto reset_err;
@@ -3408,6 +3412,8 @@ start_reset:
 			goto reset_err;
 	}
 
+	/* re-enable unit attn processing */
+	set_bit(SOP_FLAGS_BITPOS_INITIALIZED, &h->flags);
 	dev_warn(&h->pdev->dev, "I/O queue created - Resubmitting pending commands\n");
 	/* Next: sop_resubmit_waitq for all Q */
 	for (i = 1; i < h->nr_queue_pairs; i++)
@@ -3534,7 +3540,8 @@ static int sop_thread_proc(void *data)
 		spin_unlock(&dev_list_lock);
 
 		/* react to capacity changed unit attention events */
-		if (test_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags)) {
+		if (test_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags) &&
+				test_bit(SOP_FLAGS_INITIALIZED, &h->flags)) {
 			clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
 			sop_revalidate(h->disk);
 		}
