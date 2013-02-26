@@ -88,9 +88,6 @@ static int sop_revalidate(struct gendisk *disk);
 static const struct block_device_operations sop_fops = {
 	.owner			= THIS_MODULE,
 	.revalidate_disk	= sop_revalidate,
-#if 0
-	.getgeo			= sop_getgeo,
-#endif
 	.ioctl			= sop_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl		= sop_compat_ioctl,
@@ -773,9 +770,9 @@ static int __devinit sop_alloc_admin_queues(struct sop_device *h)
 		h->qinfo[0].oq->dhandle % PQI_REG_ALIGNMENT != 0) {
 		dev_warn(&h->pdev->dev, "Admin queues are not properly aligned.\n");
 		dev_warn(&h->pdev->dev, "admin_iq_busaddr = %llx\n",
-				h->qinfo[0].iq->dhandle);
+				(unsigned long long)h->qinfo[0].iq->dhandle);
 		dev_warn(&h->pdev->dev, "admin_oq_busaddr = %llx\n",
-				h->qinfo[0].oq->dhandle);
+				(unsigned long long)h->qinfo[0].oq->dhandle);
 	}
 
 	/* Allocate request buffers for admin queues */
@@ -2036,8 +2033,6 @@ static int sop_prepare_cdb(u8 *cdb, struct bio *bio)
 	/* Init dpo_fua byte from bio flags */
 	if (bio->bi_rw & REQ_FUA)
 		dpo_fua |= SOP_FUA;
-	if (bio->bi_rw & REQ_NOIDLE)
-		dpo_fua |= SOP_DPO;
 	cdb[1] = dpo_fua;
 
 	num_sec = bio_sectors(bio);
@@ -2842,10 +2837,8 @@ static int sop_add_disk(struct sop_device *h)
 	h->rq = rq;
 
 	rq->queue_flags = QUEUE_FLAG_DEFAULT;
-/* #if (!defined(REDHAT5) && !defined(SUSE10)) */
 	queue_flag_set_unlocked(QUEUE_FLAG_NOMERGES, rq);
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, rq);
-/* #endif */
 	blk_queue_make_request(rq, sop_make_request);
 	rq->queuedata = h;
 
