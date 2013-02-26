@@ -1880,8 +1880,8 @@ bail_pci_enable:
 bail_set_drvdata:
 	spin_lock(&dev_list_lock);
 	list_del(&h->node);
-	cancel_delayed_work_sync(&h->dwork);
 	spin_unlock(&dev_list_lock);
+	cancel_delayed_work_sync(&h->dwork);
 
 	pci_set_drvdata(pdev, NULL);
 	sop_release_instance(h);
@@ -1919,8 +1919,8 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 
 	spin_lock(&dev_list_lock);
 	list_del(&h->node);
-	cancel_delayed_work_sync(&h->dwork);
 	spin_unlock(&dev_list_lock);
+	cancel_delayed_work_sync(&h->dwork);
 
 	pci_set_drvdata(pdev, NULL);
 	sop_release_instance(h);
