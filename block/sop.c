@@ -3497,6 +3497,13 @@ static void sop_process_dev_timer(struct sop_device *h)
 			spin_unlock_irq(&q->oq->qlock);
 
 			if (!SOP_DEVICE_BUSY(h)) {
+				/* react to cap changed unit attn. events */
+				if (SOP_REVALIDATE(h)) {
+					clear_bit(SOP_FLAGS_BITPOS_REVALIDATE,
+						&h->flags);
+					sop_revalidate(h->disk);
+				}
+
 				/* Process wait queue */
 				sop_resubmit_waitq(q, false);
 			}
@@ -3532,13 +3539,6 @@ static int sop_thread_proc(void *data)
 		list_for_each_entry(h, &dev_list, node)
 			sop_process_dev_timer(h);
 		spin_unlock(&dev_list_lock);
-
-		/* react to capacity changed unit attention events */
-		if (test_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags) &&
-				test_bit(SOP_FLAGS_INITIALIZED, &h->flags)) {
-			clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
-			sop_revalidate(h->disk);
-		}
 
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule_timeout(HZ);
