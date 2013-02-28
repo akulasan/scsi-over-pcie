@@ -94,11 +94,10 @@ static const struct block_device_operations sop_fops = {
 #endif
 };
 
-static u32 sop_dbg_lvl;
+static u32 sop_dbg_lvl, sop_dbg_cmd;
 
 #define	SOP_MAX_LINE_LEN	256
-static ssize_t
-sop_sysfs_show_dbg_lvl(struct device_driver *dd, char *buf)
+static ssize_t sop_sysfs_show_debug(struct device_driver *dd, char *buf)
 {
 	ssize_t	size;
 	struct sop_device *h;
@@ -134,18 +133,40 @@ sop_sysfs_show_dbg_lvl(struct device_driver *dd, char *buf)
 	return size;
 }
 
+static ssize_t sop_sysfs_set_debug(struct device_driver *dd, const char *buf,
+					size_t count)
+{
+	int retval = count;
+
+	if (sscanf(buf, "%u", &sop_dbg_cmd) < 1) {
+		pr_err("sop: Not a valid command number in \'%s\'.\n", buf);
+		retval = -EINVAL;
+	}
+	return retval;
+}
+
+static ssize_t sop_sysfs_show_dbg_lvl(struct device_driver *dd, char *buf)
+{
+	ssize_t	size;
+
+	size = snprintf(buf, SOP_MAX_LINE_LEN, "%d", sop_dbg_lvl);
+	return size;
+}
+
 static ssize_t sop_sysfs_set_dbg_lvl(struct device_driver *dd, const char *buf,
 					size_t count)
 {
 	int retval = count;
 
 	if (sscanf(buf, "%u", &sop_dbg_lvl) < 1) {
-		pr_err("sop: could not set dbg_lvl\n");
+		pr_err("sop: could not set dbg_lvl from \'%s\'\n", buf);
 		retval = -EINVAL;
 	}
 	return retval;
 }
 
+static DRIVER_ATTR(debug, S_IRUGO|S_IWUSR, sop_sysfs_show_debug,
+		sop_sysfs_set_debug);
 static DRIVER_ATTR(dbg_lvl, S_IRUGO|S_IWUSR, sop_sysfs_show_dbg_lvl,
 		sop_sysfs_set_dbg_lvl);
 
@@ -1954,14 +1975,21 @@ static int __init sop_init(void)
 		goto register_fail;
 
 	result = driver_create_file(&sop_pci_driver.driver,
-					&driver_attr_dbg_lvl);
+					&driver_attr_debug);
 	if (result)
 		goto create_fail;
+
+	result = driver_create_file(&sop_pci_driver.driver,
+					&driver_attr_dbg_lvl);
+	if (result)
+		goto create_fail_dbg_lvl;
 
 	pr_info("SOP driver initialized!\n");
 	return 0;
 
- create_fail:
+create_fail_dbg_lvl:
+	driver_remove_file(&sop_pci_driver.driver, &driver_attr_debug);
+create_fail:
 	pci_unregister_driver(&sop_pci_driver);
 
  register_fail:
@@ -1977,6 +2005,7 @@ static int __init sop_init(void)
 
 static void __exit sop_exit(void)
 {
+	driver_remove_file(&sop_pci_driver.driver, &driver_attr_debug);
 	driver_remove_file(&sop_pci_driver.driver, &driver_attr_dbg_lvl);
 	pci_unregister_driver(&sop_pci_driver);
 	unregister_blkdev(sop_major, SOP);
@@ -3451,16 +3480,16 @@ reset_err:
 
 static void sop_process_driver_debug(struct sop_device *h)
 {
-	if (sop_dbg_lvl == 1) {
+	if (sop_dbg_cmd == 1) {
 		/* Reset the level */
-		sop_dbg_lvl = 0;
+		sop_dbg_cmd = 0;
 
 		set_bit(SOP_FLAGS_BITPOS_DO_RESET, &h->flags);
 	}
 
-	if (sop_dbg_lvl == 2) {
+	if (sop_dbg_cmd == 2) {
 		/* Reset the level */
-		sop_dbg_lvl = 0;
+		sop_dbg_cmd = 0;
 
 		dev_warn(&h->pdev->dev, "@@@@ Trying to ASSERT the FW...\n");
 		/* Perform illegal write to BAR */
