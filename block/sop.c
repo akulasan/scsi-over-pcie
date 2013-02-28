@@ -2621,17 +2621,25 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		}
 		break;
 
-	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
-		result = -EIO;
-		dev_warn(&h->pdev->dev, "SCDB[%02x]: TskMgmt response...\n",
-			scdb->cdb[0]);
-		break;
-
 	case SOP_RESPONSE_INTERNAL_CMD_FAIL_IU_TYPE:
 		result = -EIO;
 		if ((sop_dbg_lvl & SOP_DBG_LVL_EXTRA_WARN))
 			dev_warn(&h->pdev->dev, "SCDB[%02x]: cmd aborted...\n",
 				scdb->cdb[0]);
+		scdb->scsi_status = SAM_STAT_TASK_ABORTED;
+		scdb->sense_asc_ascq = 0;
+		scdb->sense_key = 0;
+		if (hdr == NULL)
+			break;
+
+		result = 0;
+		hdr->status = 0;
+		hdr->masked_status = 0;
+		hdr->host_status = DID_PASSTHROUGH;
+		hdr->driver_status = DRIVER_SOFT;
+		hdr->info = 0;
+		hdr->resid = 0;
+		hdr->sb_len_wr = 0;
 		break;
 
 	case SOP_RESPONSE_TIMEOUT_CMD_FAIL_IU_TYPE:
@@ -2639,12 +2647,41 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		if ((sop_dbg_lvl & SOP_DBG_LVL_EXTRA_WARN))
 			dev_warn(&h->pdev->dev, "SCDB[%02x]: timed out...\n",
 				scdb->cdb[0]);
+		scdb->scsi_status = SAM_STAT_BUSY;
+		scdb->sense_asc_ascq = 0;
+		scdb->sense_key = 0;
+		if (hdr == NULL)
+			break;
+
+		result = 0;
+		hdr->status = 0;
+		hdr->masked_status = 0;
+		hdr->host_status = DID_PASSTHROUGH;
+		hdr->driver_status = DRIVER_TIMEOUT;
+		hdr->info = 0;
+		hdr->resid = 0;
+		hdr->sb_len_wr = 0;
 		break;
 
+	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 	default:
 		result = -EIO;
-		dev_warn(&h->pdev->dev, "SCDB[%02x]: UNKNOWN response 0x%x...\n",
+		dev_warn(&h->pdev->dev, "SCDB[%02x]: Unexpected response 0x%x...\n",
 			scdb->cdb[0], r->response[0]);
+		scdb->scsi_status = SAM_STAT_TASK_ABORTED;
+		scdb->sense_asc_ascq = 0;
+		scdb->sense_key = 0;
+		if (hdr == NULL)
+			break;
+
+		result = 0;
+		hdr->status = 0;
+		hdr->masked_status = 0;
+		hdr->host_status = DID_PASSTHROUGH;
+		hdr->driver_status = DRIVER_ERROR;
+		hdr->info = 0;
+		hdr->resid = 0;
+		hdr->sb_len_wr = 0;
 		break;
 	}
 
@@ -2683,14 +2720,27 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	struct sop_request *ser;
 	struct sop_limited_cmd_iu *r;
 	int request_id, cpu;
-	int retval = -EBUSY;
+	int retval = -EIO;
 	int nsegs;
 	struct scatterlist *sgl;
 	struct page **page_map;
+	sg_io_hdr_t *hdr = sio->sg_hdr;
 
 	/* Check for device busy (RESET/FAIL/etc) */
-	if (SOP_DEVICE_BUSY(h))
-		return -EBUSY;
+	if (SOP_DEVICE_BUSY(h)) {
+		if (hdr == NULL)
+			return -EAGAIN;
+
+		/* Fill Qfull as return value */
+		hdr->status = 0;
+		hdr->masked_status = 0;
+		hdr->host_status = DID_PASSTHROUGH;
+		hdr->driver_status = DRIVER_BUSY;
+		hdr->info = 0;
+		hdr->resid = 0;
+		hdr->sb_len_wr = 0;
+		return 0;
+	}
 
 	if (sio->data_dir != DMA_NONE && sio->iov_count > 0) {
 		/* Must alloc prior to get_cpu() because we might sleep. */
@@ -2776,7 +2826,18 @@ sync_alloc_elem_fail:
 
 sync_req_id_fail:
 	put_cpu();
-	return retval;
+	if (hdr == NULL)
+		return retval;
+
+	/* Fill Error as return value of SGIO */
+	hdr->status = 0;
+	hdr->masked_status = 0;
+	hdr->host_status = DID_PASSTHROUGH;
+	hdr->driver_status = DRIVER_ERROR;
+	hdr->info = 0;
+	hdr->resid = 0;
+	hdr->sb_len_wr = 0;
+	return 0;
 }
 
 #define	IO_SLEEP_INTERVAL_MIN	2000
@@ -2855,7 +2916,7 @@ sync_send_tur:
 
 disk_param_err:
 	/* Check if the getting disk params can be retried */
-	if (ret == -EBUSY)
+	if (ret == -EBUSY || ret == -EAGAIN)
 		set_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
 
 	dev_warn(&h->pdev->dev, "Error getting disk param (CDB0=0x%x returns 0x%x)\n",
