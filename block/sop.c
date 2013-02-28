@@ -1838,13 +1838,6 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (rc)
 		goto bail_io_q_created;
 
-	h->max_hw_sectors = 2048;	/* TODO: For now hard code it */
-	rc = sop_get_disk_params(h);
-	if (rc) {
-		dev_warn(&h->pdev->dev, "Bailing out in probe - can't get disk param\n");
-		goto bail_io_irq;
-	}
-
 	rc = sop_add_disk(h);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "Bailing out in probe - Cannot add disk\n");
@@ -2847,12 +2840,6 @@ static int sop_add_disk(struct sop_device *h)
 		goto out_free_queue;
 
 	h->disk = disk;
-
-	blk_queue_logical_block_size(rq, h->block_size);
-	if (h->max_hw_sectors)
-		blk_queue_max_hw_sectors(rq, h->max_hw_sectors);
-	blk_queue_max_segments(rq, MAX_SGLS);
-
 	disk->major = sop_major;
 	disk->minors = SOP_MINORS;
 	disk->first_minor = SOP_MINORS * h->instance;
@@ -2861,7 +2848,16 @@ static int sop_add_disk(struct sop_device *h)
 	disk->queue = rq;
 	disk->driverfs_dev = &h->pdev->dev;
 	strcpy(disk->disk_name, h->devname);
-	set_capacity(disk, h->capacity);
+
+	h->max_hw_sectors = 2048;	/* TODO: For now hard code it */
+	/* Set driver specific parameters */
+	if (h->max_hw_sectors)
+		blk_queue_max_hw_sectors(rq, h->max_hw_sectors);
+	blk_queue_max_segments(rq, MAX_SGLS);
+
+	/* Set the rest of parmeters by reading from disk */
+	sop_revalidate(disk);
+
 	dev_warn(&h->pdev->dev,
 		"Creating SOP drive '%s'- Capacity %d sectors\n",
 		disk->disk_name, (int)(h->capacity));
