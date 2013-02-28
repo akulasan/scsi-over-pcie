@@ -2564,12 +2564,11 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 
 		hdr->status = scr->status;
 		hdr->masked_status = status_byte(scr->status);
-		hdr->host_status = 0; /* FIXME is this correct? */
-		hdr->driver_status = 0; /* FIXME is this correct? */
-		hdr->info = 0;
-		if (hdr->masked_status || hdr->host_status ||
+		hdr->host_status = 0;
+		hdr->driver_status = 0;
+		if (hdr->status || hdr->host_status ||
 			hdr->driver_status)
-			hdr->info |= SG_INFO_CHECK;
+			hdr->info = SG_INFO_CHECK;
 		sense_data_len = le16_to_cpu(scr->sense_data_len);
 		response_data_len = le16_to_cpu(scr->response_data_len);
 		if (unlikely(response_data_len && sense_data_len))
@@ -2637,7 +2636,7 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		hdr->masked_status = 0;
 		hdr->host_status = DID_PASSTHROUGH;
 		hdr->driver_status = DRIVER_SOFT;
-		hdr->info = 0;
+		hdr->info = SG_INFO_CHECK;
 		hdr->resid = 0;
 		hdr->sb_len_wr = 0;
 		break;
@@ -2658,7 +2657,7 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		hdr->masked_status = 0;
 		hdr->host_status = DID_PASSTHROUGH;
 		hdr->driver_status = DRIVER_TIMEOUT;
-		hdr->info = 0;
+		hdr->info = SG_INFO_CHECK;
 		hdr->resid = 0;
 		hdr->sb_len_wr = 0;
 		break;
@@ -2679,7 +2678,7 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		hdr->masked_status = 0;
 		hdr->host_status = DID_PASSTHROUGH;
 		hdr->driver_status = DRIVER_ERROR;
-		hdr->info = 0;
+		hdr->info = SG_INFO_CHECK;
 		hdr->resid = 0;
 		hdr->sb_len_wr = 0;
 		break;
