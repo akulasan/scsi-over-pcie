@@ -2592,6 +2592,18 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 			scdb->cdb[0], r->response[0]);
 		break;
 
+	case SOP_RESPONSE_INTERNAL_CMD_FAIL_IU_TYPE:
+		result = -EIO;
+		dev_warn(&h->pdev->dev, "SCDB[%02x]: cmd aborted...\n",
+				scdb->cdb[0]);
+		break;
+
+	case SOP_RESPONSE_TIMEOUT_CMD_FAIL_IU_TYPE:
+		result = -EBUSY;
+		dev_warn(&h->pdev->dev, "SCDB[%02x]: timed out...\n",
+				scdb->cdb[0]);
+		break;
+
 	default:
 		result = -EIO;
 		dev_warn(&h->pdev->dev, "SCDB[%02x]: got UNKNOWN response type 0x%x...\n",
@@ -2804,6 +2816,10 @@ sync_send_tur:
 	return 0;
 
 disk_param_err:
+	/* Check if the getting disk params can be retried */
+	if (ret == -EBUSY)
+		set_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
+
 	dev_warn(&h->pdev->dev, "Error getting disk param (CDB0=0x%x returns 0x%x)\n",
 			sio.cdb[0], ret);
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
