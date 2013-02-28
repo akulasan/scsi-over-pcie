@@ -94,6 +94,9 @@ static const struct block_device_operations sop_fops = {
 #endif
 };
 
+#define	SOP_DBG_LVL_EXTRA_WARN		0x0001
+#define	SOP_DBG_LVL_RARE_NORM_EVENT	0x0002
+#define SOP_DBG_LVL_DUMP_SGIO		0x0004
 static u32 sop_dbg_lvl, sop_dbg_cmd;
 
 #define	SOP_MAX_LINE_LEN	256
@@ -149,7 +152,7 @@ static ssize_t sop_sysfs_show_dbg_lvl(struct device_driver *dd, char *buf)
 {
 	ssize_t	size;
 
-	size = snprintf(buf, SOP_MAX_LINE_LEN, "%d", sop_dbg_lvl);
+	size = snprintf(buf, SOP_MAX_LINE_LEN, "%d\n", sop_dbg_lvl);
 	return size;
 }
 
@@ -466,9 +469,13 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
 	void *p;
 
 	if (pqi_to_device_queue_is_full(q, nelements)) {
-		pr_warn("pqi device queue [%d] is full!\n", q->queue_id);
-		pr_warn("  unposted_index = %d, ci = %d, nelements=%d\n",
-			q->unposted_index, *(q->index.to_dev.ci), q->nelements);
+		if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT)) {
+			pr_warn("pqi device queue [%d] is full!\n",
+				q->queue_id);
+			pr_warn("  unposted_index = %d, ci = %d, nelements=%d\n",
+				q->unposted_index, *(q->index.to_dev.ci),
+				q->nelements);
+		}
 		return ERR_PTR(-ENOMEM);
 	}
 
@@ -481,11 +488,13 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q, int nelements)
 		int extra_elements = q->nelements - q->unposted_index;
 		if (pqi_to_device_queue_is_full(q,
 				nelements + extra_elements)) {
-			pr_warn("pqi device queue [%d] End is full!\n",
-				q->queue_id);
-			pr_warn("q->nelements = %d, q->unposted_index = %hu, extra_elements = %d\n",
-				q->nelements, q->unposted_index,
-				extra_elements);
+			if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT)) {
+				pr_warn("pqi device queue [%d] End full!\n",
+					q->queue_id);
+				pr_warn("q->nelements = %d, q->unposted_index = %hu, extra_elements = %d\n",
+					q->nelements, q->unposted_index,
+					extra_elements);
+			}
 			return ERR_PTR(-ENOMEM);
 		}
 		p = q->vaddr + q->unposted_index * q->element_size;
@@ -513,12 +522,8 @@ static int pqi_dequeue_from_device(struct pqi_device_queue *q, void *element)
 		return PQI_QUEUE_EMPTY;
 
 	p = q->vaddr + q->unposted_index * q->element_size;
-	/* printk(KERN_WARNING "DQ: p = %p, q->unposted_index = %hu, n = %hu\n",
-				p, q->unposted_index, q->nelements); */
 	memcpy(element, p, q->element_size);
 	q->unposted_index = (q->unposted_index + 1) % q->nelements;
-	/* printk(KERN_WARNING "After DQ: q->unposted_index = %hu\n",
-				q->unposted_index); */
 	return 0;
 }
 
@@ -1256,8 +1261,10 @@ static int sop_msix_handle_ioq(struct queue_info *q)
 			atomic_dec(&q->cur_qdepth);
 			pqi_notify_device_queue_read(q->oq);
 		} else {
-			dev_warn(&h->pdev->dev, "Multiple entry completion Q[%d] CI %d\n",
-				q->oq->queue_id, q->oq->unposted_index);
+			if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT))
+				dev_warn(&h->pdev->dev,
+					"Multiple entry completion Q[%d] CI %d\n",
+					q->oq->queue_id, q->oq->unposted_index);
 		}
 	} while (!pqi_from_device_queue_is_empty(q->oq));
 
@@ -2356,8 +2363,10 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 
 	r = pqi_alloc_elements(qinfo->iq, 1);
 	if (IS_ERR(r)) {
-		dev_warn(&h->pdev->dev, "SUBQ[%d] pqi_alloc_elements for bio %p returned %ld\n",
-			qinfo_to_qid(qinfo), bio, PTR_ERR(r));
+		if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT))
+			dev_warn(&h->pdev->dev,
+				"SUBQ[%d] pqi_alloc_elements for bio %p returned %ld\n",
+				qinfo_to_qid(qinfo), bio, PTR_ERR(r));
 		goto alloc_elem_fail;
 	}
 	nsegs = bio_phys_segments(h->rq, bio);
@@ -2614,25 +2623,27 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 
 	case SOP_RESPONSE_TASK_MGMT_RESPONSE_IU_TYPE:
 		result = -EIO;
-		dev_warn(&h->pdev->dev, "SCDB[%02x]: got unhandled response type 0x%x...\n",
-			scdb->cdb[0], r->response[0]);
+		dev_warn(&h->pdev->dev, "SCDB[%02x]: TskMgmt response...\n",
+			scdb->cdb[0]);
 		break;
 
 	case SOP_RESPONSE_INTERNAL_CMD_FAIL_IU_TYPE:
 		result = -EIO;
-		dev_warn(&h->pdev->dev, "SCDB[%02x]: cmd aborted...\n",
+		if ((sop_dbg_lvl & SOP_DBG_LVL_EXTRA_WARN))
+			dev_warn(&h->pdev->dev, "SCDB[%02x]: cmd aborted...\n",
 				scdb->cdb[0]);
 		break;
 
 	case SOP_RESPONSE_TIMEOUT_CMD_FAIL_IU_TYPE:
 		result = -EBUSY;
-		dev_warn(&h->pdev->dev, "SCDB[%02x]: timed out...\n",
+		if ((sop_dbg_lvl & SOP_DBG_LVL_EXTRA_WARN))
+			dev_warn(&h->pdev->dev, "SCDB[%02x]: timed out...\n",
 				scdb->cdb[0]);
 		break;
 
 	default:
 		result = -EIO;
-		dev_warn(&h->pdev->dev, "SCDB[%02x]: got UNKNOWN response type 0x%x...\n",
+		dev_warn(&h->pdev->dev, "SCDB[%02x]: UNKNOWN response 0x%x...\n",
 			scdb->cdb[0], r->response[0]);
 		break;
 	}
@@ -2695,14 +2706,15 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	qinfo = &h->qinfo[queue_pair_index];
 	request_id = alloc_request(h, queue_pair_index);
 	if (request_id < 0) {
-		dev_warn(&h->pdev->dev, "%s: Failed to allocate request\n",
-					__func__);
-		retval = -EBUSY;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT))
+			dev_warn(&h->pdev->dev,
+				"%s: Failed to allocate request\n", __func__);
 		goto sync_req_id_fail;
 	}
 	r = pqi_alloc_elements(qinfo->iq, 1);
 	if (IS_ERR(r)) {
-		dev_warn(&h->pdev->dev,
+		if ((sop_dbg_lvl & SOP_DBG_LVL_EXTRA_WARN))
+			dev_warn(&h->pdev->dev,
 			"SUBQ[%d] pqi_alloc_elements for CDB 0x%x returned %ld\n",
 			queue_pair_index, sio->cdb[0], PTR_ERR(r));
 		goto sync_alloc_elem_fail;
@@ -2922,28 +2934,6 @@ static void sop_remove_disk(struct sop_device *h)
 	blk_cleanup_queue(h->rq);
 }
 
-
-#if 0
-static int sop_abort_handler(struct scsi_cmnd *sc)
-{
-	struct sop_device *h;
-
-	h = bdev_to_hba(sc->device);
-	dev_warn(&h->pdev->dev, "sop_abort_handler called but not implemented\n");
-	return 0;
-}
-
-static int sop_device_reset_handler(struct scsi_cmnd *sc)
-{
-	struct sop_device *h;
-
-	h = bdev_to_hba(sc->device);
-	dev_warn(&h->pdev->dev, "sop_device_reset_handler called but not implemented\n");
-	return 0;
-}
-
-#endif
-
 #ifdef CONFIG_COMPAT
 static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
 				unsigned int cmd, unsigned long arg)
@@ -3101,6 +3091,12 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	}
 	scdb->data_len = len;
 	scdb->data_dir = data_dir;
+
+	if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+		dev_warn(&h->pdev->dev,
+			"SGIO: CDB[%02x %02x %02x %02x], IOV: len=0x%x, count=%d\n",
+			scdb->cdb[0], scdb->cdb[1], scdb->cdb[2], scdb->cdb[3],
+			len, iov_count);
 
 	start_time = jiffies;
 	/*
