@@ -3414,6 +3414,9 @@ start_reset:
 	}
 
 	dev_warn(&h->pdev->dev, "I/O queue created - Resubmitting pending commands\n");
+	/* React to capacity changed unit attn events pending */
+	if (test_and_clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags))
+		sop_revalidate(h->disk);
 	/* Next: sop_resubmit_waitq for all Q */
 	for (i = 1; i < h->nr_queue_pairs; i++)
 		sop_resubmit_waitq(&h->qinfo[i], false);
@@ -3434,6 +3437,8 @@ reset_err:
 	set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
 
 	dev_warn(&h->pdev->dev, "Aborting pending commands\n");
+	/* Clear any capacity changed unit attn events pending */
+	clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
 	/* Next: sop_resubmit_waitq for all Q */
 	for (i = 1; i < h->nr_queue_pairs; i++)
 		sop_resubmit_waitq(&h->qinfo[i], true);
@@ -3503,11 +3508,10 @@ static void sop_process_dev_timer(struct sop_device *h)
 
 			if (!SOP_DEVICE_BUSY(h)) {
 				/* react to cap changed unit attn. events */
-				if (SOP_REVALIDATE(h)) {
-					clear_bit(SOP_FLAGS_BITPOS_REVALIDATE,
-						&h->flags);
+				if (test_and_clear_bit(
+						SOP_FLAGS_BITPOS_REVALIDATE,
+						&h->flags))
 					sop_revalidate(h->disk);
-				}
 
 				/* Process wait queue */
 				sop_resubmit_waitq(q, false);
