@@ -1621,8 +1621,18 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 		le16_to_cpu(buffer->admin_sgl_support_bitmask);
 
 	print_pqi_device_capability_info(h, &h->devcap);
-	return 0;
 
+	h->elements_per_io_queue = DRIVER_MAX_IQ_NELEMENTS;
+	if (h->elements_per_io_queue > DRIVER_MAX_OQ_NELEMENTS)
+		h->elements_per_io_queue = DRIVER_MAX_OQ_NELEMENTS;
+	if (h->elements_per_io_queue > dc->max_oq_elements)
+		h->elements_per_io_queue = dc->max_oq_elements;
+	if (h->elements_per_io_queue > dc->max_iq_elements)
+		h->elements_per_io_queue = dc->max_iq_elements;
+
+	dev_warn(&h->pdev->dev, "elements per i/o queue: %d\n",
+			h->elements_per_io_queue);
+	return 0;
 out:
 	if (request_id != (u16) -EBUSY)
 		free_request(h, 0, request_id);
@@ -1714,11 +1724,11 @@ static int sop_setup_io_queue_pairs(struct sop_device *h)
 	/* From 1, not 0, to skip admin oq, which was already set up */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		if (pqi_device_queue_alloc(h, &h->qinfo[i].oq,
-				IQ_NELEMENTS, IQ_IU_SIZE / 16,
+				h->elements_per_io_queue, IQ_IU_SIZE / 16,
 				PQI_DIR_FROM_DEVICE, i))
 			goto bail_out;
 		if (pqi_device_queue_alloc(h, &h->qinfo[i].iq,
-				OQ_NELEMENTS, OQ_IU_SIZE / 16,
+				h->elements_per_io_queue, OQ_IU_SIZE / 16,
 				PQI_DIR_TO_DEVICE, i))
 			goto bail_out;
 		if (pqi_iq_data_alloc(h, &h->qinfo[i]))

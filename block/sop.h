@@ -278,8 +278,8 @@ struct pqi_device_capabilities {
 
 #define IQ_IU_SIZE 64
 #define OQ_IU_SIZE 64
-#define IQ_NELEMENTS 256
-#define OQ_NELEMENTS 256
+#define DRIVER_MAX_IQ_NELEMENTS 256
+#define DRIVER_MAX_OQ_NELEMENTS 256
 
 struct sop_wait_queue {
 	wait_queue_head_t iq_full;
@@ -382,6 +382,7 @@ struct sop_device {
 	struct request_queue *rq;
 	struct gendisk *disk;
 	int max_hw_sectors;
+	int elements_per_io_queue;
 	struct pqi_device_capability_info devcap;
 };
 
