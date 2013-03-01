@@ -1526,39 +1526,6 @@ static int fill_get_pqi_device_capabilities(struct sop_device *h,
 	return 0;
 }
 
-static void print_pqi_device_capability_info(struct sop_device *h,
-			struct pqi_device_capability_info *dc)
-{
-	dev_info(&h->pdev->dev, "max iqs = %hu\n", dc->max_iqs);
-	dev_info(&h->pdev->dev, "max iq_elements = %hu\n",
-			dc->max_iq_elements);
-	dev_info(&h->pdev->dev, "max iq_element_length = %hu\n",
-			dc->max_iq_element_length);
-	dev_info(&h->pdev->dev, "min iq_element_length = %hu\n",
-			dc->min_iq_element_length);
-	dev_info(&h->pdev->dev, "max oqs = %hu\n", dc->max_oqs);
-	dev_info(&h->pdev->dev, "max oq_elements = %hu\n",
-			dc->max_oq_elements);
-	dev_info(&h->pdev->dev, "max oq_element_length = %hu\n",
-			dc->max_oq_element_length);
-	dev_info(&h->pdev->dev, "min oq_element_length = %hu\n",
-			dc->min_oq_element_length);
-	dev_info(&h->pdev->dev, "intr_coalescing_time_granularity = %hu\n",
-			dc->intr_coalescing_time_granularity);
-	dev_info(&h->pdev->dev, "iq_alignment_exponent = %hhu\n",
-			dc->iq_alignment_exponent);
-	dev_info(&h->pdev->dev, "oq_alignment_exponent = %hhu\n",
-			dc->oq_alignment_exponent);
-	dev_info(&h->pdev->dev, "iq_ci_alignment_exponent = %hhu\n",
-			dc->iq_ci_alignment_exponent);
-	dev_info(&h->pdev->dev, "oq_pi_alignment_exponent = %hhu\n",
-			dc->oq_pi_alignment_exponent);
-	dev_info(&h->pdev->dev, "protocol support bitmask = 0x%08x\n",
-			dc->protocol_support_bitmask);
-	dev_info(&h->pdev->dev, "admin_sgl_support_bitmask = 0x%04x\n",
-			dc->admin_sgl_support_bitmask);
-}
-
 static int sop_get_pqi_device_capabilities(struct sop_device *h)
 {
 	struct report_pqi_device_capability_iu *r;
@@ -1619,8 +1586,6 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 		le32_to_cpu(buffer->protocol_support_bitmask);
 	dc->admin_sgl_support_bitmask =
 		le16_to_cpu(buffer->admin_sgl_support_bitmask);
-
-	print_pqi_device_capability_info(h, &h->devcap);
 
 	h->elements_per_io_queue = DRIVER_MAX_IQ_NELEMENTS;
 	if (h->elements_per_io_queue > DRIVER_MAX_OQ_NELEMENTS)
