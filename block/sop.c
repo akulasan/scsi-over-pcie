@@ -1500,6 +1500,136 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	sop_rem_timeout(qinfo, request->tmo_slot);
 }
 
+static int fill_get_pqi_device_capabilities(struct sop_device *h,
+			struct report_pqi_device_capability_iu *r,
+			u16 request_id, void *buffer, u32 buffersize)
+{
+	u64 busaddr;
+
+	memset(r, 0, sizeof(*r));
+	r->iu_type = REPORT_PQI_DEVICE_CAPABILITY;
+	r->compatible_features = 0;
+	r->iu_length = cpu_to_le16(0x003C);
+	r->response_oq = 0;
+	r->work_area = 0;
+	r->request_id = request_id;
+	r->function_code = 0;
+	r->buffer_size = cpu_to_le32(buffersize);
+
+	busaddr = pci_map_single(h->pdev, buffer, buffersize,
+					PCI_DMA_FROMDEVICE);
+	if (dma_mapping_error(&h->pdev->dev, busaddr))
+		return -ENOMEM;
+	r->sg.address = cpu_to_le64(busaddr);
+	r->sg.length = cpu_to_le32(buffersize);
+	r->sg.descriptor_type = PQI_SGL_DATA_BLOCK;
+	return 0;
+}
+
+static void print_pqi_device_capability_info(struct sop_device *h,
+			struct pqi_device_capability_info *dc)
+{
+	dev_info(&h->pdev->dev, "max iqs = %hu\n", dc->max_iqs);
+	dev_info(&h->pdev->dev, "max iq_elements = %hu\n",
+			dc->max_iq_elements);
+	dev_info(&h->pdev->dev, "max iq_element_length = %hu\n",
+			dc->max_iq_element_length);
+	dev_info(&h->pdev->dev, "min iq_element_length = %hu\n",
+			dc->min_iq_element_length);
+	dev_info(&h->pdev->dev, "max oqs = %hu\n", dc->max_oqs);
+	dev_info(&h->pdev->dev, "max oq_elements = %hu\n",
+			dc->max_oq_elements);
+	dev_info(&h->pdev->dev, "max oq_element_length = %hu\n",
+			dc->max_oq_element_length);
+	dev_info(&h->pdev->dev, "min oq_element_length = %hu\n",
+			dc->min_oq_element_length);
+	dev_info(&h->pdev->dev, "intr_coalescing_time_granularity = %hu\n",
+			dc->intr_coalescing_time_granularity);
+	dev_info(&h->pdev->dev, "iq_alignment_exponent = %hhu\n",
+			dc->iq_alignment_exponent);
+	dev_info(&h->pdev->dev, "oq_alignment_exponent = %hhu\n",
+			dc->oq_alignment_exponent);
+	dev_info(&h->pdev->dev, "iq_ci_alignment_exponent = %hhu\n",
+			dc->iq_ci_alignment_exponent);
+	dev_info(&h->pdev->dev, "oq_pi_alignment_exponent = %hhu\n",
+			dc->oq_pi_alignment_exponent);
+	dev_info(&h->pdev->dev, "protocol support bitmask = 0x%08x\n",
+			dc->protocol_support_bitmask);
+	dev_info(&h->pdev->dev, "admin_sgl_support_bitmask = 0x%04x\n",
+			dc->admin_sgl_support_bitmask);
+}
+
+static int sop_get_pqi_device_capabilities(struct sop_device *h)
+{
+	struct report_pqi_device_capability_iu *r;
+	struct report_pqi_device_capability_response *resp;
+	struct pqi_device_queue *aq = h->qinfo[0].iq;
+	struct pqi_device_capabilities *buffer;
+	struct pqi_device_capability_info *dc;
+	u16 request_id = (u16) -EBUSY;
+	u64 busaddr;
+	int rc;
+
+	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
+	if (!buffer)
+		return -ENOMEM;
+	r = pqi_alloc_elements(aq, 1);
+	if (IS_ERR(r)) {
+		rc = PTR_ERR(sop_thread);
+		goto out;
+	}
+	request_id = alloc_request(h, 0);
+	if (request_id == (u16) -EBUSY) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	if (fill_get_pqi_device_capabilities(h, r, request_id, buffer,
+						(u32) sizeof(*buffer))) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	send_admin_command(h, request_id);
+	busaddr = le64_to_cpu(r->sg.address);
+	pci_unmap_single(h->pdev, busaddr, sizeof(*buffer),
+						PCI_DMA_FROMDEVICE);
+	resp = (struct report_pqi_device_capability_response *)
+			h->qinfo[0].request[request_id].response;
+	if (resp->status != 0) {
+		rc = -1;
+		goto out;
+	}
+	free_request(h, 0, request_id);
+
+	dc = &h->devcap;
+	dc->max_iqs = le16_to_cpu(buffer->max_iqs);
+	dc->max_iq_elements = le16_to_cpu(buffer->max_iq_elements);
+	dc->max_iq_element_length = le16_to_cpu(buffer->max_iq_element_length);
+	dc->min_iq_element_length = le16_to_cpu(buffer->min_iq_element_length);
+	dc->max_oqs = le16_to_cpu(buffer->max_oqs);
+	dc->max_oq_elements = le16_to_cpu(buffer->max_oq_elements);
+	dc->max_oq_element_length = le16_to_cpu(buffer->max_oq_element_length);
+	dc->min_oq_element_length = le16_to_cpu(buffer->min_oq_element_length);
+	dc->intr_coalescing_time_granularity =
+		le16_to_cpu(buffer->intr_coalescing_time_granularity);
+	dc->iq_alignment_exponent = buffer->iq_alignment_exponent;
+	dc->oq_alignment_exponent = buffer->oq_alignment_exponent;
+	dc->iq_ci_alignment_exponent = buffer->iq_ci_alignment_exponent;
+	dc->oq_pi_alignment_exponent = buffer->oq_pi_alignment_exponent;
+	dc->protocol_support_bitmask =
+		le32_to_cpu(buffer->protocol_support_bitmask);
+	dc->admin_sgl_support_bitmask =
+		le16_to_cpu(buffer->admin_sgl_support_bitmask);
+
+	print_pqi_device_capability_info(h, &h->devcap);
+	return 0;
+
+out:
+	if (request_id != (u16) -EBUSY)
+		free_request(h, 0, request_id);
+	kfree(buffer);
+	return rc;
+}
+
 static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
 				struct sop_request *sopr)
 {
@@ -1854,6 +1984,13 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (rc != 0) {
 		dev_warn(&h->pdev->dev, "Bailing out in probe - requesting IRQ[0]\n");
 		goto bail_admin_created;
+	}
+
+	rc = sop_get_pqi_device_capabilities(h);
+	if (rc) {
+		dev_warn(&h->pdev->dev,
+			"Bailing out in probe - getting pqi device capabilities\n");
+		goto bail_admin_irq;
 	}
 
 	rc = sop_setup_io_queue_pairs(h);

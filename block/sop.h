@@ -317,6 +317,24 @@ struct queue_info {
 	struct sop_timeout tmo;
 };
 
+struct pqi_device_capability_info {
+	/* cached data about PQI device limits */
+	u16 max_iqs;
+	u16 max_iq_elements;
+	u16 max_iq_element_length;
+	u16 min_iq_element_length;
+	u16 max_oqs;
+	u16 max_oq_elements;
+	u16 max_oq_element_length;
+	u16 min_oq_element_length;
+	u16 intr_coalescing_time_granularity;
+	u8 iq_alignment_exponent;
+	u8 oq_alignment_exponent;
+	u8 iq_ci_alignment_exponent;
+	u8 oq_pi_alignment_exponent;
+	u32 protocol_support_bitmask;
+	u16 admin_sgl_support_bitmask;
+};
 
 struct sop_device {
 	struct list_head node;
@@ -364,6 +382,7 @@ struct sop_device {
 	struct request_queue *rq;
 	struct gendisk *disk;
 	int max_hw_sectors;
+	struct pqi_device_capability_info devcap;
 };
 
 #define	SOP_DEVICE_BUSY(_h)	(((_h)->flags) & (\
