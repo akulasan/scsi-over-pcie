@@ -34,6 +34,7 @@
 #include <linux/sched.h>
 #include <linux/version.h>
 #include <linux/completion.h>
+#include <linux/hdreg.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_ioctl.h>
 #include <scsi/sg.h>
@@ -84,11 +85,13 @@ static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
 static int sop_ioctl(struct block_device *dev, fmode_t mode,
 				unsigned int cmd, unsigned long arg);
 static int sop_revalidate(struct gendisk *disk);
+static int sop_getgeo(struct block_device *bdev, struct hd_geometry *geo);
 
 static const struct block_device_operations sop_fops = {
 	.owner			= THIS_MODULE,
 	.revalidate_disk	= sop_revalidate,
 	.ioctl			= sop_ioctl,
+	.getgeo			= sop_getgeo,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl		= sop_compat_ioctl,
 #endif
@@ -3802,6 +3805,21 @@ static int sop_revalidate(struct gendisk *disk)
 
 	set_capacity(disk, h->capacity);
 	blk_queue_logical_block_size(h->rq, h->block_size);
+	return 0;
+}
+
+static int sop_getgeo(struct block_device *bdev, struct hd_geometry *geo)
+{
+	/* This code cribbed from xen-blkfront.c */
+	sector_t nsect = get_capacity(bdev->bd_disk);
+	sector_t cylinders = nsect;
+
+	geo->heads = 0xff;
+	geo->sectors = 0x3f;
+	sector_div(cylinders, geo->heads * geo->sectors);
+	geo->cylinders = cylinders;
+	if ((sector_t) (geo->cylinders + 1) * geo->heads * geo->sectors < nsect)
+		geo->cylinders = 0xffff;
 	return 0;
 }
 
