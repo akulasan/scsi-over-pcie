@@ -3570,7 +3570,9 @@ static void sop_reinit_all_ioq(struct sop_device *h)
 	}
 }
 
-#define	MAX_RESET_COUNT	3
+/* In case of device Error flag set, delay before reset is done in seconds */
+#define SOP_ERROR_RESET_DEALY_SEC	DEF_IO_TIMEOUT
+#define	MAX_RESET_COUNT			3
 
 /* Run time controller reset */
 static void sop_reset_controller(struct work_struct *work)
@@ -3631,8 +3633,12 @@ reset_err:
 	reset_count++;
 	dev_warn(&h->pdev->dev, "Reset failed, attempt #%d of %d\n",
 			reset_count, MAX_RESET_COUNT);
-	if (reset_count < MAX_RESET_COUNT)
+	if (reset_count < MAX_RESET_COUNT) {
+		/* Delay before next reset issue */
+		usleep_range((SOP_ERROR_RESET_DEALY_SEC - 1) * 1000 * 1000,
+				(SOP_ERROR_RESET_DEALY_SEC + 1) * 1000 * 1000);
 		goto start_reset;
+	}
 
 	/* Error handling: Mark Removed/Dead */
 	set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
@@ -3729,12 +3735,17 @@ static void sop_process_dev_timer(struct sop_device *h)
 
 		if (!test_and_set_bit(SOP_FLAGS_BITPOS_RESET_PEND,
 					&h->flags)) {
+			int delay = HZ;
 
 			/* Reset the controller */
+			if (action == SOP_ERR_DEV_RESET)
+				delay = SOP_ERROR_RESET_DEALY_SEC * HZ;
+
 			dev_warn(&h->pdev->dev,
-				"Scheduling a reset for the controller\n");
+				"Scheduling a controller reset in %d sec\n",
+				(delay/HZ));
 			PREPARE_DELAYED_WORK(&h->dwork, sop_reset_controller);
-			schedule_delayed_work(&h->dwork, HZ);
+			schedule_delayed_work(&h->dwork, delay);
 		}
 	}
 }
