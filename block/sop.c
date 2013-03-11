@@ -3490,6 +3490,9 @@ static void sop_timeout_ios(struct queue_info *q, int action)
 	if ((action == SOP_ERR_NONE) && cmd_pend)
 		dev_warn(&q->h->pdev->dev, "SOP timeout!! Cannot account for %d cmds\n",
 				cmd_pend);
+
+	/* Reset the count of the curremnt slot */
+	atomic_set(&q->tmo.time_slot[cur_slot], 0);
 }
 
 static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
