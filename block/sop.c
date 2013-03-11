@@ -3395,6 +3395,7 @@ static void sop_timeout_sync_cmd(struct queue_info *q, struct sop_request *r)
 #define SOP_ERR_NONE		0
 #define	SOP_ERR_DEV_REM		-1
 #define SOP_ERR_DEV_RESET	-2
+#define SOP_ERR_DEV_FAULT	-3
 /* Return 0 if no global reason found */
 static int sop_device_error_state(struct sop_device *h)
 {
@@ -3419,7 +3420,7 @@ static int sop_device_error_state(struct sop_device *h)
 	if (state == PQI_ERROR) {
 		dev_warn(&h->pdev->dev, "Device Fault! Will reset...\n");
 		set_bit(SOP_FLAGS_BITPOS_DO_RESET, &h->flags);
-		return SOP_ERR_DEV_RESET;
+		return SOP_ERR_DEV_FAULT;
 	}
 
 
@@ -3463,6 +3464,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 			set_bit(SOP_FLAGS_BITPOS_DO_RESET, &q->h->flags);
 
 		case SOP_ERR_DEV_RESET:
+		case SOP_ERR_DEV_FAULT:
 			/*
 			 * Requeue this command and
 			 * reset the controller at end
@@ -3471,9 +3473,13 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 				spin_lock_irq(&q->iq->qlock);
 				sop_queue_cmd(q, ser->bio);
 				spin_unlock_irq(&q->iq->qlock);
-			}
-			else
+			} else {
+				if (action != SOP_ERR_DEV_RESET)
+					/* Do not free the request */
+					continue;
+
 				sop_timeout_sync_cmd(q, ser);
+			}
 			break;
 		}
 		/* Free the sop request now */
@@ -3615,12 +3621,14 @@ start_reset:
 	if (rc)
 		goto reset_err;
 
-	sop_requeue_all_outstanding_io(h);
 	sop_reinit_all_ioq(h);
 
 	rc = sop_create_admin_queues(h);
 	if (rc)
 		goto reset_err;
+
+	/* Complete all waiting Admin commands */
+	sop_timeout_queued_cmds(&h->qinfo[0], -1, SOP_ERR_DEV_RESET);
 
 	/* Skip IO queue creation if IO queue was not ready */
 	if (!(h->flags & SOP_FLAGS_MASK_IOQ_RDY))
@@ -3641,6 +3649,9 @@ start_reset:
 	/* React to capacity changed unit attn events pending */
 	if (test_and_clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags))
 		sop_revalidate(h->disk);
+
+	/* Process any pending I/O commands */
+	sop_requeue_all_outstanding_io(h);
 	/* Next: sop_resubmit_waitq for all Q */
 	for (i = 1; i < h->nr_queue_pairs; i++)
 		sop_resubmit_waitq(&h->qinfo[i], false);
@@ -3661,15 +3672,11 @@ reset_err:
 		goto start_reset;
 	}
 
-	/* Error handling: Mark Removed/Dead */
-	set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
-
-	dev_warn(&h->pdev->dev, "Aborting pending commands\n");
 	/* Clear any capacity changed unit attn events pending */
 	clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
-	/* Next: sop_resubmit_waitq for all Q */
-	for (i = 1; i < h->nr_queue_pairs; i++)
-		sop_resubmit_waitq(&h->qinfo[i], true);
+
+	/* Next: Fail all pending commands and mark drive removed/Failed */
+	sop_fail_all_outstanding_io(h);
 
 	/* Reset processing is done - clear that flag */
 	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, &h->flags);
@@ -3759,7 +3766,7 @@ static void sop_process_dev_timer(struct sop_device *h)
 			int delay = HZ;
 
 			/* Reset the controller */
-			if (action == SOP_ERR_DEV_RESET)
+			if (action == SOP_ERR_DEV_FAULT)
 				delay = SOP_ERROR_RESET_DEALY_SEC * HZ;
 
 			dev_warn(&h->pdev->dev,
@@ -3796,6 +3803,7 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 
 	/* Mark Drive is being removed */
 	set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
+	dev_warn(&h->pdev->dev, "Aborting pending commands\n");
 
 	if ((h->flags & SOP_FLAGS_MASK_ADMIN_RDY)) {
 		spin_lock_irq(&q->oq->qlock);
