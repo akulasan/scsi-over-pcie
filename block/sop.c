@@ -3047,10 +3047,6 @@ sync_send_tur:
 	return 0;
 
 disk_param_err:
-	/* Check if the getting disk params can be retried */
-	if (ret == -EBUSY || ret == -EAGAIN)
-		set_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
-
 	dev_warn(&h->pdev->dev, "Error getting disk param (CDB0=0x%x returns 0x%x)\n",
 			sio.cdb[0], ret);
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
@@ -3058,7 +3054,7 @@ disk_param_err:
 	/* Set Capacity to 0 and continue as degraded */
 	h->capacity = 0;
 	h->block_size = 0x200;
-	return 0;
+	return ret;
 }
 
 
@@ -3631,8 +3627,10 @@ start_reset:
 	sop_timeout_queued_cmds(&h->qinfo[0], -1, SOP_ERR_DEV_RESET);
 
 	/* Skip IO queue creation if IO queue was not ready */
-	if (!(h->flags & SOP_FLAGS_MASK_IOQ_RDY))
+	if (!(h->flags & SOP_FLAGS_MASK_IOQ_RDY)) {
+		clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, &h->flags);
 		goto end_reset;
+	}
 
 	dev_warn(&h->pdev->dev, "Re creating %d I/O queue pairs\n",
 		h->nr_queue_pairs-1);
@@ -3644,11 +3642,13 @@ start_reset:
 		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_TO_DEVICE))
 			goto reset_err;
 	}
-
 	dev_warn(&h->pdev->dev, "I/O queue created - Resubmitting pending commands\n");
-	/* React to capacity changed unit attn events pending */
-	if (test_and_clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags))
-		sop_revalidate(h->disk);
+
+	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, &h->flags);
+
+	/* Need to revalidate the disk unconditionally */
+	clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
+	sop_revalidate(h->disk);
 
 	/* Process any pending I/O commands */
 	sop_requeue_all_outstanding_io(h);
@@ -3657,8 +3657,7 @@ start_reset:
 		sop_resubmit_waitq(&h->qinfo[i], false);
 
 end_reset:
-	dev_warn(&h->pdev->dev, "Reset Complete\n");
-	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, &h->flags);
+	dev_warn(&h->pdev->dev, "Reset Complete Success\n");
 	return;
 
 reset_err:
@@ -3703,6 +3702,14 @@ static void sop_process_driver_debug(struct sop_device *h)
 	}
 }
 
+static void sop_revalidate_wq(struct work_struct *work)
+{
+	struct sop_device *h;
+
+	h =  container_of(work, struct sop_device, dwork.work);
+	sop_revalidate(h->disk);
+}
+
 static void sop_process_dev_timer(struct sop_device *h)
 {
 	int i;
@@ -3745,8 +3752,11 @@ static void sop_process_dev_timer(struct sop_device *h)
 				/* react to cap changed unit attn. events */
 				if (test_and_clear_bit(
 						SOP_FLAGS_BITPOS_REVALIDATE,
-						&h->flags))
-					sop_revalidate(h->disk);
+						&h->flags)) {
+					PREPARE_DELAYED_WORK(&h->dwork,
+						sop_revalidate_wq);
+					schedule_delayed_work(&h->dwork, 0);
+				}
 
 				/* Process wait queue */
 				sop_resubmit_waitq(q, false);
@@ -3837,13 +3847,18 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 static int sop_revalidate(struct gendisk *disk)
 {
 	struct sop_device *h = disk->private_data;
+	int ret;
 
 	if (!h)
 		return -1;
 
-	if (sop_get_disk_params(h))
-		return -1;
+	ret = sop_get_disk_params(h);
 
+	/* Check if the getting disk params can be retried */
+	if (ret == -EBUSY || ret == -EAGAIN)
+		set_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
+
+	/* Set the current values to block device */
 	set_capacity(disk, h->capacity);
 	blk_queue_logical_block_size(h->rq, h->block_size);
 	return 0;
