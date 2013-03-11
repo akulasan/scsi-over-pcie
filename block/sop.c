@@ -3163,14 +3163,12 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	}
 	if (hp->flags & SG_FLAG_DIRECT_IO && hp->flags & SG_FLAG_MMAP_IO) {
 		rc = -EINVAL; /* either MMAP_IO or DIRECT_IO (not both) */
+		pr_err("SGIO Err: Both DIRECT_IO and MMAP_IO set\n");
 		goto out;
 	}
 	if (hp->flags & SG_FLAG_MMAP_IO) {
 		rc = -ENOSYS; /* FIXME we should support this. */
-		goto out;
-	}
-	if (hp->flags & SG_FLAG_DIRECT_IO) {
-		rc = -ENOSYS; /* FIXME we should support this. */
+		pr_err("SGIO Err: MMAP_IO not supported\n");
 		goto out;
 	}
 	scdb = kmalloc(sizeof(*scdb), GFP_KERNEL);
