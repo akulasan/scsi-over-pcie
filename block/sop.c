@@ -530,7 +530,7 @@ static int pqi_dequeue_from_device(struct pqi_device_queue *q, void *element)
 	return 0;
 }
 
-static u8 pqi_peek_ui_type_from_device(struct pqi_device_queue *q)
+static u8 pqi_peek_iu_type_from_device(struct pqi_device_queue *q)
 {
 	u8 *p;
 
@@ -1230,7 +1230,7 @@ static int sop_msix_handle_ioq(struct queue_info *q)
 	do {
 		if (r == NULL) {
 			/* Receiving completion of a new request */
-			iu_type = pqi_peek_ui_type_from_device(q->oq);
+			iu_type = pqi_peek_iu_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
 			r = q->oq->cur_req = &q->request[request_id];
 			r->request_id = request_id;
@@ -1288,7 +1288,7 @@ static int sop_msix_handle_adminq(struct queue_info *q)
 
 		if (r == NULL) {
 			/* Receiving completion of a new request */
-			iu_type = pqi_peek_ui_type_from_device(q->oq);
+			iu_type = pqi_peek_iu_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
 			r = q->oq->cur_req = &q->request[request_id];
 			r->response_accumulated = 0;
@@ -1540,6 +1540,9 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	u64 busaddr;
 	int rc;
 
+	/* Set the default value before isuing command */
+	h->elements_per_io_queue = DRIVER_MAX_IQ_NELEMENTS;
+
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
@@ -1564,8 +1567,8 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 						PCI_DMA_FROMDEVICE);
 	resp = (struct report_pqi_device_capability_response *)
 			h->qinfo[0].request[request_id].response;
-	if (resp->status != 0) {
-		rc = -1;
+	if (resp->iu_type != ADMIN_RESPONSE_IU_TYPE || resp->status != 0) {
+		rc = 0;
 		goto out;
 	}
 	free_request(h, 0, request_id);
@@ -1590,7 +1593,6 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	dc->admin_sgl_support_bitmask =
 		le16_to_cpu(buffer->admin_sgl_support_bitmask);
 
-	h->elements_per_io_queue = DRIVER_MAX_IQ_NELEMENTS;
 	if (h->elements_per_io_queue > DRIVER_MAX_OQ_NELEMENTS)
 		h->elements_per_io_queue = DRIVER_MAX_OQ_NELEMENTS;
 	if (h->elements_per_io_queue > dc->max_oq_elements)
@@ -1598,10 +1600,12 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	if (h->elements_per_io_queue > dc->max_iq_elements)
 		h->elements_per_io_queue = dc->max_iq_elements;
 
-	dev_warn(&h->pdev->dev, "elements per i/o queue: %d\n",
+	dev_warn(&h->pdev->dev, "PQI caps: elements per i/o queue: %d\n",
 			h->elements_per_io_queue);
 	return 0;
 out:
+	dev_warn(&h->pdev->dev, "PQI device caps failed! Taking %d value\n",
+			h->elements_per_io_queue);
 	if (request_id != (u16) -EBUSY)
 		free_request(h, 0, request_id);
 	kfree(buffer);
@@ -1651,7 +1655,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 	send_admin_command(h, request_id);
 	resp = (struct pqi_create_operational_queue_response *)
 		h->qinfo[0].request[request_id].response;
-	if (resp->ui_type != ADMIN_RESPONSE_IU_TYPE || resp->status != 0) {
+	if (resp->iu_type != ADMIN_RESPONSE_IU_TYPE || resp->status != 0) {
 		dev_warn(&h->pdev->dev, "Failed to create OQ #%d\n",
 			queue_pair_index);
 		free_request(h, 0, request_id);
@@ -1745,7 +1749,7 @@ static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
 	send_admin_command(h, request_id);
 	resp = (struct pqi_delete_operational_queue_response *)
 		h->qinfo[0].request[request_id].response;
-	if (resp->ui_type != ADMIN_RESPONSE_IU_TYPE || resp->status != 0) {
+	if (resp->iu_type != ADMIN_RESPONSE_IU_TYPE || resp->status != 0) {
 		dev_warn(&h->pdev->dev, "Failed to tear down queue #%d (to=%d)\n",
 			qpindex, to_device);
 		err = -EIO;
@@ -3555,7 +3559,7 @@ static void sop_requeue_all_outstanding_io(struct sop_device *h)
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		q = &h->qinfo[i];
 
-		if (!q)
+		if (!q->oq)
 			continue;
 
 		spin_lock_irq(&q->oq->qlock);
@@ -3577,6 +3581,9 @@ static void sop_reinit_all_ioq(struct sop_device *h)
 	/* Io Queue */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		q = &h->qinfo[i];
+
+		if (!q->oq)
+			continue;
 
 		*(q->oq->index.from_dev.pi) = q->oq->unposted_index = 0;
 		*(q->iq->index.to_dev.ci) = q->iq->unposted_index = 0;
@@ -3715,7 +3722,7 @@ static void sop_process_dev_timer(struct sop_device *h)
 		for (i = 1; i < h->nr_queue_pairs; i++) {
 			q = &h->qinfo[i];
 
-			if (!q)
+			if (!q->oq)
 				continue;
 
 			spin_lock_irq(&q->oq->qlock);
@@ -3803,7 +3810,7 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 		for (i = 1; i < h->nr_queue_pairs; i++) {
 			q = &h->qinfo[i];
 
-			if (!q)
+			if (!q->oq)
 				continue;
 
 			spin_lock_irq(&q->oq->qlock);
@@ -3883,9 +3890,9 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	BUILD_BUG_ON(offsetof(struct pqi_create_operational_queue_response, \
 		member) != offset)
 
-	VERIFY_OFFSET(ui_type, 0);
+	VERIFY_OFFSET(iu_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
-	VERIFY_OFFSET(ui_length, 2);
+	VERIFY_OFFSET(iu_length, 2);
 	VERIFY_OFFSET(response_oq, 4);
 	VERIFY_OFFSET(work_area, 6);
 	VERIFY_OFFSET(request_id, 8);
@@ -3941,9 +3948,9 @@ static void __attribute__((unused)) verify_structure_defs(void)
 #define VERIFY_OFFSET(field, offset) \
 	BUILD_BUG_ON(offsetof(struct pqi_delete_operational_queue_response, \
 			field) != offset)
-	VERIFY_OFFSET(ui_type, 0);
+	VERIFY_OFFSET(iu_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
-	VERIFY_OFFSET(ui_length, 2);
+	VERIFY_OFFSET(iu_length, 2);
 	VERIFY_OFFSET(response_oq, 4);
 	VERIFY_OFFSET(work_area, 6);
 	VERIFY_OFFSET(request_id, 8);

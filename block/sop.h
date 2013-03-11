@@ -165,10 +165,10 @@ struct pqi_create_operational_queue_request {
 };
 
 struct pqi_create_operational_queue_response {
-	u8 ui_type;
+	u8 iu_type;
 #define ADMIN_RESPONSE_IU_TYPE		0xE0
 	u8 compatible_features;
-	u16 ui_length;
+	u16 iu_length;
 	u16 response_oq;
 	u16 work_area;
 	u16 request_id;
@@ -193,9 +193,9 @@ struct pqi_delete_operational_queue_request {
 };
 
 struct pqi_delete_operational_queue_response {
-	u8 ui_type;
+	u8 iu_type;
 	u8 compatible_features;
-	u16 ui_length;
+	u16 iu_length;
 	u16 response_oq;
 	u16 work_area;
 	u16 request_id;
@@ -289,7 +289,7 @@ struct sop_wait_queue {
 
 /* Note: MAX cannot be greater than 255 as it is stored in u8 */
 #define	MAX_SOP_TIMEOUT		64
-#define	DEF_IO_TIMEOUT		8
+#define	DEF_IO_TIMEOUT		30
 
 struct sop_timeout {
 	atomic_t time_slot[MAX_SOP_TIMEOUT];
