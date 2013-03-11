@@ -2228,13 +2228,17 @@ static int sop_prepare_cdb(u8 *cdb, struct bio *bio)
 
 /* Returns the numbers of sg prepared in sgl */
 static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
-					struct scatterlist  *sgl,
-					struct page **page_map)
+					struct scatterlist  *sgl)
 {
 	int i, j, nsegs, count, err;
 	int iov_count, write;
 	struct iovec *iov_array = sio->iov;
 	struct scatterlist *cur_sg = NULL;
+	struct page **page_map;
+
+	page_map = kcalloc(MAX_SGLS, sizeof(*page_map), GFP_KERNEL);
+	if (!page_map)
+		return -ENOMEM;
 
 	nsegs = 0;
 	iov_count = sio->iov_count;
@@ -2307,6 +2311,7 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 		}
 	}
 	sg_mark_end(&sgl[nsegs-1]);
+	kfree(page_map);
 
 	/* Store the current index of iovec to be processed next */
 	sio->iovec_idx = i;
@@ -2322,6 +2327,9 @@ err_iovec:
 	/* Unmap previously mapped pages */
 	for (i = 0; i < nsegs; i++)
 		put_page(sg_page(&sgl[i]));
+
+	/* Free the memory allocated */
+	kfree(page_map);
 
 	/* Start all over next time,  sio->iovec_idx is not changed*/
 	return err;
@@ -2835,9 +2843,8 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	struct sop_limited_cmd_iu *r;
 	int request_id, cpu;
 	int retval = -EIO;
-	int nsegs;
-	struct scatterlist *sgl;
-	struct page **page_map;
+	int nsegs = 0;
+	struct scatterlist *sgl, *sgl_buffer;
 	sg_io_hdr_t *hdr = sio->sg_hdr;
 
 	/* Check for device busy (RESET/FAIL/etc) */
@@ -2856,13 +2863,20 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 		return 0;
 	}
 
+	sgl_buffer = NULL;
 	if (sio->data_dir != DMA_NONE && sio->iov_count > 0) {
-		/* Must alloc prior to get_cpu() because we might sleep. */
-		page_map = kcalloc(MAX_SGLS, sizeof(*page_map), GFP_KERNEL);
-		if (!page_map)
-			return -ENOMEM;
-	} else {
-		page_map = NULL;
+		/* allocate a temporary sgl buffer */
+		retval = -ENOMEM;
+		sgl_buffer = kcalloc(MAX_SGLS, sizeof(*sgl_buffer), GFP_KERNEL);
+		if (!sgl_buffer)
+			goto sync_error;
+
+		/* Prepare the sgl from iov */
+		retval = sop_get_sync_cdb_scatterlist(sio, sgl_buffer);
+		if (retval <= 0)
+			goto sync_error;
+
+		nsegs = retval;
 	}
 
 	cpu = get_cpu();
@@ -2892,19 +2906,16 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	if (sio->data_dir != DMA_NONE) {
 		/* Prepare and fill the sg */
 		if (sio->iov_count > 0) {
-			int start_idx = sio->iovec_idx;
+			/* Copy and free the temporary sgl buffer */
+			memcpy(sgl, sgl_buffer, sizeof(*sgl) * MAX_SGLS);
+			kfree(sgl_buffer);
 
-			/* Prepare the sg from iov */
-			nsegs = sop_get_sync_cdb_scatterlist(sio, sgl,
-								page_map);
-			if (nsegs > 0) {
-				ser->num_sg = nsegs;
-				nsegs = dma_map_sg(&h->pdev->dev, sgl, nsegs,
-							sio->data_dir);
-			}
+			ser->num_sg = nsegs;
+			nsegs = dma_map_sg(&h->pdev->dev, sgl, nsegs,
+						sio->data_dir);
 			if (nsegs <= 0) {
-				sio->iovec_idx = start_idx;
-				dev_warn(&h->pdev->dev, "sg prep failure %d CDB[0]=0x%x, SQ[%d].\n",
+				dev_warn(&h->pdev->dev,
+					"DMA map err %d CDB[0]=0x%x, SQ[%d]\n",
 					nsegs, sio->cdb[0], qinfo_to_qid(qinfo));
 				goto sync_dma_map_fail;
 			}
@@ -2917,7 +2928,6 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 		}
 	} else
 		nsegs = 0;
-	kfree(page_map);
 	/* Now prepare the sg in sop queue request */
 	sop_scatter_gather(h, qinfo, nsegs, r, sgl, &ser->xfer_size);
 
@@ -2931,8 +2941,6 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	return process_direct_cdb_response(h, sio, qinfo, ser);
 
 sync_dma_map_fail:
-	/* Free the memory and else allocated */
-	kfree(page_map);
 	pqi_unalloc_elements(qinfo->iq, 1);
 
 sync_alloc_elem_fail:
@@ -2940,6 +2948,12 @@ sync_alloc_elem_fail:
 
 sync_req_id_fail:
 	put_cpu();
+
+sync_error:
+	if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT))
+		dev_warn(&h->pdev->dev,
+			"%s: Failed to prepare scatterlist\n", __func__);
+	kfree(sgl_buffer);
 	if (hdr == NULL)
 		return retval;
 
