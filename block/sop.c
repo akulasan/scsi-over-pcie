@@ -3278,6 +3278,7 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	}
 	scdb->data_len = len;
 	scdb->data_dir = data_dir;
+	scdb->sg_hdr = hp;
 
 	if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
 		dev_warn(&h->pdev->dev,
