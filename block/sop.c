@@ -100,6 +100,7 @@ static const struct block_device_operations sop_fops = {
 #define	SOP_DBG_LVL_EXTRA_WARN		0x0001
 #define	SOP_DBG_LVL_RARE_NORM_EVENT	0x0002
 #define SOP_DBG_LVL_DUMP_SGIO		0x0004
+#define SOP_DBG_LVL_DUMP_SENSE		0x0008
 static u32 sop_dbg_lvl, sop_dbg_cmd;
 
 #define	SOP_MAX_LINE_LEN	256
@@ -1031,7 +1032,8 @@ static void evaluate_unit_attention(struct sop_device *h, u8 asc, u8 ascq)
 #define FAIL_ACTION 2
 	
 static int evaluate_sense_data(struct sop_device *h,
-				struct sop_cmd_response *scr)
+				struct sop_cmd_response *scr,
+				char *cdb)
 {
 	u8 sense_key;
 	u16 sense_data_len;
@@ -1042,6 +1044,15 @@ static int evaluate_sense_data(struct sop_device *h,
 	if (scr->sense_data_len < 3)
 		return NO_ACTION;
 	sense_key = scr->sense[2] & 0x0f;
+
+	if (sop_dbg_lvl & SOP_DBG_LVL_DUMP_SENSE) {
+		int cmd = 0xFF;
+
+		if ((cdb))
+			cmd = cdb[0];
+		dev_warn(&h->pdev->dev, "CDB[%x] Sense Key %x ASC %x ASCQ %x\n",
+			cmd, sense_key, scr->sense[12], scr->sense[13]);
+	}
 
 	switch (sense_key) {
 	case NO_SENSE:
@@ -1157,7 +1168,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 		if (sense_data_len) {
 			int disposition;
 
-			disposition = evaluate_sense_data(h, scr);
+			disposition = evaluate_sense_data(h, scr, NULL);
 
 			switch (disposition) {
 			case RETRY_ACTION:
@@ -2719,7 +2730,7 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 			 * ignore return value, we pass sense data back to user
 			 * we just want to snoop for capacity change unit attn.
 			 */
-			(void) evaluate_sense_data(h, scr);
+			(void) evaluate_sense_data(h, scr, scdb->cdb);
 		}
 
 		/* paranoia, check for out of spec firmware */
