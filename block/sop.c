@@ -1233,13 +1233,13 @@ static int sop_msix_handle_ioq(struct queue_info *q)
 	u8 iu_type;
 	int rc;
 	struct sop_device *h = q->h;
-	struct sop_request *r;
 
 	if (pqi_from_device_queue_is_empty(q->oq))
 		return IRQ_NONE;
 
-	r = q->oq->cur_req;
 	do {
+		struct sop_request *r = q->oq->cur_req;
+
 		if (r == NULL) {
 			/* Receiving completion of a new request */
 			iu_type = pqi_peek_iu_type_from_device(q->oq);
@@ -1250,28 +1250,19 @@ static int sop_msix_handle_ioq(struct queue_info *q)
 		}
 		rc = pqi_dequeue_from_device(q->oq,
 				&r->response[r->response_accumulated]);
-		if (rc) { /* queue is empty */
-			dev_warn(&h->pdev->dev,
-				"=-=-=- io OQ[%hhu] PI %d CI %d empty(rc=%d)\n",
-				q->oq->queue_id, *(q->oq->index.from_dev.pi),
-				q->oq->unposted_index, rc);
+		if (rc)
 			break;
-		}
 		r->response_accumulated += q->oq->element_size;
 		if (sop_response_accumulated(r)) {
 			q->oq->cur_req = NULL;
 			wmb();
-			if (likely(r->bio)) {
+			if (likely(r->bio))
 				sop_complete_bio(h, q, r);
-				r = NULL;
-			} else {
-				if (likely(r->waiting)) {
-					complete(r->waiting);
-					r = NULL;
-				} else {
-					dev_warn(&h->pdev->dev, "r->bio and r->waiting both null\n");
-				}
-			}
+			else if (likely(r->waiting))
+				complete(r->waiting);
+			else
+				dev_warn(&h->pdev->dev,
+					"r->bio and r->waiting both null\n");
 			atomic_dec(&h->cmd_pending);
 			atomic_dec(&q->cur_qdepth);
 			pqi_notify_device_queue_read(q->oq);
