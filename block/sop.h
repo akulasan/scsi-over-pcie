@@ -24,7 +24,7 @@
 
 /* #define MAX_SGLS (1024) */
 #define MAX_SGLS (32)
-#define MAX_CMDS (256)
+#define MAX_CMDS (1024)
 
 struct sop_request;
 
@@ -278,8 +278,8 @@ struct pqi_device_capabilities {
 
 #define IQ_IU_SIZE 64
 #define OQ_IU_SIZE 64
-#define DRIVER_MAX_IQ_NELEMENTS 256
-#define DRIVER_MAX_OQ_NELEMENTS 256
+#define DRIVER_MAX_IQ_NELEMENTS MAX_CMDS
+#define DRIVER_MAX_OQ_NELEMENTS MAX_CMDS
 
 struct sop_wait_queue {
 	wait_queue_head_t iq_full;

@@ -1596,15 +1596,13 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	dc->admin_sgl_support_bitmask =
 		le16_to_cpu(buffer->admin_sgl_support_bitmask);
 
-	if (h->elements_per_io_queue > DRIVER_MAX_OQ_NELEMENTS)
-		h->elements_per_io_queue = DRIVER_MAX_OQ_NELEMENTS;
 	if (h->elements_per_io_queue > dc->max_oq_elements)
 		h->elements_per_io_queue = dc->max_oq_elements;
 	if (h->elements_per_io_queue > dc->max_iq_elements)
 		h->elements_per_io_queue = dc->max_iq_elements;
 
-	dev_warn(&h->pdev->dev, "PQI caps: elements per i/o queue: %d\n",
-			h->elements_per_io_queue);
+	dev_warn(&h->pdev->dev, "PQI caps: elements per queue: %d, max %d\n",
+			h->elements_per_io_queue, dc->max_oq_elements);
 	return 0;
 out:
 	dev_warn(&h->pdev->dev, "PQI device caps failed! Taking %d value\n",
