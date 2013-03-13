@@ -1261,7 +1261,7 @@ static int sop_msix_handle_ioq(struct queue_info *q)
 			else if (likely(r->waiting))
 				complete(r->waiting);
 			else
-				dev_warn(&h->pdev->dev,
+				dev_warn(&h->pdev->dev, 
 					"r->bio and r->waiting both null\n");
 			atomic_dec(&h->cmd_pending);
 			atomic_dec(&q->cur_qdepth);
@@ -3362,6 +3362,10 @@ static void sop_fail_cmd(struct queue_info *q, struct sop_request *r)
 
 	/* Call complete bio with this parameter */
 	sop_complete_bio(q->h, q, r);
+
+	/* Update counters originally done in ISR */
+	atomic_dec(&q->h->cmd_pending);
+	atomic_dec(&q->cur_qdepth);
 }
 
 /* To be called instead of sop_process_bio in case of abort */
@@ -3388,6 +3392,10 @@ static void sop_timeout_sync_cmd(struct queue_info *q, struct sop_request *r)
 		dev_err(&q->h->pdev->dev, "TMO: bio and waiting both NULL "
 				"for Q[%d], rqid %d\n",
 				q->oq->queue_id, r->request_id);
+
+	/* Update counters originally done in ISR */
+	atomic_dec(&q->h->cmd_pending);
+	atomic_dec(&q->cur_qdepth);
 }
 
 #define SOP_ERR_NONE		0
