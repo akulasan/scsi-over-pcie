@@ -3041,7 +3041,7 @@ sync_send_tur:
 		goto disk_param_err;
 
 	/* Process the Read Cap data */
-	h->capacity = be32_to_cpu(data[0]);
+	h->capacity = be32_to_cpu(data[0]) + 1;
 	h->block_size = be32_to_cpu(data[1]);
 
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
@@ -3103,7 +3103,7 @@ static int sop_add_disk(struct sop_device *h)
 	sop_revalidate(disk);
 
 	dev_warn(&h->pdev->dev,
-		"Creating SOP drive '%s'- Capacity %d sectors\n",
+		"Creating SOP drive '%s'- Capacity 0x%x sectors\n",
 		disk->disk_name, (int)(h->capacity));
 	add_disk(disk);
 
