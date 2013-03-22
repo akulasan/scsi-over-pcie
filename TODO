@@ -1,0 +1,29 @@
+- Cleanup the interrupt allocation TODO where we should handle the case where
+    we get less than MSIX we request or if MSIX is not supported in the host.
+    We need to fall back to legacy interrupt.
+
+- Change hardcoding of Max HW sectors by either using system limits or
+    device limits from issuing SOP_REPORT_GENERAL.
+
+- Support MMIO in SGIO commands.
+
+- Cleanup of comments in SGIO about access violation check, kref_get, etc.
+
+- Support for abort and other task management commands.
+
+- Support for online FW download (not supported by FW yet).
+
+- Support for drive bay identification probably via sysfs
+    (details to be worked out).
+
+- Support for drives with multiple LUN probably by adding minor devices and
+    adding support for regular SOP_COMMNAD_IU in addition to LIMITED_IU
+    supported now.
+
+- Support for adding the block device name to appear as bootable device in grub.
+
+- Add timing parameters in bio so that SOP appears under iostat.
+
+- Add support fopr SGIO retry on queue full.
+
+
