@@ -651,7 +651,7 @@ static void __attribute__((unused))
 	spin_unlock_irqrestore(&q->index_lock, flags);
 }
 
-static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
+static inline void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 {
 	unsigned long flags;
 	/*
@@ -663,10 +663,10 @@ static void pqi_notify_device_queue_written(struct pqi_device_queue *q)
 	spin_unlock_irqrestore(&q->index_lock, flags);
 }
 
-static void pqi_notify_device_queue_read(struct pqi_device_queue *q)
+static inline void pqi_notify_device_queue_read(struct pqi_device_queue *q)
 {
 	/*
-	 * Notify the device that the host has consumed data from the device
+	 * Notify the device that the host has consumed data from the devict
 	 */
 	writew(q->unposted_index, q->index.from_dev.ci);
 }
