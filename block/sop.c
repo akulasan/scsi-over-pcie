@@ -1603,6 +1603,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 
 	dev_warn(&h->pdev->dev, "PQI caps: elements per queue: %d, max %d\n",
 			h->elements_per_io_queue, dc->max_oq_elements);
+	kfree(buffer);
 	return 0;
 out:
 	dev_warn(&h->pdev->dev, "PQI device caps failed! Taking %d value\n",
