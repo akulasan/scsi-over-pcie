@@ -7,7 +7,7 @@
 
 - Support MMIO in SGIO commands.
 
-- Cleanup of comments in SGIO about access violation check, kref_get, etc.
+- Cleanup of comments in SGIO about access violation check, etc.
 
 - Support for abort and other task management commands.
 

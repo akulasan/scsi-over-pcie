@@ -3289,16 +3289,7 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 			len, iov_count);
 
 	start_time = jiffies;
-	/*
-	 * FIXME I think I need to do some kind of kref_get() here to
-	 * make sure we know the device is in use.
-	 */
 	rc = send_sync_cdb(h, scdb, 0);
-
-	/*
-	 * FIXME I think I need to do some kind of kref_put() here to
-	 * undo the kref_get above.
-	 */
 	hp->duration = jiffies_to_msecs(jiffies - start_time);
 	if (copy_to_user(argp, hp, sizeof(*hp)))
 		rc = -EFAULT;
