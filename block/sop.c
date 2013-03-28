@@ -43,7 +43,7 @@
 #include "sop_kernel_compat.h"
 #include "sop.h"
 
-#define DRIVER_VERSION "1.0.1.2"
+#define DRIVER_VERSION "1.0"
 #define DRIVER_NAME "sop (v " DRIVER_VERSION ")"
 #define SOP "sop"
 
@@ -2088,8 +2088,8 @@ static int __init sop_init(void)
 
 	sop_thread = kthread_run(sop_thread_proc, NULL, "sop");
 	if (IS_ERR(sop_thread)) {
-		pr_warn("SOP Init: Thread creation failed with %p!\n",
-				sop_thread);
+		pr_warn("%s Init: Thread creation failed with %p!\n",
+				DRIVER_NAME, sop_thread);
 		return PTR_ERR(sop_thread);
 	}
 
@@ -2112,7 +2112,7 @@ static int __init sop_init(void)
 	if (result)
 		goto create_fail_dbg_lvl;
 
-	pr_info("SOP driver initialized!\n");
+	pr_info("%s Initialized!\n", DRIVER_NAME);
 	return 0;
 
 create_fail_dbg_lvl:
@@ -2121,11 +2121,13 @@ create_fail:
 	pci_unregister_driver(&sop_pci_driver);
 
  register_fail:
-	pr_warn("SOP Init: PCI register failed with %d!\n", result);
+	pr_warn("%s Init: PCI register failed with %d!\n", DRIVER_NAME,
+		result);
 	unregister_blkdev(sop_major, SOP);
 
  blkdev_fail:
-	pr_warn("SOP Init: Blkdev register failed with %d!\n", result);
+	pr_warn("%s Init: Blkdev register failed with %d!\n", DRIVER_NAME,
+		result);
 	kthread_stop(sop_thread);
 	return result;
 
@@ -2138,7 +2140,7 @@ static void __exit sop_exit(void)
 	pci_unregister_driver(&sop_pci_driver);
 	unregister_blkdev(sop_major, SOP);
 	kthread_stop(sop_thread);
-	pr_info("%s: Driver unloaded\n", SOP);
+	pr_info("%s: Driver unloaded\n", DRIVER_NAME);
 }
 
 static inline struct sop_device *bdev_to_hba(struct block_device *bdev)
@@ -3825,7 +3827,7 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 
 	/* Mark Drive is being removed */
 	set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
-	dev_warn(&h->pdev->dev, "Aborting pending commands\n");
+	dev_warn(&h->pdev->dev, "Aborting any pending commands\n");
 
 	if ((h->flags & SOP_FLAGS_MASK_ADMIN_RDY)) {
 		spin_lock_irq(&q->oq->qlock);
