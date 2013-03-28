@@ -3161,7 +3161,7 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	int timeout, data_dir, rc;
 	unsigned long ul_timeout;
 	u8 sop_data_dir;
-	int iov_count, len;
+	int iov_count, len, read_only;
 	struct iovec *iov, *one_iovec = NULL;
 	struct sop_sync_cdb_req *scdb = NULL;
 	unsigned long start_time;
@@ -3226,7 +3226,11 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		rc = -EINVAL;
 		goto out;
 	}
-	/* FIXME check for read-only access violation here. */
+	read_only = (O_RDWR != (mode & O_ACCMODE));
+	if (read_only & blk_verify_command(scdb->cdb, mode & FMODE_WRITE)) {
+		rc = -EPERM;
+		goto out;
+	}
 
 	hp->status = 0;
 	hp->masked_status = 0;
