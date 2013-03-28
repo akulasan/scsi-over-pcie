@@ -3882,8 +3882,8 @@ static int sop_getgeo(struct block_device *bdev, struct hd_geometry *geo)
 	sector_t nsect = get_capacity(bdev->bd_disk);
 	sector_t cylinders = nsect;
 
-	geo->heads = 0xff;
-	geo->sectors = 0x3f;
+	geo->heads = 0x80;
+	geo->sectors = 0x40;
 	sector_div(cylinders, geo->heads * geo->sectors);
 	geo->cylinders = cylinders;
 	if ((sector_t) (geo->cylinders + 1) * geo->heads * geo->sectors < nsect)
