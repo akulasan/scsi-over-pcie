@@ -2988,6 +2988,7 @@ static int sop_get_disk_params(struct sop_device *h)
 	u32 *data;
 	int retry_count;
 	struct sop_sync_cdb_req sio;
+	sector_t size_mask;
 
 	/* 0. Allocate memory */
 	total_size = 1024;
@@ -3044,6 +3045,14 @@ sync_send_tur:
 	/* Process the Read Cap data */
 	h->capacity = be32_to_cpu(data[0]) + 1;
 	h->block_size = be32_to_cpu(data[1]);
+
+	/*
+	 * Make capacity at least multiple of PAGE_SIZE
+	 * Assumption: PAGE size is always a 2^index
+	 *	multiple of block size
+	 */
+	size_mask = (PAGE_SIZE / h->block_size) - 1;
+	h->capacity &= ~size_mask;
 
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
 	return 0;
