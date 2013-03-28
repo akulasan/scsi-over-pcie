@@ -405,7 +405,6 @@ struct sop_request {
 	u16 num_sg;
 	u8 tmo_slot;
 	u8 response[MAX_RESPONSE_SIZE];
-	unsigned short orig_bi_idx;
 };
 
 struct sop_sync_cdb_req {
