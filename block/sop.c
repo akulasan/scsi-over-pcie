@@ -273,6 +273,7 @@ static void free_sgl_area(struct sop_device *h, struct queue_info *q)
 				sizeof(struct pqi_sgl_descriptor);
 
 	kfree(q->sgl);
+	q->sgl = NULL;
 	if (!q->sg)
 		return;
 	pci_free_consistent(h->pdev, total_size, q->sg, q->sg_bus_addr);
@@ -413,6 +414,7 @@ static void pqi_iq_buffer_free(struct sop_device *h, struct queue_info *qinfo)
 {
 	free_q_request_buffers(qinfo);
 	kfree(qinfo->wq);
+	qinfo->wq = NULL;
 	free_sgl_area(h, qinfo);
 }
 
@@ -1685,8 +1687,11 @@ static void sop_free_io_queues(struct sop_device *h)
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		struct queue_info *qinfo = &h->qinfo[i];
 
-		pqi_device_queue_free(h, qinfo->iq);
-		pqi_device_queue_free(h, qinfo->oq);
+		if (qinfo->iq)
+			pqi_device_queue_free(h, qinfo->iq);
+		if (qinfo->oq)
+			pqi_device_queue_free(h, qinfo->oq);
+		qinfo->iq = qinfo->oq = NULL;
 		pqi_iq_buffer_free(h, qinfo);
 	}
 }
