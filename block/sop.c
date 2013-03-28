@@ -264,7 +264,7 @@ static int allocate_sgl_area(struct sop_device *h,
 	q->sg = pci_alloc_consistent(h->pdev, total_size, &q->sg_bus_addr);
 	q->sgl = kmalloc(q->qdepth * MAX_SGLS * sizeof(struct scatterlist),
 					GFP_KERNEL);
-	return (q->sg) ? 0 : -ENOMEM;
+	return ((q->sg) && (q->sgl)) ? 0 : -ENOMEM;
 }
 
 static void free_sgl_area(struct sop_device *h, struct queue_info *q)
