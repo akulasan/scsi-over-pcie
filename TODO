@@ -22,6 +22,8 @@
 
 - Add timing parameters in bio so that SOP appears under iostat.
 
-- Add support fopr SGIO retry on queue full.
+- Add support for SGIO retry on queue full.
+
+- Add code for shutdown/hibernation support.
 
 
