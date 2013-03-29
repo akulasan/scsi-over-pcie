@@ -247,6 +247,32 @@ static inline int safe_readq(__iomem void *sig, u64 *value,
 	return 0;
 }
 
+static void sop_start_io_acct(struct bio *bio)
+{
+	struct gendisk *disk = bio->bi_bdev->bd_disk;
+	const int rw = bio_data_dir(bio);
+	int cpu = part_stat_lock();
+
+	part_round_stats(cpu, &disk->part0);
+	part_stat_inc(cpu, &disk->part0, ios[rw]);
+	part_stat_add(cpu, &disk->part0, sectors[rw], bio_sectors(bio));
+	part_inc_in_flight(&disk->part0, rw);
+	part_stat_unlock();
+}
+
+static void sop_end_io_acct(struct bio *bio, unsigned long start_time)
+{
+	struct gendisk *disk = bio->bi_bdev->bd_disk;
+	int rw = bio_data_dir(bio);
+	unsigned long duration = jiffies - start_time;
+	int cpu = part_stat_lock();
+
+	part_stat_add(cpu, &disk->part0, ticks[rw], duration);
+	part_round_stats(cpu, &disk->part0);
+	part_dec_in_flight(&disk->part0, rw);
+	part_stat_unlock();
+}
+
 static void free_q_request_buffers(struct queue_info *q)
 {
 	kfree(q->request_bits);
@@ -1142,6 +1168,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 	int result;
 
 	sop_rem_timeout(qinfo, r->tmo_slot);
+	sop_end_io_acct(r->bio, r->start_time);
 	sgl = &qinfo->sgl[r->request_id * MAX_SGLS];
 
 	if (bio_data_dir(r->bio) == WRITE)
@@ -1419,6 +1446,7 @@ static u16 alloc_request(struct sop_device *h, u8 queue_pair_index)
 	u16 rc;
 
 	struct queue_info *qinfo = &h->qinfo[queue_pair_index];
+	struct sop_request *ser;
 
 	BUG_ON(qinfo->qdepth > MAX_CMDS);
 
@@ -1428,6 +1456,8 @@ static u16 alloc_request(struct sop_device *h, u8 queue_pair_index)
 		if (rc >= qinfo->qdepth-1)
 			return (u16) -EBUSY;
 	} while (test_and_set_bit((int) rc, qinfo->request_bits));
+	ser = &qinfo->request[rc];
+	ser->start_time = jiffies;
 
 	return rc;
 }
@@ -2556,6 +2586,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	r->xfer_size = cpu_to_le32(ser->xfer_size);
 	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
 
+	sop_start_io_acct(bio);
 	/* Submit it to the device */
 	writew(qinfo->iq->unposted_index, qinfo->iq->index.to_dev.pi);
 

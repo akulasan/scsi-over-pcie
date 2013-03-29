@@ -20,8 +20,6 @@
 
 - Support for adding the block device name to appear as bootable device in grub.
 
-- Add timing parameters in bio so that SOP appears under iostat.
-
 - Add support for SGIO retry on queue full.
 
 - Add code for shutdown/hibernation support.

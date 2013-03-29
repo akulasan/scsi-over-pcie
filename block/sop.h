@@ -404,6 +404,7 @@ struct sop_request {
 	u16 request_id;
 	u16 num_sg;
 	u8 tmo_slot;
+	unsigned long start_time;
 	u8 response[MAX_RESPONSE_SIZE];
 };
 
