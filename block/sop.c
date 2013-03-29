@@ -1437,13 +1437,17 @@ static void sop_free_irq(struct sop_device *h, int qinfo_ind)
 	free_irq(vector, &h->qinfo[qinfo_ind]);
 }
 
-static void sop_free_irqs_and_disable_msix(
-		struct sop_device *h)
+static void sop_free_io_irqs(struct sop_device *h)
 {
 	int i;
 
-	for (i = 0; i < h->nr_queue_pairs; i++)
+	for (i = 1; i < h->nr_queue_pairs; i++)
 		sop_free_irq(h, i);
+}
+
+static void sop_free_admin_irq_and_disable_msix(struct sop_device *h)
+{
+	sop_free_irq(h, 0);
 #ifdef CONFIG_PCI_MSI
 	if (h->intr_mode == INTR_MODE_MSIX && h->pdev->msix_enabled)
 		pci_disable_msix(h->pdev);
@@ -2121,8 +2125,9 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	h = pci_get_drvdata(pdev);
 	sop_fail_all_outstanding_io(h);
 	sop_remove_disk(h);
+	sop_free_io_irqs(h);
 	sop_delete_io_queues(h);
-	sop_free_irqs_and_disable_msix(h);
+	sop_free_admin_irq_and_disable_msix(h);
 	sop_delete_admin_queues(h);
 	if (h->pqireg)
 		iounmap(h->pqireg);
