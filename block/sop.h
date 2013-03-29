@@ -22,8 +22,9 @@
  *
  */
 
-#define MAX_SGLS (128)
-#define MAX_CMDS (1024)
+#define MAX_SGLS	(128)
+#define MAX_CMDS	(1024)
+#define MAX_CMDS_LOW	(64)
 
 struct sop_request;
 

@@ -1727,20 +1727,45 @@ static void sop_free_io_queues(struct sop_device *h)
 
 static int sop_setup_io_queue_pairs(struct sop_device *h)
 {
-	int i;
+	int i, err = 0;
 
 	/* From 1, not 0, to skip admin oq, which was already set up */
+allocate_queue_mem:
+	/* First allocate all the queues */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
-		if (pqi_device_queue_alloc(h, &h->qinfo[i].oq,
+		err = pqi_device_queue_alloc(h, &h->qinfo[i].oq,
 				h->elements_per_io_queue, IQ_IU_SIZE / 16,
-				PQI_DIR_FROM_DEVICE, i))
-			goto bail_out;
-		if (pqi_device_queue_alloc(h, &h->qinfo[i].iq,
+				PQI_DIR_FROM_DEVICE, i);
+		if (err)
+			break;
+		err = pqi_device_queue_alloc(h, &h->qinfo[i].iq,
 				h->elements_per_io_queue, OQ_IU_SIZE / 16,
-				PQI_DIR_TO_DEVICE, i))
+				PQI_DIR_TO_DEVICE, i);
+		if (err)
+			break;
+		err = pqi_iq_data_alloc(h, &h->qinfo[i]);
+		if (err)
+			break;
+	}
+	if (err) {
+		if (err != -ENOMEM)
 			goto bail_out;
-		if (pqi_iq_data_alloc(h, &h->qinfo[i]))
-			goto bail_out;
+
+		sop_free_io_queues(h);
+		/* Reduce parameters and retry */
+		if (h->elements_per_io_queue > MAX_CMDS_LOW) {
+			h->elements_per_io_queue /= 2;
+			dev_warn(&h->pdev->dev, "Reducing each qDepth to %d\n",
+				h->elements_per_io_queue);
+			goto allocate_queue_mem;
+		}
+
+		/* No Hope of allocating anything */
+		return -ENOMEM;
+	}
+
+	/* Now create all the queues with allocated buffers */
+	for (i = 1; i < h->nr_queue_pairs; i++) {
 		if (sop_create_io_queue(h, &h->qinfo[i], i,
 					PQI_DIR_FROM_DEVICE))
 			goto bail_out;
