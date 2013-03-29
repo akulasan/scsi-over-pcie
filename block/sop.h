@@ -311,7 +311,6 @@ struct queue_info {
 	struct pqi_device_queue *iq;
 	struct pqi_device_queue *oq;
 	struct pqi_sgl_descriptor *sg;
-	struct scatterlist *sgl;
 	dma_addr_t sg_bus_addr;
 	struct sop_wait_queue *wq;
 	struct sop_timeout tmo;
@@ -401,11 +400,12 @@ struct sop_device {
 struct sop_request {
 	struct completion *waiting;
 	struct bio *bio;
+	struct scatterlist *sgl;
 	u32 xfer_size;
 	u16 response_accumulated;
 	u16 request_id;
 	u16 num_sg;
-	u8 tmo_slot;
+	u16 tmo_slot;
 	unsigned long start_time;
 	u8 response[MAX_RESPONSE_SIZE];
 };

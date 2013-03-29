@@ -277,8 +277,14 @@ static void free_q_request_buffers(struct queue_info *q)
 {
 	kfree(q->request_bits);
 	q->request_bits = NULL;
-	kfree(q->request);
-	q->request = NULL;
+	if (q->request) {
+		int i;
+
+		for (i = 0; i < q->iq->nelements; i++)
+			kfree(q->request[i].sgl);
+		kfree(q->request);
+		q->request = NULL;
+	}
 }
 
 static int allocate_sgl_area(struct sop_device *h,
@@ -288,9 +294,7 @@ static int allocate_sgl_area(struct sop_device *h,
 				sizeof(struct pqi_sgl_descriptor);
 
 	q->sg = pci_alloc_consistent(h->pdev, total_size, &q->sg_bus_addr);
-	q->sgl = kmalloc(q->qdepth * h->max_sgls * sizeof(struct scatterlist),
-					GFP_KERNEL);
-	return ((q->sg) && (q->sgl)) ? 0 : -ENOMEM;
+	return (q->sg) ? 0 : -ENOMEM;
 }
 
 static void free_sgl_area(struct sop_device *h, struct queue_info *q)
@@ -298,26 +302,36 @@ static void free_sgl_area(struct sop_device *h, struct queue_info *q)
 	size_t total_size = q->qdepth * h->max_sgls *
 				sizeof(struct pqi_sgl_descriptor);
 
-	kfree(q->sgl);
-	q->sgl = NULL;
 	if (!q->sg)
 		return;
 	pci_free_consistent(h->pdev, total_size, q->sg, q->sg_bus_addr);
 	q->sg = NULL;
 }
 
-static int allocate_q_request_buffers(struct queue_info *q,
-	int nbuffers, int buffersize)
+static int allocate_q_request_buffers(struct queue_info *q, int nsgl)
 {
+	int nbuffers = q->iq->nelements;
+
 	BUG_ON(nbuffers > MAX_CMDS);
 	q->qdepth = nbuffers;
 	q->request_bits = kzalloc((BITS_TO_LONGS(nbuffers) + 1) *
 					sizeof(unsigned long), GFP_KERNEL);
 	if (!q->request_bits)
 		goto bailout;
-	q->request = kzalloc(buffersize * nbuffers, GFP_KERNEL);
+	q->request = kzalloc(sizeof(struct sop_request) * nbuffers,
+				GFP_KERNEL);
 	if (!q->request)
 		goto bailout;
+	if (nsgl) {
+		int i;
+
+		for (i = 0; i < nbuffers; i++) {
+			q->request[i].sgl = kmalloc(nsgl *
+				sizeof(struct scatterlist), GFP_KERNEL);
+			if (!q->request[i].sgl)
+				goto bailout;
+		}
+	}
 	return 0;
 
 bailout:
@@ -447,10 +461,8 @@ static void pqi_iq_buffer_free(struct sop_device *h, struct queue_info *qinfo)
 static int pqi_iq_data_alloc(struct sop_device *h, struct queue_info *qinfo)
 {
 	int queue_pair_index = qinfo_to_qid(qinfo);
-	int n_q_elements = qinfo->iq->nelements;
 
-	if (allocate_q_request_buffers(qinfo, n_q_elements,
-		sizeof(struct sop_request))) {
+	if (allocate_q_request_buffers(qinfo, h->max_sgls)) {
 		dev_warn(&h->pdev->dev, "Failed to alloc rq buffers #%d\n",
 			queue_pair_index);
 		goto bailout_iq;
@@ -834,9 +846,7 @@ static int __devinit sop_alloc_admin_queues(struct sop_device *h)
 	}
 
 	/* Allocate request buffers for admin queues */
-	if (allocate_q_request_buffers(&h->qinfo[0],
-				ADMIN_QUEUE_ELEMENT_COUNT,
-				sizeof(struct sop_request))) {
+	if (allocate_q_request_buffers(&h->qinfo[0], 0)) {
 		msg = "Failed to allocate admin request queue buffer";
 		goto bailout;
 	}
@@ -1169,7 +1179,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 
 	sop_rem_timeout(qinfo, r->tmo_slot);
 	sop_end_io_acct(r->bio, r->start_time);
-	sgl = &qinfo->sgl[r->request_id * h->max_sgls];
+	sgl = r->sgl;
 
 	if (bio_data_dir(r->bio) == WRITE)
 		dma_dir = DMA_TO_DEVICE;
@@ -1716,12 +1726,12 @@ static void sop_free_io_queues(struct sop_device *h)
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		struct queue_info *qinfo = &h->qinfo[i];
 
+		pqi_iq_buffer_free(h, qinfo);
 		if (qinfo->iq)
 			pqi_device_queue_free(h, qinfo->iq);
 		if (qinfo->oq)
 			pqi_device_queue_free(h, qinfo->oq);
 		qinfo->iq = qinfo->oq = NULL;
-		pqi_iq_buffer_free(h, qinfo);
 	}
 }
 
@@ -2568,8 +2578,8 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	r->queue_id = cpu_to_le16(qinfo->oq->queue_id);
 	r->work_area = 0;
 	r->request_id = request_id;
-	sgl = &qinfo->sgl[request_id * h->max_sgls];
 	ser = &qinfo->request[request_id];
+	sgl = ser->sgl;
 	ser->xfer_size = 0;
 	ser->bio = bio;
 	ser->waiting = NULL;
@@ -2889,7 +2899,7 @@ static int process_direct_cdb_response(struct sop_device *h,
 		struct scatterlist *sgl;
 		int i;
 
-		sgl = &qinfo->sgl[sopr->request_id * h->max_sgls];
+		sgl = sopr->sgl;
 		dma_unmap_sg(&h->pdev->dev, sgl, sopr->num_sg,
 				sio->data_dir);
 
@@ -2972,7 +2982,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	ser->request_id = request_id;
 	ser->bio = NULL;
 	ser->num_sg = 0;
-	sgl = &qinfo->sgl[request_id * h->max_sgls];
+	sgl = ser->sgl;
 	if (sio->data_dir != DMA_NONE) {
 		/* Prepare and fill the sg */
 		if (sio->iov_count > 0) {
