@@ -284,18 +284,18 @@ static void free_q_request_buffers(struct queue_info *q)
 static int allocate_sgl_area(struct sop_device *h,
 		struct queue_info *q)
 {
-	size_t total_size = q->qdepth * MAX_SGLS *
+	size_t total_size = q->qdepth * h->max_sgls *
 				sizeof(struct pqi_sgl_descriptor);
 
 	q->sg = pci_alloc_consistent(h->pdev, total_size, &q->sg_bus_addr);
-	q->sgl = kmalloc(q->qdepth * MAX_SGLS * sizeof(struct scatterlist),
+	q->sgl = kmalloc(q->qdepth * h->max_sgls * sizeof(struct scatterlist),
 					GFP_KERNEL);
 	return ((q->sg) && (q->sgl)) ? 0 : -ENOMEM;
 }
 
 static void free_sgl_area(struct sop_device *h, struct queue_info *q)
 {
-	size_t total_size = q->qdepth * MAX_SGLS *
+	size_t total_size = q->qdepth * h->max_sgls *
 				sizeof(struct pqi_sgl_descriptor);
 
 	kfree(q->sgl);
@@ -1169,7 +1169,7 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 
 	sop_rem_timeout(qinfo, r->tmo_slot);
 	sop_end_io_acct(r->bio, r->start_time);
-	sgl = &qinfo->sgl[r->request_id * MAX_SGLS];
+	sgl = &qinfo->sgl[r->request_id * h->max_sgls];
 
 	if (bio_data_dir(r->bio) == WRITE)
 		dma_dir = DMA_TO_DEVICE;
@@ -2038,6 +2038,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 
 	/* TODO: For now hard code it - Later get it from SOP Report General */
 	h->max_hw_sectors = 256;
+	h->max_sgls = MAX_SGLS;
 
 	rc = sop_setup_io_queue_pairs(h);
 	if (rc) {
@@ -2298,7 +2299,8 @@ static int sop_prepare_cdb(u8 *cdb, struct bio *bio)
 
 /* Returns the numbers of sg prepared in sgl */
 static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
-					struct scatterlist  *sgl)
+					struct scatterlist  *sgl,
+					int max_sgl)
 {
 	int i, j, nsegs, count, err;
 	int iov_count, write;
@@ -2306,7 +2308,7 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 	struct scatterlist *cur_sg = NULL;
 	struct page **page_map;
 
-	page_map = kcalloc(MAX_SGLS, sizeof(*page_map), GFP_KERNEL);
+	page_map = kcalloc(max_sgl, sizeof(*page_map), GFP_KERNEL);
 	if (!page_map)
 		return -ENOMEM;
 
@@ -2336,7 +2338,7 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 		count = DIV_ROUND_UP(offset + len, PAGE_SIZE);
 
 		/* Check the sgl size limit */
-		if (nsegs + count >= MAX_SGLS)
+		if (nsegs + count >= max_sgl)
 			break;
 
 		err = get_user_pages_fast(addr, count, write, page_map);
@@ -2514,7 +2516,7 @@ static int sop_scatter_gather(struct sop_device *h,
 	static const u16 no_sgl_size =
 			(u16) (sizeof(*r) - sizeof(r->sg[0]) * 2) - 4;
 
-	BUG_ON(num_sg > MAX_SGLS);
+	BUG_ON(num_sg > h->max_sgls);
 
 	if (num_sg < 3) {
 		fill_inline_sg_list(r, sgl, num_sg, xfer_size);
@@ -2523,7 +2525,7 @@ static int sop_scatter_gather(struct sop_device *h,
 
 	*xfer_size = 0;
 	datasg = &r->sg[0];
-	sg_block_number = r->request_id * MAX_SGLS;
+	sg_block_number = r->request_id * h->max_sgls;
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * 2);
 
 	for (i = 0; i < num_sg; i++) {
@@ -2566,7 +2568,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	r->queue_id = cpu_to_le16(qinfo->oq->queue_id);
 	r->work_area = 0;
 	r->request_id = request_id;
-	sgl = &qinfo->sgl[request_id * MAX_SGLS];
+	sgl = &qinfo->sgl[request_id * h->max_sgls];
 	ser = &qinfo->request[request_id];
 	ser->xfer_size = 0;
 	ser->bio = bio;
@@ -2887,7 +2889,7 @@ static int process_direct_cdb_response(struct sop_device *h,
 		struct scatterlist *sgl;
 		int i;
 
-		sgl = &qinfo->sgl[sopr->request_id * MAX_SGLS];
+		sgl = &qinfo->sgl[sopr->request_id * h->max_sgls];
 		dma_unmap_sg(&h->pdev->dev, sgl, sopr->num_sg,
 				sio->data_dir);
 
@@ -2933,12 +2935,14 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	if (sio->data_dir != DMA_NONE && sio->iov_count > 0) {
 		/* allocate a temporary sgl buffer */
 		retval = -ENOMEM;
-		sgl_buffer = kcalloc(MAX_SGLS, sizeof(*sgl_buffer), GFP_KERNEL);
+		sgl_buffer = kcalloc(h->max_sgls, sizeof(*sgl_buffer),
+					GFP_KERNEL);
 		if (!sgl_buffer)
 			goto sync_error;
 
 		/* Prepare the sgl from iov */
-		retval = sop_get_sync_cdb_scatterlist(sio, sgl_buffer);
+		retval = sop_get_sync_cdb_scatterlist(sio, sgl_buffer,
+							h->max_sgls);
 		if (retval <= 0)
 			goto sync_error;
 
@@ -2968,12 +2972,12 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	ser->request_id = request_id;
 	ser->bio = NULL;
 	ser->num_sg = 0;
-	sgl = &qinfo->sgl[request_id * MAX_SGLS];
+	sgl = &qinfo->sgl[request_id * h->max_sgls];
 	if (sio->data_dir != DMA_NONE) {
 		/* Prepare and fill the sg */
 		if (sio->iov_count > 0) {
 			/* Copy and free the temporary sgl buffer */
-			memcpy(sgl, sgl_buffer, sizeof(*sgl) * MAX_SGLS);
+			memcpy(sgl, sgl_buffer, sizeof(*sgl) * h->max_sgls);
 			kfree(sgl_buffer);
 
 			ser->num_sg = nsegs;
@@ -3166,7 +3170,7 @@ static int sop_add_disk(struct sop_device *h)
 	/* Set driver specific parameters */
 	if (h->max_hw_sectors)
 		blk_queue_max_hw_sectors(rq, h->max_hw_sectors);
-	blk_queue_max_segments(rq, MAX_SGLS);
+	blk_queue_max_segments(rq, h->max_sgls);
 
 	/* Set the rest of parmeters by reading from disk */
 	sop_revalidate(disk);

@@ -383,6 +383,7 @@ struct sop_device {
 	struct gendisk *disk;
 	int max_hw_sectors;
 	int elements_per_io_queue;
+	int max_sgls;
 	struct pqi_device_capability_info devcap;
 };
 
