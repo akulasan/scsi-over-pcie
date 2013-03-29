@@ -2011,6 +2011,9 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail_admin_irq;
 	}
 
+	/* TODO: For now hard code it - Later get it from SOP Report General */
+	h->max_hw_sectors = 256;
+
 	rc = sop_setup_io_queue_pairs(h);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "Bailing out in probe - Creating i/o queues\n");
@@ -3135,7 +3138,6 @@ static int sop_add_disk(struct sop_device *h)
 	disk->driverfs_dev = &h->pdev->dev;
 	strcpy(disk->disk_name, h->devname);
 
-	h->max_hw_sectors = 2048;	/* TODO: For now hard code it */
 	/* Set driver specific parameters */
 	if (h->max_hw_sectors)
 		blk_queue_max_hw_sectors(rq, h->max_hw_sectors);
