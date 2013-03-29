@@ -1731,10 +1731,8 @@ static void sop_free_io_queues(struct sop_device *h)
 		struct queue_info *qinfo = &h->qinfo[i];
 
 		pqi_iq_buffer_free(h, qinfo);
-		if (qinfo->iq)
-			pqi_device_queue_free(h, qinfo->iq);
-		if (qinfo->oq)
-			pqi_device_queue_free(h, qinfo->oq);
+		pqi_device_queue_free(h, qinfo->iq);
+		pqi_device_queue_free(h, qinfo->oq);
 		qinfo->iq = qinfo->oq = NULL;
 	}
 }
