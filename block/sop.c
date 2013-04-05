@@ -1674,6 +1674,81 @@ out:
 	return rc;
 }
 
+static int fill_report_general(struct sop_device *h,
+				struct report_general_iu *r,
+				u16 request_id, void *buffer, u32 buffersize)
+{
+	u64 busaddr;
+
+	memset(r, 0, sizeof(*r));
+	r->iu_type = REPORT_GENERAL_IU;
+	r->compatible_features = 0;
+	r->iu_length = cpu_to_le16(sizeof(*r));
+	r->response_oq = 0;
+	r->work_area = 0;
+	r->request_id = request_id;
+	r->buffer_size = cpu_to_le32(buffersize);
+	busaddr = pci_map_single(h->pdev, buffer, buffersize,
+					PCI_DMA_FROMDEVICE);
+	if (dma_mapping_error(&h->pdev->dev, busaddr))
+		return -ENOMEM;
+	r->sg.address = cpu_to_le64(busaddr);
+	r->sg.length = cpu_to_le32(buffersize);
+	r->sg.descriptor_type = PQI_SGL_DATA_BLOCK;
+	return 0;
+}
+
+static int sop_report_general(struct sop_device *h)
+{
+	struct report_general_iu *r;
+	struct report_general_response *buffer;
+	struct management_response_iu *resp;
+	struct pqi_device_queue *aq = h->qinfo[0].iq;
+	u16 request_id = (u16) -EBUSY;
+	u64 busaddr;
+	int rc;
+
+	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
+	if (!buffer)
+		return -ENOMEM;
+	r = pqi_alloc_elements(aq, 1);
+	if (IS_ERR(r)) {
+		rc = PTR_ERR(sop_thread);
+		goto out;
+	}
+	request_id = alloc_request(h, 0);
+	if (request_id == (u16) -EBUSY) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	if (fill_report_general(h, r, request_id, buffer,
+						(u32) sizeof(*buffer))) {
+		rc = -ENOMEM;
+		goto out;
+	}
+	send_admin_command(h, request_id);
+	busaddr = le64_to_cpu(r->sg.address);
+	pci_unmap_single(h->pdev, busaddr, sizeof(*buffer),
+						PCI_DMA_FROMDEVICE);
+	resp = (struct management_response_iu *)
+			h->qinfo[0].request[request_id].response;
+	if (resp->iu_type != MANAGEMENT_RESPONSE_IU ||
+			resp->result != MGMT_RSP_RSLT_GOOD) {
+		rc = 0;
+		goto out;
+	}
+	free_request(h, 0, request_id);
+	/* do something with the information in buffer here. */
+	kfree(buffer);
+	return 0;
+out:
+	dev_warn(&h->pdev->dev, "REPORT GENERAL failed\n");
+	if (request_id != (u16) -EBUSY)
+		free_request(h, 0, request_id);
+	kfree(buffer);
+	return rc;
+}
+
 static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
 				struct sop_request *sopr)
 {
@@ -4271,17 +4346,17 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(iu_type, 0);
 	VERIFY_OFFSET(compatible_features, 1);
 	VERIFY_OFFSET(iu_length, 2);
-	VERIFY_OFFSET(queue_id, 4);
+	VERIFY_OFFSET(response_oq, 4);
 	VERIFY_OFFSET(work_area, 6);
 	VERIFY_OFFSET(request_id, 8);
 	VERIFY_OFFSET(reserved, 10);
-	VERIFY_OFFSET(allocation_length, 12);
+	VERIFY_OFFSET(buffer_size, 12);
 	VERIFY_OFFSET(reserved2, 16);
-	VERIFY_OFFSET(data_in, 32);
+	VERIFY_OFFSET(sg, 32);
 #undef VERIFY_OFFSET
 
 #define VERIFY_OFFSET(field, offset) \
-	BUILD_BUG_ON(offsetof(struct report_general_response_iu, \
+	BUILD_BUG_ON(offsetof(struct report_general_response, \
 				 field) != offset)
 		VERIFY_OFFSET(reserved, 0);
 		VERIFY_OFFSET(lun_bridge_present_flags, 4);

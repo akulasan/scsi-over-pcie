@@ -583,18 +583,18 @@ struct report_general_iu {
 #define REPORT_GENERAL_IU 0x01
 	u8 compatible_features;
 	u16 iu_length;
-	u16 queue_id;
+	u16 response_oq;
 	u16 work_area;
 	u16 request_id;
 	u16 reserved;
-	u32 allocation_length;
+	u32 buffer_size;
 	u8 reserved2[16];
-	u8 data_in[0]; /* if any */
+	struct pqi_sgl_descriptor sg;
 };
 #pragma pack()
 
 #pragma pack(1)
-struct report_general_response_iu {
+struct report_general_response {
 	u8 reserved[4];
 	u8 lun_bridge_present_flags;
 #define SOP_TARGET_BRIDGE_PRESENT 0x01
@@ -619,6 +619,7 @@ struct report_general_response_iu {
 #pragma pack(1)
 struct management_response_iu {
 	u8 iu_type;
+#define MANAGEMENT_RESPONSE_IU 0x81
 	u8 compatible_features;
 	u16 iu_length;
 	u16 queue_id;
