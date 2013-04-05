@@ -1070,7 +1070,8 @@ static int sop_response_accumulated(struct sop_request *r)
 
 	if (r->response_accumulated == 0)
 		return 0;
-	iu_length = le16_to_cpu(*(u16 *) &r->response[2]) + 4;
+	iu_length = le16_to_cpu(*(u16 *) &r->response[2]) +
+					PQI_IU_HEADER_SIZE;
 	return (r->response_accumulated >= iu_length);
 }
 
@@ -1512,7 +1513,7 @@ static void fill_create_io_queue_request(struct sop_device *h,
 
 	memset(r, 0, sizeof(*r));
 	r->iu_type = OPERATIONAL_QUEUE_IU_TYPE;
-	r->iu_length = cpu_to_le16(0x003c);
+	r->iu_length = cpu_to_le16(sizeof(*r) - PQI_IU_HEADER_SIZE);
 	r->response_oq = 0;
 	r->request_id = request_id;
 	r->function_code = function_code;
@@ -1544,7 +1545,7 @@ static void fill_delete_io_queue_request(struct sop_device *h,
 
 	memset(r, 0, sizeof(*r));
 	r->iu_type = OPERATIONAL_QUEUE_IU_TYPE;
-	r->iu_length = cpu_to_le16(0x003c);
+	r->iu_length = cpu_to_le16(sizeof(*r) - PQI_IU_HEADER_SIZE);
 	r->request_id = request_id;
 	r->function_code = function_code;
 	r->queue_id = cpu_to_le16(queue_id);
@@ -1575,7 +1576,7 @@ static int fill_get_pqi_device_capabilities(struct sop_device *h,
 	memset(r, 0, sizeof(*r));
 	r->iu_type = REPORT_PQI_DEVICE_CAPABILITY;
 	r->compatible_features = 0;
-	r->iu_length = cpu_to_le16(0x003C);
+	r->iu_length = cpu_to_le16(sizeof(*r) - PQI_IU_HEADER_SIZE);
 	r->response_oq = 0;
 	r->work_area = 0;
 	r->request_id = request_id;
@@ -1683,7 +1684,7 @@ static int fill_report_general(struct sop_device *h,
 	memset(r, 0, sizeof(*r));
 	r->iu_type = REPORT_GENERAL_IU;
 	r->compatible_features = 0;
-	r->iu_length = cpu_to_le16(sizeof(*r));
+	r->iu_length = cpu_to_le16(sizeof(*r) - PQI_IU_HEADER_SIZE);
 	r->response_oq = 0;
 	r->work_area = 0;
 	r->request_id = request_id;
@@ -2646,8 +2647,8 @@ static void fill_inline_sg_list(struct sop_limited_cmd_iu *r,
 {
 	struct pqi_sgl_descriptor *datasg;
 	int i;
-	static const u16 no_sgl_size =
-			(u16) (sizeof(*r) - sizeof(r->sg[0]) * 2) - 4;
+	static const u16 no_sgl_size = (u16) (sizeof(*r) -
+			sizeof(r->sg[0]) * 2) - PQI_IU_HEADER_SIZE;
 	BUILD_BUG_ON(sizeof(*r) != 64);
 	BUILD_BUG_ON((sizeof(r->sg[0]) != (16)));
 	BUILD_BUG_ON((sizeof(*r) - sizeof(r->sg[0]) * 2) != 32);
@@ -2677,8 +2678,8 @@ static int sop_scatter_gather(struct sop_device *h,
 	int sg_block_number;
 	int i;
 	struct pqi_sgl_descriptor *datasg;
-	static const u16 no_sgl_size =
-			(u16) (sizeof(*r) - sizeof(r->sg[0]) * 2) - 4;
+	static const u16 no_sgl_size = (u16) (sizeof(*r) -
+			sizeof(r->sg[0]) * 2) - PQI_IU_HEADER_SIZE;
 
 	BUG_ON(num_sg > h->max_sgls);
 

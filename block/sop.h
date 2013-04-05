@@ -137,6 +137,8 @@ struct pqi_iq_extra_params {
 	u8 reserved[10];
 };
 
+#define PQI_IU_HEADER_SIZE	4
+
 struct pqi_create_operational_queue_request {
 	u8 iu_type;
 #define OPERATIONAL_QUEUE_IU_TYPE 0x60
@@ -189,7 +191,7 @@ struct pqi_delete_operational_queue_request {
 	u8 function_code;
 	u8 reserved2;
 	u16 queue_id;
-	u8 reserved3[37];
+	u8 reserved3[50];
 };
 
 struct pqi_delete_operational_queue_response {
