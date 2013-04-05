@@ -1698,6 +1698,30 @@ static int fill_report_general(struct sop_device *h,
 	return 0;
 }
 
+static void sop_examine_report_general_results(struct sop_device *h,
+			struct report_general_response *rg)
+{
+	dev_warn(&h->pdev->dev, "target bridge present: %s\n",
+			rg->lun_bridge_present_flags &
+				SOP_TARGET_BRIDGE_PRESENT ?
+				"yes" : "no");
+	dev_warn(&h->pdev->dev, "logical units present: %s\n",
+			rg->lun_bridge_present_flags &
+				LOGICAL_UNITS_PRESENT ?
+				"yes" : "no");
+
+	dev_warn(&h->pdev->dev, "application clients present: %s\n",
+			rg->app_clients_present_flags &
+					SOP_APPLICATION_CLIENTS_PRESENT ?
+				"yes" : "no");
+	dev_warn(&h->pdev->dev, "max incoming IU size: %hu\n",
+			rg->max_incoming_iu_size);
+	dev_warn(&h->pdev->dev, "max incoming embedded data buffers: %hu\n",
+			rg->max_incoming_embedded_data_buffers);
+	dev_warn(&h->pdev->dev, "max_data_buffers: %hu\n",
+			rg->max_data_buffers);
+}
+
 static int sop_report_general(struct sop_device *h)
 {
 	struct report_general_iu *r;
@@ -1738,7 +1762,7 @@ static int sop_report_general(struct sop_device *h)
 		goto out;
 	}
 	free_request(h, 0, request_id);
-	/* do something with the information in buffer here. */
+	sop_examine_report_general_results(h, buffer);
 	kfree(buffer);
 	return 0;
 out:
