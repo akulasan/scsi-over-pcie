@@ -1725,16 +1725,21 @@ static void sop_examine_report_general_results(struct sop_device *h,
 	if ((rg->max_data_buffers) && (rg->max_data_buffers < MAX_SGLS))
 		h->max_sgls = rg->max_data_buffers;
 }
+static inline int find_sop_queue(struct sop_device *h, int cpu);
+static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
+				struct sop_request *sopr);
 
 static int sop_report_general(struct sop_device *h)
 {
 	struct report_general_iu *r;
 	struct report_general_response *buffer;
 	struct management_response_iu *resp;
-	struct pqi_device_queue *aq = h->qinfo[0].iq;
+	int queue_pair_index;
+	struct queue_info *qinfo;
+	struct sop_request *ser;
 	u16 request_id = (u16) -EBUSY;
 	u64 busaddr;
-	int rc;
+	int cpu, rc;
 
 	/* Initialize the field, irrespective of outcome of this call */
 	h->max_sgls = MAX_SGLS;
@@ -1743,40 +1748,63 @@ static int sop_report_general(struct sop_device *h)
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
-	r = pqi_alloc_elements(aq, 1);
+
+	cpu = get_cpu();
+	queue_pair_index = find_sop_queue(h, cpu);
+	qinfo = &h->qinfo[queue_pair_index];
+	request_id = alloc_request(h, queue_pair_index);
+	if (request_id == (u16) -EBUSY) {
+		if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT))
+			dev_warn(&h->pdev->dev,
+				"%s: Failed to allocate request\n", __func__);
+		rc = -ENOMEM;
+		goto rep_gen_alloc_req_fail;
+	}
+	r = pqi_alloc_elements(qinfo->iq, 1);
 	if (IS_ERR(r)) {
 		rc = PTR_ERR(sop_thread);
-		goto out;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_EXTRA_WARN))
+			dev_warn(&h->pdev->dev,
+			"SUBQ[%d] pqi_alloc_elements for REP_GEN returned %ld\n",
+			queue_pair_index, PTR_ERR(r));
+		goto rep_gen_alloc_elm_fail;
 	}
-	request_id = alloc_request(h, 0);
-	if (request_id == (u16) -EBUSY) {
-		rc = -ENOMEM;
-		goto out;
-	}
+	ser = &qinfo->request[request_id];
+	/* Init fields of sop request context */
+	ser->request_id = request_id;
+	ser->bio = NULL;
+	ser->num_sg = 0;
 	if (fill_report_general(h, r, request_id, buffer,
 						(u32) sizeof(*buffer))) {
 		rc = -ENOMEM;
-		goto out;
+		goto rep_gen_prep_fail;
 	}
-	send_admin_command(h, request_id);
+	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
+	send_sop_command(h, qinfo, ser);
+	sop_rem_timeout(qinfo, ser->tmo_slot);
 	busaddr = le64_to_cpu(r->sg.address);
 	pci_unmap_single(h->pdev, busaddr, sizeof(*buffer),
 						PCI_DMA_FROMDEVICE);
 	resp = (struct management_response_iu *)
-			h->qinfo[0].request[request_id].response;
+			qinfo->request[request_id].response;
 	if (resp->iu_type != MANAGEMENT_RESPONSE_IU ||
 			resp->result != MGMT_RSP_RSLT_GOOD) {
 		rc = 0;
-		goto out;
+		goto rep_gen_issue_fail;
 	}
-	free_request(h, 0, request_id);
+	free_request(h, queue_pair_index, request_id);
 	sop_examine_report_general_results(h, buffer);
 	kfree(buffer);
 	return 0;
-out:
+
+rep_gen_prep_fail:
+	pqi_unalloc_elements(qinfo->iq, 1);
+rep_gen_alloc_elm_fail:
+	free_request(h, queue_pair_index, request_id);
+rep_gen_alloc_req_fail:
+	put_cpu();
+rep_gen_issue_fail:
 	dev_warn(&h->pdev->dev, "REPORT GENERAL failed\n");
-	if (request_id != (u16) -EBUSY)
-		free_request(h, 0, request_id);
 	kfree(buffer);
 	return rc;
 }
@@ -2169,15 +2197,14 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 			"Bailing out in probe - getting pqi device capabilities\n");
 		goto bail_admin_irq;
 	}
-
-	rc = sop_report_general(h);
-	if (rc) {
-		dev_warn(&h->pdev->dev, "Bailing out in probe - REPORT GENERAL failed.\n");
-		goto bail_admin_irq;
-	}
 	rc = sop_setup_io_queue_pairs(h);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "Bailing out in probe - Creating i/o queues\n");
+		goto bail_admin_irq;
+	}
+	rc = sop_report_general(h);
+	if (rc) {
+		dev_warn(&h->pdev->dev, "Bailing out in probe - REPORT GENERAL failed.\n");
 		goto bail_admin_irq;
 	}
 
