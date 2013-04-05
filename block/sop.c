@@ -2170,7 +2170,6 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail_admin_irq;
 	}
 
-	h->max_hw_sectors = 256;
 	rc = sop_report_general(h);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "Bailing out in probe - REPORT GENERAL failed.\n");
@@ -3306,8 +3305,7 @@ static int sop_add_disk(struct sop_device *h)
 	strcpy(disk->disk_name, h->devname);
 
 	/* Set driver specific parameters */
-	if (h->max_hw_sectors)
-		blk_queue_max_hw_sectors(rq, h->max_hw_sectors);
+	blk_queue_max_hw_sectors(rq, 0x100);	/* TODO: remove this line */
 	blk_queue_max_segments(rq, h->max_sgls);
 
 	/* Set the rest of parmeters by reading from disk */
@@ -3422,7 +3420,8 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		goto out;
 	}
 
-	if (hp->dxfer_len / 512 > h->max_hw_sectors) {
+	/* TODO: remove this check */
+	if (hp->dxfer_len / 512 > 0x100) {
 		rc = -EINVAL;
 		goto out;
 	}
