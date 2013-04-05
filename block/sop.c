@@ -305,7 +305,7 @@ static void free_q_request_buffers(struct queue_info *q)
 static int allocate_sgl_area(struct sop_device *h,
 		struct queue_info *q)
 {
-	size_t total_size = q->qdepth * h->max_sgls *
+	size_t total_size = q->qdepth * MAX_SGLS *
 				sizeof(struct pqi_sgl_descriptor);
 
 	q->sg = pci_alloc_consistent(h->pdev, total_size, &q->sg_bus_addr);
@@ -314,7 +314,7 @@ static int allocate_sgl_area(struct sop_device *h,
 
 static void free_sgl_area(struct sop_device *h, struct queue_info *q)
 {
-	size_t total_size = q->qdepth * h->max_sgls *
+	size_t total_size = q->qdepth * MAX_SGLS *
 				sizeof(struct pqi_sgl_descriptor);
 
 	if (!q->sg)
@@ -477,7 +477,7 @@ static int pqi_iq_data_alloc(struct sop_device *h, struct queue_info *qinfo)
 {
 	int queue_pair_index = qinfo_to_qid(qinfo);
 
-	if (allocate_q_request_buffers(qinfo, h->max_sgls)) {
+	if (allocate_q_request_buffers(qinfo, MAX_SGLS)) {
 		dev_warn(&h->pdev->dev, "Failed to alloc rq buffers #%d\n",
 			queue_pair_index);
 		goto bailout_iq;
