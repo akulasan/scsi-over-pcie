@@ -1720,6 +1720,10 @@ static void sop_examine_report_general_results(struct sop_device *h,
 			rg->max_incoming_embedded_data_buffers);
 	dev_warn(&h->pdev->dev, "max_data_buffers: %hu\n",
 			rg->max_data_buffers);
+
+	/* Update max_sgl from parameters read */
+	if ((rg->max_data_buffers) && (rg->max_data_buffers < MAX_SGLS))
+		h->max_sgls = rg->max_data_buffers;
 }
 
 static int sop_report_general(struct sop_device *h)
@@ -1732,6 +1736,10 @@ static int sop_report_general(struct sop_device *h)
 	u64 busaddr;
 	int rc;
 
+	/* Initialize the field, irrespective of outcome of this call */
+	h->max_sgls = MAX_SGLS;
+
+	/* Start with allocation for the call */
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
@@ -2162,10 +2170,12 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail_admin_irq;
 	}
 
-	/* TODO: For now hard code it - Later get it from SOP Report General */
 	h->max_hw_sectors = 256;
-	h->max_sgls = MAX_SGLS;
-
+	rc = sop_report_general(h);
+	if (rc) {
+		dev_warn(&h->pdev->dev, "Bailing out in probe - REPORT GENERAL failed.\n");
+		goto bail_admin_irq;
+	}
 	rc = sop_setup_io_queue_pairs(h);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "Bailing out in probe - Creating i/o queues\n");
