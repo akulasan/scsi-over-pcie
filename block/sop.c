@@ -3954,9 +3954,13 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 
 static int sop_revalidate(struct gendisk *disk)
 {
-	struct sop_device *h = disk->private_data;
+	struct sop_device *h;
 	int ret;
 
+	if (!disk)
+		return -1;
+
+	h = disk->private_data;
 	if (!h)
 		return -1;
 
