@@ -3322,6 +3322,10 @@ sync_send_tur:
 		max_unmap_lba_count = 0;
 		max_unmap_blk_desc_count = 0;
 	}
+	if (max_xfer_len)
+		h->max_hw_sectors = max_xfer_len;
+	else
+		h->max_hw_sectors = BLK_SAFE_MAX_SECTORS;
 
 	retry_count = 0;
 
@@ -3375,7 +3379,6 @@ static int sop_add_disk(struct sop_device *h)
 	strcpy(disk->disk_name, h->devname);
 
 	/* Set driver specific parameters */
-	blk_queue_max_hw_sectors(rq, 0x100);	/* TODO: remove this line */
 	blk_queue_max_segments(rq, h->max_sgls);
 
 	/* Set the rest of parmeters by reading from disk */
@@ -3490,8 +3493,7 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		goto out;
 	}
 
-	/* TODO: remove this check */
-	if (hp->dxfer_len / 512 > 0x100) {
+	if (hp->dxfer_len / 512 > h->max_hw_sectors) {
 		rc = -EINVAL;
 		goto out;
 	}
@@ -4151,6 +4153,7 @@ static int sop_revalidate(struct gendisk *disk)
 	/* Set the current values to block device */
 	set_capacity(disk, h->capacity);
 	blk_queue_logical_block_size(h->rq, h->block_size);
+	blk_queue_max_hw_sectors(h->rq, h->max_hw_sectors);
 	return 0;
 }
 
