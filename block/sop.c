@@ -2852,9 +2852,8 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 
 static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 		u16 queue_id, u16 request_id, char *cdb,
-		int data_len, int dma_dir)
+		int cdb_len, int data_len, int dma_dir)
 {
-	int cdb_len;
 	u8 data_dir = sop_convert_dma_dir(dma_dir);
 
 	/* Prepare the entry for SOP */
@@ -2865,7 +2864,6 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 	r->request_id = request_id;
 
 	/* Prepare the CDB */
-	cdb_len = COMMAND_SIZE(cdb[0]);
 	memcpy(r->cdb, cdb, cdb_len);
 
 	r->flags = data_dir;
@@ -3168,7 +3166,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 
 	/* Fill the rest of sop request */
 	fill_send_cdb_request(r, qpindex_to_qid(queue_pair_index, 0),
-				request_id, sio->cdb,
+				request_id, sio->cdb, sio->cdblen,
 				ser->xfer_size, sio->data_dir);
 
 	ser->tmo_slot = sop_add_timeout(qinfo, sio->timeout);
@@ -3248,6 +3246,7 @@ static int sop_get_disk_params(struct sop_device *h)
 	sio.data_len = 36;
 	sio.cdb[0] = INQUIRY;		/* Rest all remains 0 */
 	sio.cdb[4] = sio.data_len;
+	sio.cdblen = COMMAND_SIZE(INQUIRY);
 	sio.data_dir = DMA_FROM_DEVICE;
 	ret = send_sync_cdb(h, &sio, phy_addr);
 	if (ret != 0)
@@ -3258,6 +3257,7 @@ sync_send_tur:
 	/* 1. send TUR */
 	memset(sio.cdb, 0, MAX_CDB_SIZE);
 	sio.cdb[0] = TEST_UNIT_READY;
+	sio.cdblen = COMMAND_SIZE(TEST_UNIT_READY);
 	sio.data_dir = DMA_NONE;
 	ret = send_sync_cdb(h, &sio, 0);
 	if (ret && (sio.scsi_status == SAM_STAT_CHECK_CONDITION) &&
@@ -3279,6 +3279,7 @@ sync_send_tur:
 	/* 2. Send Read Capacity */
 	memset(sio.cdb, 0, MAX_CDB_SIZE);
 	sio.cdb[0] = READ_CAPACITY;		/* Rest all remains 0 */
+	sio.cdblen = COMMAND_SIZE(READ_CAPACITY);
 	sio.data_len = 2 * sizeof(u32);
 	sio.data_dir = DMA_FROM_DEVICE;
 	ret = send_sync_cdb(h, &sio, phy_addr);
@@ -3303,6 +3304,7 @@ sync_send_tur:
 	sio.cdb[1] = 0x01; /* EVPD */
 	sio.cdb[2] = 0xb0; /* block limits page */
 	sio.cdb[4] = sio.data_len;
+	sio.cdblen = COMMAND_SIZE(INQUIRY);
 	sio.data_dir = DMA_FROM_DEVICE;
 	ret = send_sync_cdb(h, &sio, phy_addr);
 	if (ret == 0) {
