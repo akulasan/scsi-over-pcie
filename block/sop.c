@@ -3207,6 +3207,14 @@ sync_error:
 #define	IO_SLEEP_INTERVAL_MAX	2500
 #define TUR_MAX_RETRY_COUNT	10
 
+static inline u32 extract_be32(unsigned char *buff, int offset)
+{
+	u32 value;
+
+	memcpy(&value, &buff[offset], sizeof(u32));
+	return be32_to_cpu(value);
+}
+
 #define	MAX_CDB_SIZE	16
 static int sop_get_disk_params(struct sop_device *h)
 {
@@ -3218,6 +3226,12 @@ static int sop_get_disk_params(struct sop_device *h)
 	int retry_count;
 	struct sop_sync_cdb_req sio;
 	sector_t size_mask;
+	u32 opt_xfer_len_granularity;
+	u32 max_xfer_len;
+	u32 opt_xfer_len;
+	u32 max_prefetch_xdrdwr_xfer_len;
+	u32 max_unmap_lba_count;
+	u32 max_unmap_blk_desc_count;
 
 	/* 0. Allocate memory */
 	total_size = 1024;
@@ -3282,6 +3296,34 @@ sync_send_tur:
 	 */
 	size_mask = (PAGE_SIZE / h->block_size) - 1;
 	h->capacity &= ~size_mask;
+
+	/* 3. Get inquiry vpd page 0xb0 -- block limits */
+	sio.data_len = 36;
+	sio.cdb[0] = INQUIRY;		/* Rest all remains 0 */
+	sio.cdb[1] = 0x01; /* EVPD */
+	sio.cdb[2] = 0xb0; /* block limits page */
+	sio.cdb[4] = sio.data_len;
+	sio.data_dir = DMA_FROM_DEVICE;
+	ret = send_sync_cdb(h, &sio, phy_addr);
+	if (ret == 0) {
+		unsigned char *buf = vaddr;
+
+		opt_xfer_len_granularity = (buf[6] << 8) | buf[7];
+		max_xfer_len = extract_be32(buf, 8);
+		opt_xfer_len = extract_be32(buf, 12);
+		max_prefetch_xdrdwr_xfer_len = extract_be32(buf, 16);
+		max_unmap_lba_count = extract_be32(buf, 20);
+		max_unmap_blk_desc_count = extract_be32(buf, 24);
+	} else {
+		opt_xfer_len_granularity = 0;
+		max_xfer_len = BLK_SAFE_MAX_SECTORS;
+		opt_xfer_len = 8;
+		max_prefetch_xdrdwr_xfer_len = 0;
+		max_unmap_lba_count = 0;
+		max_unmap_blk_desc_count = 0;
+	}
+
+	retry_count = 0;
 
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
 	return 0;
