@@ -2872,6 +2872,19 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 	r->xfer_size = data_len;
 }
 
+static int sop_copy_sgio_sense_data(sg_io_hdr_t *hdr, 
+	struct sop_cmd_response *scr, u16 sense_data_len)
+{
+	if (!hdr->sbp)
+		return 0;
+	if (hdr->mx_sb_len < sense_data_len)
+		sense_data_len = hdr->mx_sb_len;
+	if (copy_to_user(hdr->sbp, scr->sense, sense_data_len))
+		return -EFAULT;
+	hdr->sb_len_wr = sense_data_len;
+	return 0;
+}
+
 static int sop_complete_sgio_hdr(struct sop_device *h,
 				struct sop_sync_cdb_req *scdb,
 				struct sop_request *r)
@@ -2932,18 +2945,8 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 			"SCDB[%02x]: Both sense and response data not expected.\n",
 			scdb->cdb[0]);
 
-		/* copy the sense data */
 		if (sense_data_len) {
-			if (hdr->mx_sb_len < sense_data_len)
-				sense_data_len = hdr->mx_sb_len;
-
-			if (!copy_to_user(hdr->sbp, scr->sense, sense_data_len))
-				hdr->sb_len_wr = sense_data_len;
-#if 0
-			/* FIXME!!!! */
-			else
-				result = -EFAULT;
-#endif
+			result = sop_copy_sgio_sense_data(hdr, scr, sense_data_len);
 			/*
 			 * ignore return value, we pass sense data back to user
 			 * we just want to snoop for capacity change unit attn.
