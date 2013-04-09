@@ -3300,7 +3300,7 @@ sync_send_tur:
 
 	/* 3. Get inquiry vpd page 0xb0 -- block limits */
 	sio.data_len = 36;
-	sio.cdb[0] = INQUIRY;		/* Rest all remains 0 */
+	sio.cdb[0] = INQUIRY;
 	sio.cdb[1] = 0x01; /* EVPD */
 	sio.cdb[2] = 0xb0; /* block limits page */
 	sio.cdb[4] = sio.data_len;
