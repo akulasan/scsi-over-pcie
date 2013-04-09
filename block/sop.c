@@ -118,6 +118,8 @@ static struct pci_error_handlers sop_pci_error_handlers = {
 #define SOP_DBG_LVL_DUMP_SENSE		0x0008
 static u32 sop_dbg_lvl, sop_dbg_cmd;
 
+#define SCSI_LUN_IN_PROCESS_OF_BECOMING_READY 0x0401
+
 #define	SOP_MAX_LINE_LEN	256
 static ssize_t sop_sysfs_show_debug(struct device_driver *dd, char *buf)
 {
@@ -3261,10 +3263,8 @@ sync_send_tur:
 	sio.data_dir = DMA_NONE;
 	ret = send_sync_cdb(h, &sio, 0);
 	if (ret && (sio.scsi_status == SAM_STAT_CHECK_CONDITION) &&
-		/* FIXME: replace 2 hardcodes below */
-		(sio.sense_key == 0x02) &&
-		/* Drive not ready, getting ready */
-		(sio.sense_asc_ascq == 0x0401)) {
+		(sio.sense_key == NOT_READY) &&
+		sio.sense_asc_ascq == SCSI_LUN_IN_PROCESS_OF_BECOMING_READY) {
 		if (retry_count < TUR_MAX_RETRY_COUNT) {
 			msleep(IO_SLEEP_INTERVAL_MIN);
 			/*  Retry */
