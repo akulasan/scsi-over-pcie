@@ -2,9 +2,6 @@
     we get less than MSIX we request or if MSIX is not supported in the host.
     We need to fall back to legacy interrupt.
 
-- Change hardcoding of Max HW sectors by either using system limits or
-    device limits from issuing SOP_REPORT_GENERAL.
-
 - Support MMIO in SGIO commands.
 
 - Support for abort and other task management commands.
