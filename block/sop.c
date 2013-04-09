@@ -1472,7 +1472,6 @@ static void sop_free_admin_irq_and_disable_msix(struct sop_device *h)
 #endif /* CONFIG_PCI_MSI */
 }
 
-/* FIXME: maybe there's a better way to do this */
 static u16 alloc_request(struct sop_device *h, u8 queue_pair_index)
 {
 	u16 rc;
