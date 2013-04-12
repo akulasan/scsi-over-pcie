@@ -3256,6 +3256,37 @@ static int sop_get_disk_params(struct sop_device *h)
 	if (ret != 0)
 		goto disk_param_err;
 
+	/* 0.2. Get inquiry vpd page 0xb0 -- block limits */
+	sio.data_len = 36;
+	sio.cdb[0] = INQUIRY;		/* Rest all remains 0 */
+	sio.cdb[1] = 0x01; /* EVPD */
+	sio.cdb[2] = 0xb0; /* block limits page */
+	sio.cdb[4] = sio.data_len;
+	sio.cdblen = COMMAND_SIZE(INQUIRY);
+	sio.data_dir = DMA_FROM_DEVICE;
+	ret = send_sync_cdb(h, &sio, phy_addr);
+	if (ret == 0) {
+		unsigned char *buf = vaddr;
+
+		opt_xfer_len_granularity = (buf[6] << 8) | buf[7];
+		max_xfer_len = extract_be32(buf, 8);
+		opt_xfer_len = extract_be32(buf, 12);
+		max_prefetch_xdrdwr_xfer_len = extract_be32(buf, 16);
+		max_unmap_lba_count = extract_be32(buf, 20);
+		max_unmap_blk_desc_count = extract_be32(buf, 24);
+	} else {
+		opt_xfer_len_granularity = 0;
+		max_xfer_len = BLK_SAFE_MAX_SECTORS;
+		opt_xfer_len = 8;
+		max_prefetch_xdrdwr_xfer_len = 0;
+		max_unmap_lba_count = 0;
+		max_unmap_blk_desc_count = 0;
+	}
+	if (max_xfer_len)
+		h->max_hw_sectors = max_xfer_len;
+	else
+		h->max_hw_sectors = BLK_SAFE_MAX_SECTORS;
+
 	retry_count = 0;
 sync_send_tur:
 	/* 1. send TUR */
@@ -3299,39 +3330,6 @@ sync_send_tur:
 	 */
 	size_mask = (PAGE_SIZE / h->block_size) - 1;
 	h->capacity &= ~size_mask;
-
-	/* 3. Get inquiry vpd page 0xb0 -- block limits */
-	sio.data_len = 36;
-	sio.cdb[0] = INQUIRY;
-	sio.cdb[1] = 0x01; /* EVPD */
-	sio.cdb[2] = 0xb0; /* block limits page */
-	sio.cdb[4] = sio.data_len;
-	sio.cdblen = COMMAND_SIZE(INQUIRY);
-	sio.data_dir = DMA_FROM_DEVICE;
-	ret = send_sync_cdb(h, &sio, phy_addr);
-	if (ret == 0) {
-		unsigned char *buf = vaddr;
-
-		opt_xfer_len_granularity = (buf[6] << 8) | buf[7];
-		max_xfer_len = extract_be32(buf, 8);
-		opt_xfer_len = extract_be32(buf, 12);
-		max_prefetch_xdrdwr_xfer_len = extract_be32(buf, 16);
-		max_unmap_lba_count = extract_be32(buf, 20);
-		max_unmap_blk_desc_count = extract_be32(buf, 24);
-	} else {
-		opt_xfer_len_granularity = 0;
-		max_xfer_len = BLK_SAFE_MAX_SECTORS;
-		opt_xfer_len = 8;
-		max_prefetch_xdrdwr_xfer_len = 0;
-		max_unmap_lba_count = 0;
-		max_unmap_blk_desc_count = 0;
-	}
-	if (max_xfer_len)
-		h->max_hw_sectors = max_xfer_len;
-	else
-		h->max_hw_sectors = BLK_SAFE_MAX_SECTORS;
-
-	retry_count = 0;
 
 	pci_free_consistent(h->pdev, total_size, vaddr, phy_addr);
 	return 0;
