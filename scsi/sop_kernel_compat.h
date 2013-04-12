@@ -26,4 +26,17 @@ void usleep_range(unsigned long min, unsigned long max)
 }
 #endif
 
+/* these next three disappeared in 3.8-rc4 */
+#ifndef __devinit
+#define __devinit
+#endif
+
+#ifndef __devexit
+#define __devexit
+#endif
+
+#ifndef __devexit_p
+#define __devexit_p(x) x
+#endif
+
 #endif
