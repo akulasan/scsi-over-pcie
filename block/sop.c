@@ -1613,7 +1613,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 		return -ENOMEM;
 	r = pqi_alloc_elements(aq, 1);
 	if (IS_ERR(r)) {
-		rc = PTR_ERR(sop_thread);
+		rc = PTR_ERR(r);
 		goto out;
 	}
 	request_id = alloc_request(h, 0);
@@ -1764,7 +1764,7 @@ static int sop_report_general(struct sop_device *h)
 	}
 	r = pqi_alloc_elements(qinfo->iq, 1);
 	if (IS_ERR(r)) {
-		rc = PTR_ERR(sop_thread);
+		rc = PTR_ERR(r);
 		if ((sop_dbg_lvl & SOP_DBG_LVL_EXTRA_WARN))
 			dev_warn(&h->pdev->dev,
 			"SUBQ[%d] pqi_alloc_elements for REP_GEN returned %ld\n",
