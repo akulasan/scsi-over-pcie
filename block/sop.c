@@ -992,10 +992,8 @@ static int sop_delete_admin_queues(struct sop_device *h)
 						PQI_READY_FOR_IO))
 		return -1;
 	writeq(PQI_DELETE_ADMIN_QUEUES, &h->pqireg->process_admin_function);
-	if (wait_for_admin_command_ack(h) == 0) {
-		sop_free_admin_queues(h);
+	if (wait_for_admin_command_ack(h) == 0)
 		return 0;
-	}
 
 	/* Try to get some clues about why it failed. */
 	if (safe_readq(sig, &paf, &h->pqireg->process_admin_function)) {
@@ -1875,6 +1873,24 @@ bail_out:
 	return -1;
 }
 
+static void sop_reinit_all_ioq(struct sop_device *h)
+{
+	int i;
+	struct queue_info *q;
+
+	/* Io Queue */
+	for (i = 1; i < h->nr_queue_pairs; i++) {
+		q = &h->qinfo[i];
+
+		if (!q->oq)
+			continue;
+
+		*(q->oq->index.from_dev.pi) = q->oq->unposted_index = 0;
+		*(q->iq->index.to_dev.ci) = q->iq->unposted_index = 0;
+		q->iq->local_pi = 0;
+	}
+}
+
 static void sop_free_io_queues(struct sop_device *h)
 {
 	int i;
@@ -1887,6 +1903,21 @@ static void sop_free_io_queues(struct sop_device *h)
 		pqi_device_queue_free(h, qinfo->oq);
 		qinfo->iq = qinfo->oq = NULL;
 	}
+}
+
+static int sop_create_io_queue_pairs(struct sop_device *h)
+{
+	int i;
+
+	for (i = 1; i < h->nr_queue_pairs; i++) {
+		if (sop_create_io_queue(h, &h->qinfo[i], i,
+					PQI_DIR_FROM_DEVICE))
+			return -1;
+		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_TO_DEVICE))
+			return -1;
+	}
+
+	return 0;
 }
 
 static int sop_setup_io_queue_pairs(struct sop_device *h)
@@ -1929,13 +1960,8 @@ allocate_queue_mem:
 	}
 
 	/* Now create all the queues with allocated buffers */
-	for (i = 1; i < h->nr_queue_pairs; i++) {
-		if (sop_create_io_queue(h, &h->qinfo[i], i,
-					PQI_DIR_FROM_DEVICE))
+	if (sop_create_io_queue_pairs(h) != 0)
 			goto bail_out;
-		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_TO_DEVICE))
-			goto bail_out;
-	}
 	/* Mark the IO queues as ready so that timeout can occur on them */
 	set_bit(SOP_FLAGS_BITPOS_IOQ_RDY, &h->flags);
 
@@ -1999,7 +2025,6 @@ static int sop_delete_io_queues(struct sop_device *h)
 		if (sop_delete_io_queue(h, i, 0))
 			break;
 	}
-	sop_free_io_queues(h);
 	return 0;
 }
 
@@ -2228,6 +2253,7 @@ bail_io_irq:
 		sop_free_irq(h, i);
 bail_io_q_created:
 	sop_delete_io_queues(h);
+	sop_free_io_queues(h);
 bail_admin_irq:
 	sop_free_irq(h, 0);
 bail_admin_created:
@@ -2264,13 +2290,13 @@ bail_alloc_drvdata:
 #define PQI_SYS_POWER_ACTION_MASK		(0x003f)
 #define PQI_SYS_POWER_ACTION_REBOOT		(0x0001)
 #define PQI_SYS_POWER_ACTION_SHUTDOWN		(0x0002)
-#define PQI_SYS_POWER_ACTION_SLEEP_S1_S2_S3	(0x0010)
+#define PQI_SYS_POWER_ACTION_SLEEP		(0x0010)
 #define PQI_SYS_POWER_ACTION_SLEEP_S1		(0x0011)
 #define PQI_SYS_POWER_ACTION_SLEEP_S2		(0x0012)
 #define PQI_SYS_POWER_ACTION_SLEEP_S3		(0x0013)
 #define PQI_SYS_POWER_ACTION_SLEEP_S4		(0x0014)
 #define PQI_SYS_POWER_ACTION_SLEEP_S5		(0x0015)
-#define PQI_SYS_POWER_ACTION_RESUME_S1_S2_S3	(0x0020)
+#define PQI_SYS_POWER_ACTION_RESUME		(0x0020)
 #define PQI_SYS_POWER_ACTION_RESUME_S1		(0x0021)
 #define PQI_SYS_POWER_ACTION_RESUME_S2		(0x0022)
 #define PQI_SYS_POWER_ACTION_RESUME_S3		(0x0023)
@@ -2318,11 +2344,20 @@ static int sop_power_action(struct sop_device *h, u32 action)
 
 static void sop_stop_unit(struct sop_device *h);
 
-static void sop_release_hw(struct sop_device *h, u32 action)
+static int sop_release_hw(struct sop_device *h, u32 action)
 {
+	int ret;
+
+
 	sop_stop_unit(h);
 	sop_fail_all_outstanding_io(h);
-	sop_power_action(h, action);
+	ret = sop_power_action(h, action);
+	sop_free_io_irqs(h);
+	sop_delete_io_queues(h);
+	sop_free_admin_irq_and_disable_msix(h);
+	sop_delete_admin_queues(h);
+
+	return ret;
 }
 
 static int sop_suspend(__attribute__((unused)) struct pci_dev *pdev,
@@ -2342,13 +2377,11 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 
 	dev_warn(&pdev->dev, "Remove called.\n");
 	h = pci_get_drvdata(pdev);
+	sop_remove_disk(h);
 	sop_release_hw(h, (PQI_SYS_POWER_ACTION_SHUTDOWN |
 				PQI_DEV_POWER_ACTION_D3));
-	sop_remove_disk(h);
-	sop_free_io_irqs(h);
-	sop_delete_io_queues(h);
-	sop_free_admin_irq_and_disable_msix(h);
-	sop_delete_admin_queues(h);
+	sop_free_io_queues(h);
+	sop_free_admin_queues(h);
 	if (h->pqireg)
 		iounmap(h->pqireg);
 	pci_release_regions(pdev);
@@ -3980,24 +4013,6 @@ static void sop_requeue_all_outstanding_io(struct sop_device *h)
 	}
 }
 
-static void sop_reinit_all_ioq(struct sop_device *h)
-{
-	int i;
-	struct queue_info *q;
-
-	/* Io Queue */
-	for (i = 1; i < h->nr_queue_pairs; i++) {
-		q = &h->qinfo[i];
-
-		if (!q->oq)
-			continue;
-
-		*(q->oq->index.from_dev.pi) = q->oq->unposted_index = 0;
-		*(q->iq->index.to_dev.ci) = q->iq->unposted_index = 0;
-		q->iq->local_pi = 0;
-	}
-}
-
 /* In case of device Error flag set, delay before reset is done in seconds */
 #define SOP_ERROR_RESET_DEALY_SEC	DEF_IO_TIMEOUT
 #define	MAX_RESET_COUNT			3
@@ -4040,13 +4055,9 @@ start_reset:
 	dev_warn(&h->pdev->dev, "Re creating %d I/O queue pairs\n",
 		h->nr_queue_pairs-1);
 	/* Re create all the queue pairs */
-	for (i = 1; i < h->nr_queue_pairs; i++) {
-		if (sop_create_io_queue(h, &h->qinfo[i], i,
-				PQI_DIR_FROM_DEVICE))
-			goto reset_err;
-		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_TO_DEVICE))
-			goto reset_err;
-	}
+	if (sop_create_io_queue_pairs(h) != 0)
+		goto reset_err;
+
 	dev_warn(&h->pdev->dev, "I/O queue created - Resubmitting pending commands\n");
 
 	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, &h->flags);
