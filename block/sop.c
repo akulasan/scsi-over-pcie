@@ -3043,8 +3043,7 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		hdr->masked_status = status_byte(scr->status);
 		hdr->host_status = 0;
 		hdr->driver_status = 0;
-		if (hdr->status || hdr->host_status ||
-			hdr->driver_status)
+		if (hdr->status)
 			hdr->info = SG_INFO_CHECK;
 		sense_data_len = le16_to_cpu(scr->sense_data_len);
 		response_data_len = le16_to_cpu(scr->response_data_len);
@@ -3104,7 +3103,7 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		hdr->host_status = DID_PASSTHROUGH;
 		hdr->driver_status = DRIVER_SOFT;
 		hdr->info = SG_INFO_CHECK;
-		hdr->resid = 0;
+		hdr->resid = r->xfer_size;
 		hdr->sb_len_wr = 0;
 		break;
 
@@ -3125,7 +3124,7 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		hdr->host_status = DID_PASSTHROUGH;
 		hdr->driver_status = DRIVER_TIMEOUT;
 		hdr->info = SG_INFO_CHECK;
-		hdr->resid = 0;
+		hdr->resid = r->xfer_size;
 		hdr->sb_len_wr = 0;
 		break;
 
@@ -3146,7 +3145,7 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		hdr->host_status = DID_PASSTHROUGH;
 		hdr->driver_status = DRIVER_ERROR;
 		hdr->info = SG_INFO_CHECK;
-		hdr->resid = 0;
+		hdr->resid = r->xfer_size;
 		hdr->sb_len_wr = 0;
 		break;
 	}
@@ -3201,7 +3200,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 		hdr->masked_status = 0;
 		hdr->host_status = DID_PASSTHROUGH;
 		hdr->driver_status = DRIVER_BUSY;
-		hdr->info = 0;
+		hdr->info = SG_INFO_OK;
 		hdr->resid = 0;
 		hdr->sb_len_wr = 0;
 		return 0;
@@ -3215,7 +3214,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 		hdr->masked_status = 0;
 		hdr->host_status = DID_PASSTHROUGH;
 		hdr->driver_status = DRIVER_ERROR;
-		hdr->info = 0;
+		hdr->info = SG_INFO_CHECK;
 		hdr->resid = 0;
 		hdr->sb_len_wr = 0;
 		return 0;
@@ -3322,7 +3321,7 @@ sync_error:
 	hdr->masked_status = 0;
 	hdr->host_status = DID_PASSTHROUGH;
 	hdr->driver_status = DRIVER_ERROR;
-	hdr->info = 0;
+	hdr->info = SG_INFO_CHECK;
 	hdr->resid = 0;
 	hdr->sb_len_wr = 0;
 	return 0;
