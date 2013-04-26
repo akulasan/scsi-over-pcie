@@ -40,6 +40,17 @@ void usleep_range(unsigned long min, unsigned long max)
  * make_request must always succeed.
  */
 #define MRFN_RET	0
+
+bool kthread_freezable_should_stop(bool *was_frozen)
+{
+	might_sleep();
+
+	if (unlikely(freezing(current)))
+		 refrigerator();
+
+	return kthread_should_stop();
+}
+
 #else
 /* Function return is eliminated */
 #define MRFN_TYPE	void

@@ -39,6 +39,7 @@
 #include <scsi/scsi_ioctl.h>
 #include <scsi/sg.h>
 #include <scsi/scsi_cmnd.h>
+#include <linux/freezer.h>
 
 #include "sop_kernel_compat.h"
 #include "sop.h"
@@ -4260,7 +4261,8 @@ static int sop_thread_proc(void *data)
 {
 	struct sop_device *h;
 
-	while (!kthread_should_stop()) {
+	set_freezable();
+	while (!kthread_freezable_should_stop(NULL)) {
 		__set_current_state(TASK_RUNNING);
 		spin_lock(&dev_list_lock);
 		list_for_each_entry(h, &dev_list, node)
