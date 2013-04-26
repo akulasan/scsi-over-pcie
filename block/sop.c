@@ -3219,6 +3219,34 @@ sync_error:
 	return 0;
 }
 
+static void sop_stop_unit(struct sop_device *h)
+{
+	int ret;
+	int retry_count;
+	struct sop_sync_cdb_req sio;
+
+	memset(&sio, 0, sizeof(sio));
+	sio.timeout = DEF_IO_TIMEOUT;
+	sio.cdb[0] = START_STOP;
+	sio.cdb[1] = 0x01; /* return immediately */
+	sio.cdb[4] = 0x00; /* stop motor */
+	sio.cdblen = COMMAND_SIZE(START_STOP);
+	sio.data_dir = DMA_NONE;
+
+	/* I just made up the retry and sleep numbers. */
+#define MAX_STOP_UNIT_RETRIES 10
+	retry_count = 0;
+	do {
+		ret = send_sync_cdb(h, &sio, (dma_addr_t) 0);
+		if (ret != -EAGAIN || retry_count > MAX_STOP_UNIT_RETRIES)
+			break;
+		msleep(20);
+		retry_count++;
+	} while (1);
+	if (ret)
+		dev_warn(&h->pdev->dev, "Failed to STOP UNIT\n");
+}
+
 #define	IO_SLEEP_INTERVAL_MIN	2000
 #define	IO_SLEEP_INTERVAL_MAX	2500
 #define TUR_MAX_RETRY_COUNT	10
