@@ -2256,6 +2256,19 @@ bail_alloc_drvdata:
 	return -1;
 }
 
+static void sop_power_action(struct sop_device *h, u32 action)
+{
+}
+
+static void sop_stop_unit(struct sop_device *h);
+
+static void sop_release_hw(struct sop_device *h, u32 action)
+{
+	sop_stop_unit(h);
+	sop_fail_all_outstanding_io(h);
+	sop_power_action(h, action);
+}
+
 static int sop_suspend(__attribute__((unused)) struct pci_dev *pdev,
 				__attribute__((unused)) pm_message_t state)
 {
@@ -2273,7 +2286,7 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 
 	dev_warn(&pdev->dev, "Remove called.\n");
 	h = pci_get_drvdata(pdev);
-	sop_fail_all_outstanding_io(h);
+	sop_release_hw(h, 0);
 	sop_remove_disk(h);
 	sop_free_io_irqs(h);
 	sop_delete_io_queues(h);
@@ -2297,7 +2310,12 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 
 static void sop_shutdown(struct pci_dev *pdev)
 {
-	dev_warn(&pdev->dev, "Shutdown called.\n");
+	struct sop_device *h;
+
+	dev_warn(&pdev->dev, "Shutdown sop.\n");
+
+	h = pci_get_drvdata(pdev);
+	sop_release_hw(h, 0);
 }
 
 static struct pci_driver sop_pci_driver = {
