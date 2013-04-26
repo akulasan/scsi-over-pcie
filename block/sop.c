@@ -2977,7 +2977,7 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 	memcpy(r->cdb, cdb, cdb_len);
 
 	r->flags = data_dir;
-	r->xfer_size = data_len;
+	r->xfer_size = cpu_to_le32(data_len);
 }
 
 static int sop_copy_sgio_sense_data(sg_io_hdr_t *hdr, 
