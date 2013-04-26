@@ -3097,6 +3097,20 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 		hdr->sb_len_wr = 0;
 		return 0;
 	}
+	if (SOP_DEVICE_REM(h)) {
+		if (hdr == NULL)
+			return -EIO;
+
+		/* Fill Qfull as return value */
+		hdr->status = 0;
+		hdr->masked_status = 0;
+		hdr->host_status = DID_PASSTHROUGH;
+		hdr->driver_status = DRIVER_ERROR;
+		hdr->info = 0;
+		hdr->resid = 0;
+		hdr->sb_len_wr = 0;
+		return 0;
+	}
 
 	sgl_buffer = NULL;
 	if (sio->data_dir != DMA_NONE && sio->iov_count > 0) {
@@ -3692,19 +3706,16 @@ static int sop_device_error_state(struct sop_device *h)
 	if (SOP_DEVICE_BUSY(h) || !SOP_DEVICE_READY(h))
 		return SOP_ERR_NONE;
 
-	/* Detect Surprise removal */
 	if (safe_readq(sig, &signature, &h->pqireg->signature))
-		return SOP_ERR_DEV_REM;
+		return SOP_ERR_DEV_FAULT;
 
 	if (memcmp(SOP_SIGNATURE_STR, &signature, sizeof(signature)) != 0)
-		return SOP_ERR_DEV_REM;
+		return SOP_ERR_DEV_FAULT;
 
-	/* Detect for surprise reset */
 	if (safe_readw(sig, &state, &h->pqireg->pqi_device_status))
-		return SOP_ERR_DEV_REM;
+		return SOP_ERR_DEV_FAULT;
 	if (state == PQI_ERROR) {
-		dev_warn(&h->pdev->dev, "Device Fault! Will reset...\n");
-		set_bit(SOP_FLAGS_BITPOS_DO_RESET, &h->flags);
+		dev_warn(&h->pdev->dev, "Device in  Fault State!\n");
 		return SOP_ERR_DEV_FAULT;
 	}
 
@@ -4008,9 +4019,9 @@ static void sop_process_dev_timer(struct sop_device *h)
 
 	/* Decide if there is any global error */
 	action = sop_device_error_state(h);
-	if (action == SOP_ERR_DEV_REM) {
-		dev_warn(&h->pdev->dev, "Detected drive removed!!\n");
-		set_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
+	if (action == SOP_ERR_DEV_FAULT) {
+		dev_warn(&h->pdev->dev, "Detected HW issue! Will Reset...\n");
+		set_bit(SOP_FLAGS_BITPOS_DO_RESET, &h->flags);
 	}
 
 	if ((h->flags & SOP_FLAGS_MASK_ADMIN_RDY)) {

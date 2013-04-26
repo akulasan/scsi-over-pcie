@@ -390,8 +390,8 @@ struct sop_device {
 
 #define	SOP_DEVICE_BUSY(_h)	(((_h)->flags) & (\
 					SOP_FLAGS_MASK_DO_RESET | \
-					SOP_FLAGS_MASK_DO_REM | \
 					SOP_FLAGS_MASK_RESET_PEND))
+#define	SOP_DEVICE_REM(_h)	(((_h)->flags) & SOP_FLAGS_MASK_DO_REM)
 #define	SOP_DEVICE_READY(_h)	(((_h)->flags & SOP_FLAGS_MASK_ADMIN_RDY) && \
 					((_h)->flags & SOP_FLAGS_MASK_IOQ_RDY))
 #define	SOP_REVALIDATE(_h)	((_h)->flags & SOP_FLAGS_MASK_REVALIDATE)
