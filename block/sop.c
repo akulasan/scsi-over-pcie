@@ -3690,7 +3690,7 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 		goto out;
 	}
 
-	if (hp->dxfer_len / 512 > h->max_hw_sectors) {
+	if (hp->dxfer_len > h->max_hw_sectors * 512) {
 		rc = -EINVAL;
 		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
 			pr_err("SGIO Err: Too big size = %d, max=%d\n",
