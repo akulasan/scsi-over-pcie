@@ -2256,8 +2256,64 @@ bail_alloc_drvdata:
 	return -1;
 }
 
-static void sop_power_action(struct sop_device *h, u32 action)
+#define PQI_POWER_ACTION_SHIFT		6
+#define PQI_POWER_ACTION_MASK		(0x03 << PQI_POWER_ACTION_SHIFT)
+#define PQI_START_POWER_ACTION		(1 << PQI_POWER_ACTION_SHIFT)
+#define PQI_POWER_ACTION_COMPLETED	(2 << PQI_POWER_ACTION_SHIFT)
+
+#define PQI_SYS_POWER_ACTION_MASK		(0x003f)
+#define PQI_SYS_POWER_ACTION_REBOOT		(0x0001)
+#define PQI_SYS_POWER_ACTION_SHUTDOWN		(0x0002)
+#define PQI_SYS_POWER_ACTION_SLEEP_S1_S2_S3	(0x0010)
+#define PQI_SYS_POWER_ACTION_SLEEP_S1		(0x0011)
+#define PQI_SYS_POWER_ACTION_SLEEP_S2		(0x0012)
+#define PQI_SYS_POWER_ACTION_SLEEP_S3		(0x0013)
+#define PQI_SYS_POWER_ACTION_SLEEP_S4		(0x0014)
+#define PQI_SYS_POWER_ACTION_SLEEP_S5		(0x0015)
+#define PQI_SYS_POWER_ACTION_RESUME_S1_S2_S3	(0x0020)
+#define PQI_SYS_POWER_ACTION_RESUME_S1		(0x0021)
+#define PQI_SYS_POWER_ACTION_RESUME_S2		(0x0022)
+#define PQI_SYS_POWER_ACTION_RESUME_S3		(0x0023)
+#define PQI_SYS_POWER_ACTION_RESUME_S4		(0x0024)
+
+#define PQI_DEV_POWER_ACTION_SHIFT	8
+#define PQI_DEV_POWER_ACTION_MASK	(0x0f << PQI_DEV_POWER_ACTION_SHIFT)
+#define PQI_DEV_POWER_ACTION_D0		(0x10 << PQI_DEV_POWER_ACTION_SHIFT)
+#define PQI_DEV_POWER_ACTION_D1		(0x11 << PQI_DEV_POWER_ACTION_SHIFT)
+#define PQI_DEV_POWER_ACTION_D2		(0x12 << PQI_DEV_POWER_ACTION_SHIFT)
+#define PQI_DEV_POWER_ACTION_D3		(0x13 << PQI_DEV_POWER_ACTION_SHIFT)
+
+#define PQI_POWER_ACTION_TMO_MS		5000
+#define PQI_PA_INTERVAL_MIN		100 /* microseconds */
+#define PQI_PA_INTERVAL_MAX		150 /* microseconds */
+
+static int sop_power_action(struct sop_device *h, u32 action)
 {
+	u32 pa_register, prev;
+	int count = 0;
+	__iomem void *sig = &h->pqireg->signature;
+
+	writel(PQI_START_POWER_ACTION | action, &h->pqireg->power_action);
+
+	prev = -1;
+	/* Now wait for power action to be completed */
+	do {
+		usleep_range(PQI_PA_INTERVAL_MIN, PQI_PA_INTERVAL_MAX);
+		if (safe_readl(sig, &pa_register, &h->pqireg->power_action))
+			return -1;
+		if (pa_register != prev)
+			dev_warn(&h->pdev->dev, "PA register is: 0x%08x\n",
+				pa_register);
+		prev = pa_register;
+		if ((pa_register & PQI_POWER_ACTION_MASK) ==
+					PQI_POWER_ACTION_COMPLETED)
+			return 0;
+		count++;
+	} while (count < (PQI_POWER_ACTION_TMO_MS * 10));
+
+	dev_warn(&h->pdev->dev, "Failed to set PA register. Now = 0x%08x\n",
+		pa_register);
+	return -1;
 }
 
 static void sop_stop_unit(struct sop_device *h);
@@ -2286,7 +2342,8 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 
 	dev_warn(&pdev->dev, "Remove called.\n");
 	h = pci_get_drvdata(pdev);
-	sop_release_hw(h, 0);
+	sop_release_hw(h, (PQI_SYS_POWER_ACTION_SHUTDOWN |
+				PQI_DEV_POWER_ACTION_D3));
 	sop_remove_disk(h);
 	sop_free_io_irqs(h);
 	sop_delete_io_queues(h);
@@ -2315,7 +2372,8 @@ static void sop_shutdown(struct pci_dev *pdev)
 	dev_warn(&pdev->dev, "Shutdown sop.\n");
 
 	h = pci_get_drvdata(pdev);
-	sop_release_hw(h, 0);
+	sop_release_hw(h, (PQI_SYS_POWER_ACTION_SHUTDOWN |
+				PQI_DEV_POWER_ACTION_D3));
 }
 
 static struct pci_driver sop_pci_driver = {
