@@ -3099,6 +3099,9 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		if (hdr == NULL)
 			break;
 
+		if (sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO)
+			pr_warn("sop_sgio: Command aborted internally\n");
+
 		result = 0;
 		hdr->status = 0;
 		hdr->masked_status = 0;
@@ -3119,6 +3122,9 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		scdb->sense_key = 0;
 		if (hdr == NULL)
 			break;
+
+		if (sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO)
+			pr_warn("sop_sgio: Command timed out!!\n");
 
 		result = 0;
 		hdr->status = 0;
@@ -3197,6 +3203,9 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 		if (hdr == NULL)
 			return -EAGAIN;
 
+		if (sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO)
+			pr_warn("sop_sgio: Command failed due to device Busy\n");
+
 		/* Fill Qfull as return value */
 		hdr->status = 0;
 		hdr->masked_status = 0;
@@ -3210,6 +3219,9 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	if (SOP_DEVICE_REM(h)) {
 		if (hdr == NULL)
 			return -EIO;
+
+		if (sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO)
+			pr_warn("sop_sgio: Command failed due to device Failure\n");
 
 		/* Fill Qfull as return value */
 		hdr->status = 0;
@@ -3593,38 +3605,62 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 
 	rc = 0;
 	h = bdev_to_hba(dev);
-	if (!argp)
+	if (!argp) {
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: parameter is NULL\n");
 		return -EINVAL;
-	if (!capable(CAP_SYS_RAWIO))
+	}
+	if (!capable(CAP_SYS_RAWIO)) {
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Not capable\n");
 		return -EPERM;
-	if (!access_ok(VERIFY_WRITE, argp, sizeof(*hp)))
+	}
+	if (!access_ok(VERIFY_WRITE, argp, sizeof(*hp))) {
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Buffer passed in not writable\n");
 		return -EFAULT;
-	if (!access_ok(VERIFY_READ, argp, sizeof(*hp)))
+	}
+	if (!access_ok(VERIFY_READ, argp, sizeof(*hp))) {
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Buffer passed in not readable\n");
 		return -EFAULT;
+	}
 	hp = kmalloc(sizeof(*hp), GFP_KERNEL);
-	if (!hp)
+	if (!hp) {
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Cannot allocate header memory\n");
 		return -ENOMEM;
+	}
 	if (__copy_from_user(hp, argp, sizeof(*hp))) {
 		rc = -EFAULT;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: copying command buffer\n");
 		goto out;
 	}
 	if (hp->interface_id != 'S') {
 		rc = -ENOSYS;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Wrong interface ID=0x%x\n",
+				hp->interface_id);
 		goto out;
 	}
 	if (hp->flags & SG_FLAG_DIRECT_IO && hp->flags & SG_FLAG_MMAP_IO) {
 		rc = -EINVAL; /* either MMAP_IO or DIRECT_IO (not both) */
-		pr_err("SGIO Err: Both DIRECT_IO and MMAP_IO set\n");
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Both DIRECT_IO and MMAP_IO set\n");
 		goto out;
 	}
 	if (hp->flags & SG_FLAG_MMAP_IO) {
 		rc = -ENOSYS; /* FIXME we should support this. */
-		pr_err("SGIO Err: MMAP_IO not supported\n");
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: MMAP_IO not supported\n");
 		goto out;
 	}
 	scdb = kmalloc(sizeof(*scdb), GFP_KERNEL);
 	if (!scdb) {
 		rc = -ENOMEM;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Cannot allocate CDB memory\n");
 		goto out;
 	}
 	memset(scdb, 0, sizeof(*scdb));
@@ -3634,26 +3670,38 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	scdb->timeout = ul_timeout;
 	if ((!hp->cmdp) || (hp->cmd_len < 6) || (hp->cmd_len > sizeof(cmnd))) {
 		rc = -EMSGSIZE;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Invalid CDB size (%d)/buffer (%lx)\n",
+				hp->cmd_len, (ulong)hp->cmdp);
 		goto out;
 	}
 	if (!access_ok(VERIFY_READ, hp->cmdp, hp->cmd_len)) {
 		/* protects following copy_from_user()s + get_user()s */
 		rc = -EFAULT;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Permission denied\n");
 		goto out;
 	}
 	scdb->cdblen = hp->cmd_len;
 	if (__copy_from_user(scdb->cdb, hp->cmdp, hp->cmd_len)) {
 		rc = -EFAULT;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Cannot copy CDB\n");
 		goto out;
 	}
 
 	if (hp->dxfer_len / 512 > h->max_hw_sectors) {
 		rc = -EINVAL;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Too big size = %d, max=%d\n",
+				hp->dxfer_len, h->max_hw_sectors * 512);
 		goto out;
 	}
 	read_only = (O_RDWR != (mode & O_ACCMODE));
 	if (read_only & blk_verify_command(scdb->cdb, mode & FMODE_WRITE)) {
 		rc = -EPERM;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Device is Read-Only\n");
 		goto out;
 	}
 
@@ -3730,8 +3778,11 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 	start_time = jiffies;
 	rc = send_sync_cdb(h, scdb, 0);
 	hp->duration = jiffies_to_msecs(jiffies - start_time);
-	if (copy_to_user(argp, hp, sizeof(*hp)))
+	if (copy_to_user(argp, hp, sizeof(*hp))) {
 		rc = -EFAULT;
+		if ((sop_dbg_lvl & SOP_DBG_LVL_DUMP_SGIO))
+			pr_err("SGIO Err: Cannot copy back header\n");
+	}
 
 out:
 	kfree(hp);
