@@ -3,7 +3,7 @@
 
 #include <linux/version.h>
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(2,6,36) )
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 36))
 static int do_usleep_range(unsigned long min, unsigned long max)
 {
 	ktime_t kmin;
@@ -31,7 +31,7 @@ void usleep_range(unsigned long min, unsigned long max)
 
 #endif
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,2,0) )
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 2, 0))
 #define MRFN_TYPE	int
 
 /*
