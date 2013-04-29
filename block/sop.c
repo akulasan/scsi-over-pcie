@@ -127,7 +127,7 @@ static ssize_t sop_sysfs_show_debug(struct device_driver *dd, char *buf)
 	ssize_t	size;
 	struct sop_device *h;
 	char line[SOP_MAX_LINE_LEN];
-	int dev_num=0;
+	int dev_num = 0;
 
 	size = snprintf(buf, SOP_MAX_LINE_LEN, "<%s Driver: Level=%d>\n",
 		SOP, sop_dbg_lvl);
@@ -1087,7 +1087,7 @@ static void evaluate_unit_attention(struct sop_device *h, u8 asc, u8 ascq)
 #define NO_ACTION 0
 #define RETRY_ACTION 1
 #define FAIL_ACTION 2
-	
+
 static int evaluate_sense_data(struct sop_device *h,
 				struct sop_cmd_response *scr,
 				char *cdb)
@@ -1159,7 +1159,7 @@ static int evaluate_sense_data(struct sop_device *h,
 	case MISCOMPARE:
 		disposition = FAIL_ACTION;
 		break;
-	default: 
+	default:
 		disposition = FAIL_ACTION;
 		break;
 	}
@@ -1318,7 +1318,7 @@ static int sop_msix_handle_ioq(struct queue_info *q)
 			else if (likely(r->waiting))
 				complete(r->waiting);
 			else
-				dev_warn(&h->pdev->dev, 
+				dev_warn(&h->pdev->dev,
 					"r->bio and r->waiting both null\n");
 			atomic_dec(&h->cmd_pending);
 			atomic_dec(&q->cur_qdepth);
@@ -2183,7 +2183,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		rc = -ENOMEM;
 		goto bail_request_regions;
 	}
-	sig = &h->pqireg->signature;	
+	sig = &h->pqireg->signature;
 	rc = sop_init_time_host_reset(h);
 	if (rc) {
 		dev_err(&pdev->dev, "Failed to Reset Device\n");
@@ -2247,7 +2247,8 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		dev_warn(&h->pdev->dev, "Bailing out in probe - Cannot add disk\n");
 		goto bail_io_irq;
 	}
-	dev_warn(&h->pdev->dev, "Successfully loaded device '%s'\n", h->devname);
+	dev_warn(&h->pdev->dev, "Successfully loaded device '%s'\n",
+			h->devname);
 
 	return 0;
 
@@ -2606,7 +2607,7 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 		/* Basic field check */
 		err = -EINVAL;
 		if ((addr & 3) || (len == 0)) {
-			printk(KERN_ERR "sop_sync: Invalid IOV(0x%lx, 0x%x)\n",
+			pr_err("sop_sync: Invalid IOV(0x%lx, 0x%x)\n",
 				addr, len);
 			goto err_iovec;
 		}
@@ -2621,8 +2622,7 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 
 		err = get_user_pages_fast(addr, count, write, page_map);
 		if (err < count) {
-			printk(KERN_ERR "sop_sync: Failed to get user pages "
-				"IOV(0x%lx, 0x%x) count=%d\n",
+			pr_err("sop_sync: Failed to get user pages IOV(0x%lx, 0x%x) count=%d\n",
 				addr, len, count);
 			count = err;
 			err = -EFAULT;
@@ -2646,8 +2646,9 @@ static int sop_get_sync_cdb_scatterlist(struct sop_sync_cdb_req *sio,
 				 * table on each mapping. We KNOW that there
 				 * must be more entries here or the driver
 				 * would be buggy, so force clear the
-				 * termination and chain bit to avoid doing a full
-				 * sg_init_table() in drivers for each command.
+				 * termination and chain bit to avoid doing
+				 * a full sg_init_table() in drivers for each
+				 * command.
 				 */
 				cur_sg->page_link &= ~0x03;
 				cur_sg++;
@@ -3056,7 +3057,8 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 			scdb->cdb[0]);
 
 		if (sense_data_len) {
-			result = sop_copy_sgio_sense_data(hdr, scr, sense_data_len);
+			result = sop_copy_sgio_sense_data(hdr, scr,
+							sense_data_len);
 			/*
 			 * ignore return value, we pass sense data back to user
 			 * we just want to snoop for capacity change unit attn.
