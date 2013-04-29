@@ -46,7 +46,7 @@ bool kthread_freezable_should_stop(bool *was_frozen)
 	might_sleep();
 
 	if (unlikely(freezing(current)))
-		 refrigerator();
+		refrigerator();
 
 	return kthread_should_stop();
 }

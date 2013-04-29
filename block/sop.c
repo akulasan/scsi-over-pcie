@@ -2714,8 +2714,9 @@ static int sop_prepare_scatterlist(struct bio *bio, struct sop_request *ser,
 				 * table on each mapping. We KNOW that there
 				 * must be more entries here or the driver
 				 * would be buggy, so force clear the
-				 * termination and chain bit to avoid doing a full
-				 * sg_init_table() in drivers for each command.
+				 * termination and chain bit to avoid doing
+				 * a full sg_init_table() in drivers for each
+				 * command.
 				 */
 				cur_sg->page_link &= ~0x03;
 				cur_sg++;
@@ -2856,8 +2857,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	if (bio_data_dir(bio) == WRITE) {
 		r->flags = SOP_DATA_DIR_TO_DEVICE;
 		dma_dir = DMA_TO_DEVICE;
-	}
-	else {
+	} else {
 		r->flags = SOP_DATA_DIR_FROM_DEVICE;
 		dma_dir = DMA_FROM_DEVICE;
 	}
@@ -2915,7 +2915,7 @@ static void sop_queue_cmd(struct queue_info *qinfo, struct bio *bio)
 	if (bio_list_empty(&wq->iq_cong))
 		add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
 	bio_list_add(&wq->iq_cong, bio);
-	
+
 	qinfo->waitq_depth++;
 }
 
@@ -2983,7 +2983,7 @@ static void fill_send_cdb_request(struct sop_limited_cmd_iu *r,
 	r->xfer_size = cpu_to_le32(data_len);
 }
 
-static int sop_copy_sgio_sense_data(sg_io_hdr_t *hdr, 
+static int sop_copy_sgio_sense_data(sg_io_hdr_t *hdr,
 	struct sop_cmd_response *scr, u16 sense_data_len)
 {
 	if (!hdr->sbp)
@@ -3084,8 +3084,9 @@ static int sop_complete_sgio_hdr(struct sop_device *h,
 		if (response_data_len) {
 			/* FIXME need to do something correct here... */
 			result = -EIO;
-			dev_warn(&h->pdev->dev, "SCDB[%02x]: Got response data... "
-				"what to do with it?\n", scdb->cdb[0]);
+			dev_warn(&h->pdev->dev,
+				"SCDB[%02x]: Got response data... what to do with it?\n",
+					scdb->cdb[0]);
 		}
 		break;
 
@@ -3290,7 +3291,8 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 			if (nsegs <= 0) {
 				dev_warn(&h->pdev->dev,
 					"DMA map err %d CDB[0]=0x%x, SQ[%d]\n",
-					nsegs, sio->cdb[0], qinfo_to_qid(qinfo));
+					nsegs, sio->cdb[0],
+					qinfo_to_qid(qinfo));
 				goto sync_dma_map_fail;
 			}
 		} else {
@@ -3872,8 +3874,8 @@ static void sop_timeout_sync_cmd(struct queue_info *q, struct sop_request *r)
 	if (r->waiting)
 		complete(r->waiting);
 	else
-		dev_err(&q->h->pdev->dev, "TMO: bio and waiting both NULL "
-				"for Q[%d], rqid %d\n",
+		dev_err(&q->h->pdev->dev,
+			"TMO: bio and waiting both NULL for Q[%d], rqid %d\n",
 				q->oq->queue_id, r->request_id);
 
 	/* Update counters originally done in ISR */
