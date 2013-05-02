@@ -2126,6 +2126,16 @@ static int sop_init_time_host_reset(struct sop_device *h)
 	return 0;
 }
 
+static int sop_first_memory_bar(struct pci_dev *pdev)
+{
+	int i;
+
+	for (i = 0; i < DEVICE_COUNT_RESOURCE; i++)
+		if (pci_resource_flags(pdev, i) & IORESOURCE_MEM)
+			return i;
+	return -ENODEV;
+}
+
 static int __devinit sop_probe(struct pci_dev *pdev,
 			const struct pci_device_id *pci_id)
 {
@@ -2178,7 +2188,14 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail_pci_enable;
 	}
 
-	h->pqireg = pci_ioremap_bar(pdev, 0);
+	rc = sop_first_memory_bar(h->pdev);
+	if (rc < 0) {
+		dev_err(&h->pdev->dev,
+			"Cannot find first memory BAR, aborting\n");
+		goto bail_request_regions;
+	}
+
+	h->pqireg = pci_ioremap_bar(pdev, rc);
 	if (!h->pqireg) {
 		rc = -ENOMEM;
 		goto bail_request_regions;
