@@ -293,14 +293,14 @@ static void sop_end_io_acct(struct bio *bio, unsigned long start_time)
 
 static void free_q_request_buffers(struct queue_info *q)
 {
-	vfree(q->request_bits);
+	kfree(q->request_bits);
 	q->request_bits = NULL;
 	if (q->request) {
 		int i;
 
 		for (i = 0; i < q->iq->nelements; i++)
 			kfree(q->request[i].sgl);
-		vfree(q->request);
+		kfree(q->request);
 		q->request = NULL;
 	}
 }
@@ -329,15 +329,15 @@ static void free_sgl_area(struct sop_device *h, struct queue_info *q)
 static int allocate_q_request_buffers(struct queue_info *q, int nsgl)
 {
 	int nbuffers = q->iq->nelements;
-	int node = cpu_to_node(qpindex_from_pqiq(q->oq));
 
 	BUG_ON(nbuffers > MAX_CMDS);
 	q->qdepth = nbuffers;
-	q->request_bits = vzalloc_node((BITS_TO_LONGS(nbuffers) + 1) *
-					sizeof(unsigned long), node);
+	q->request_bits = kzalloc((BITS_TO_LONGS(nbuffers) + 1) *
+					sizeof(unsigned long), GFP_KERNEL);
 	if (!q->request_bits)
 		goto bailout;
-	q->request = vzalloc_node(sizeof(struct sop_request) * nbuffers, node);
+	q->request = kzalloc(sizeof(struct sop_request) * nbuffers,
+				GFP_KERNEL);
 	if (!q->request)
 		goto bailout;
 	if (nsgl) {
