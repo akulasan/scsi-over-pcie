@@ -1037,14 +1037,21 @@ static int sop_setup_msix(struct sop_device *h)
 	err = 0;
 	if (!pci_find_capability(h->pdev, PCI_CAP_ID_MSIX))
 		goto msix_failed;
-	err = pci_enable_msix(h->pdev, msix_entry, h->nr_queue_pairs - 1);
-	if (err < 0)
-		goto msix_failed;
-	if (err > 0) {
+
+	while (1) {
+		err = pci_enable_msix(h->pdev, msix_entry,
+				h->nr_queue_pairs - 1);
+		if (err == 0)
+			break;	/* Success */
+		if (err < 0)
+			goto msix_failed;
+
+		/* Try Reduced number of vectors */
 		dev_warn(&h->pdev->dev,
-				"requested %d MSI-X vectors, only got %d vectors\n",
-				h->nr_queue_pairs, err);
+			"Requested %d MSI-X vectors, available %d\n",
+			h->nr_queue_pairs-1, err);
 		h->nr_queue_pairs = err + 1;
+		continue;
 	}
 	for (i = 0; i < h->nr_queue_pairs; i++) {
 		/* vid makes admin q share with io q 0 */
@@ -1060,10 +1067,18 @@ static int sop_setup_msix(struct sop_device *h)
 	return 0;
 
 msix_failed:
-	dev_warn(&h->pdev->dev, "MSI-X init failed: %s\n",
+	/* Use regular interrupt */
+	h->nr_queue_pairs = 2;	/* Only one IO queue + Admin */
+
+	h->qinfo[0].msix_entry = 0;
+	h->qinfo[1].msix_entry = 1;
+	h->qinfo[0].msix_vector = h->qinfo[1].msix_vector = h->pdev->irq;
+	h->intr_mode = INTR_MODE_INTX;
+
+	dev_warn(&h->pdev->dev, "MSI-X init failed (using legacy intr): %s\n",
 			err ?	"failed to enable MSI-X" :
 				"device does not support MSI-X");
-	return -1;
+	return 0;
 }
 
 /* function to determine whether a complete response has been accumulated */
