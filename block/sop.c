@@ -2251,15 +2251,15 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		dev_warn(&h->pdev->dev, "Bailing out in probe - Creating i/o queues\n");
 		goto bail_admin_irq;
 	}
-	rc = sop_report_general(h);
-	if (rc) {
-		dev_warn(&h->pdev->dev, "Bailing out in probe - REPORT GENERAL failed.\n");
-		goto bail_admin_irq;
-	}
-
 	rc = sop_request_io_irqs(h, sop_ioq_msix_handler);
 	if (rc)
 		goto bail_io_q_created;
+
+	rc = sop_report_general(h);
+	if (rc) {
+		dev_warn(&h->pdev->dev, "Bailing out in probe - REPORT GENERAL failed.\n");
+		goto bail_io_q_created;
+	}
 
 	rc = sop_add_disk(h);
 	if (rc) {
