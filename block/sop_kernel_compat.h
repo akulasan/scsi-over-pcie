@@ -40,7 +40,13 @@ void usleep_range(unsigned long min, unsigned long max)
  * make_request must always succeed.
  */
 #define MRFN_RET	0
+#else
+/* Function return is eliminated */
+#define MRFN_TYPE	void
+#define MRFN_RET
+#endif
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 3, 0))
 bool kthread_freezable_should_stop(bool *was_frozen)
 {
 	might_sleep();
@@ -50,11 +56,6 @@ bool kthread_freezable_should_stop(bool *was_frozen)
 
 	return kthread_should_stop();
 }
-
-#else
-/* Function return is eliminated */
-#define MRFN_TYPE	void
-#define MRFN_RET
 #endif
 
 /* these next three disappeared in 3.8-rc4 */
