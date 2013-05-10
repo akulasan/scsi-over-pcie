@@ -1679,7 +1679,9 @@ out:
 
 static int fill_report_general(struct sop_device *h,
 				struct report_general_iu *r,
-				u16 request_id, void *buffer, u32 buffersize)
+				u16 request_id,
+				void *buffer, u32 buffersize,
+				u16 qid)
 {
 	u64 busaddr;
 
@@ -1687,7 +1689,7 @@ static int fill_report_general(struct sop_device *h,
 	r->iu_type = REPORT_GENERAL_IU;
 	r->compatible_features = 0;
 	r->iu_length = cpu_to_le16(sizeof(*r) - PQI_IU_HEADER_SIZE);
-	r->response_oq = 0;
+	r->response_oq = cpu_to_le16(qid);
 	r->work_area = 0;
 	r->request_id = request_id;
 	r->buffer_size = cpu_to_le32(buffersize);
@@ -1778,7 +1780,7 @@ static int sop_report_general(struct sop_device *h)
 	ser->bio = NULL;
 	ser->num_sg = 0;
 	if (fill_report_general(h, r, request_id, buffer,
-						(u32) sizeof(*buffer))) {
+				(u32) sizeof(*buffer), queue_pair_index)) {
 		rc = -ENOMEM;
 		goto rep_gen_prep_fail;
 	}
