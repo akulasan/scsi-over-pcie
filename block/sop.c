@@ -1772,6 +1772,7 @@ static int sop_report_general(struct sop_device *h)
 	cpu = get_cpu();
 	queue_pair_index = find_sop_queue(h, cpu);
 	qinfo = &h->qinfo[queue_pair_index];
+	spin_lock_irq(&qinfo->iq->qlock);
 	request_id = alloc_request(h, queue_pair_index);
 	if (request_id == (u16) -EBUSY) {
 		if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT))
@@ -1822,6 +1823,7 @@ rep_gen_prep_fail:
 rep_gen_alloc_elm_fail:
 	free_request(h, queue_pair_index, request_id);
 rep_gen_alloc_req_fail:
+	spin_unlock_irq(&qinfo->iq->qlock);
 	put_cpu();
 rep_gen_issue_fail:
 	dev_warn(&h->pdev->dev, "REPORT GENERAL failed\n");
@@ -1839,6 +1841,7 @@ static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
 	atomic_inc(&qinfo->cur_qdepth);
 	atomic_inc(&h->cmd_pending);
 	pqi_notify_device_queue_written(qinfo->iq);
+	spin_unlock_irq(&qinfo->iq->qlock);
 	put_cpu();
 	wait_for_completion(&wait);
 }
@@ -3293,6 +3296,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	cpu = get_cpu();
 	queue_pair_index = find_sop_queue(h, cpu);
 	qinfo = &h->qinfo[queue_pair_index];
+	spin_lock_irq(&qinfo->iq->qlock);
 	request_id = alloc_request(h, queue_pair_index);
 	if (request_id < 0) {
 		if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT))
@@ -3359,6 +3363,7 @@ sync_alloc_elem_fail:
 	free_request(h, qinfo_to_qid(qinfo), request_id);
 
 sync_req_id_fail:
+	spin_unlock_irq(&qinfo->iq->qlock);
 	put_cpu();
 
 sync_error:
