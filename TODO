@@ -2,6 +2,10 @@
     we get less than MSIX we request or if MSIX is not supported in the host.
     We need to fall back to legacy interrupt.
 
+- Support for REQ_FLUSH flag in bio to flush drive cache.
+
+- Support for TRIM equivalant command in SOP
+
 - Support MMIO in SGIO commands.
 
 - Support for abort and other task management commands.
@@ -19,7 +23,7 @@
 
 - Add support for SGIO retry on queue full.
 
-- Add code for shutdown/hibernation support.
+- Add code for hibernation support.
 
 - Add support for AER
 
