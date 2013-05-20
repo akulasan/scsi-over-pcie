@@ -2404,15 +2404,107 @@ static int sop_release_hw(struct sop_device *h, u32 action)
 	return ret;
 }
 
-static int sop_suspend(__attribute__((unused)) struct pci_dev *pdev,
-				__attribute__((unused)) pm_message_t state)
+static int sop_suspend(struct pci_dev *pdev, pm_message_t state)
 {
-	return -ENOSYS;
+	struct sop_device *h = pci_get_drvdata(pdev);
+	u32 action = (PQI_SYS_POWER_ACTION_SLEEP | PQI_DEV_POWER_ACTION_D3);
+
+	switch (state.event)
+	{
+	case 1:
+		action = (PQI_SYS_POWER_ACTION_SLEEP_S1
+				| PQI_DEV_POWER_ACTION_D3);
+		break;
+
+	case 4:
+		action = (PQI_SYS_POWER_ACTION_SLEEP_S4
+				| PQI_DEV_POWER_ACTION_D3);
+		break;
+	}
+	sop_release_hw(h, action);
+
+	/*
+	 * sop_thread is already frozen by kernel
+	 * before this suspend function is called
+	 */
+
+	pci_save_state(pdev);
+	pci_disable_device(pdev);
+	pci_set_power_state(pdev, pci_choose_state(pdev, state));
+	return 0;
 }
 
-static int sop_resume(__attribute__((unused)) struct pci_dev *pdev)
+static int sop_resume(struct pci_dev *pdev)
 {
-	return -ENOSYS;
+	struct sop_device *h = pci_get_drvdata(pdev);
+	int rc;
+
+	pci_set_power_state(pdev, PCI_D0);
+	pci_enable_wake(pdev, PCI_D0, 0);
+	pci_restore_state(pdev);
+	rc = pci_enable_device(pdev);
+	if (rc) {
+		dev_err(&pdev->dev, "Resume: Enable device failed\n");
+		return rc;
+	}
+	pci_set_master(pdev);
+	sop_power_action(h, (PQI_SYS_POWER_ACTION_RESUME
+		| PQI_DEV_POWER_ACTION_D0));
+
+	rc = sop_init_time_host_reset(h);
+	if (rc) {
+		dev_err(&pdev->dev, "Failed to Reset Device\n");
+		goto resume_disable_device;
+	}
+	if (sop_set_dma_mask(pdev)) {
+		dev_err(&pdev->dev, "Resume: Failed to set DMA mask\n");
+		goto resume_disable_device;
+	}
+
+	rc = sop_setup_msix(h);
+	if (rc) {
+		dev_warn(&h->pdev->dev, "Resume: failed to setup MSIX\n");
+		goto resume_msix_fail;
+	}
+
+	sop_reinit_all_ioq(h);
+	rc = sop_create_admin_queues(h);
+	if (rc) {
+		dev_warn(&h->pdev->dev,
+			"Resume: failed to create admin queue\n");
+		goto resume_admin_q_fail;
+	}
+
+	rc = sop_request_irq(h, 0, sop_adminq_msix_handler);
+	if (rc) {
+		dev_warn(&h->pdev->dev,
+			"Resume: failed to register MSI-X for admin queue\n");
+		goto resume_io_irq_fail;
+	}
+	rc = sop_create_io_queue_pairs(h);
+	if (rc) {
+		dev_warn(&h->pdev->dev, "Resume: failed to create i/o queues\n");
+		goto resume_setup_ioq_fail;
+	}
+	rc = sop_request_io_irqs(h, sop_ioq_msix_handler);
+	if (rc) {
+		dev_warn(&h->pdev->dev,
+			"Resume: failed to register MSI-X for i/o queue\n");
+		goto resume_io_irq_fail;
+	}
+	return 0;
+
+resume_io_irq_fail:
+	/* TODO */
+resume_setup_ioq_fail:
+	/* TODO */
+resume_admin_q_fail:
+	/* TODO */
+resume_msix_fail:
+	/* TODO */
+resume_disable_device:
+	pci_disable_device(pdev);
+	return -ENODEV;
 }
 
 static void __devexit sop_remove(struct pci_dev *pdev)
