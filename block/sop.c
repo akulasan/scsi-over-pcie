@@ -2451,6 +2451,10 @@ static int sop_resume(struct pci_dev *pdev)
 	sop_power_action(h, (PQI_SYS_POWER_ACTION_RESUME
 		| PQI_DEV_POWER_ACTION_D0));
 
+	/* Update global flag set at suspend */
+	clear_bit(SOP_FLAGS_BITPOS_DO_REM, &h->flags);
+
+	/* Restart the device */
 	rc = sop_init_time_host_reset(h);
 	if (rc) {
 		dev_err(&pdev->dev, "Failed to Reset Device\n");
@@ -2486,6 +2490,8 @@ static int sop_resume(struct pci_dev *pdev)
 		dev_warn(&h->pdev->dev, "Resume: failed to create i/o queues\n");
 		goto resume_setup_ioq_fail;
 	}
+	set_bit(SOP_FLAGS_BITPOS_IOQ_RDY, &h->flags);
+
 	rc = sop_request_io_irqs(h, sop_ioq_msix_handler);
 	if (rc) {
 		dev_warn(&h->pdev->dev,
