@@ -2293,8 +2293,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	return 0;
 
 bail_io_irq:
-	for (i = 1; i < h->nr_queue_pairs; i++)
-		sop_free_irq(h, i);
+	sop_free_io_irqs(h);
 bail_io_q_created:
 	sop_delete_io_queues(h);
 	sop_free_io_queues(h);
@@ -2463,7 +2462,7 @@ static int sop_resume(struct pci_dev *pdev)
 	rc = sop_setup_msix(h);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "Resume: failed to setup MSIX\n");
-		goto resume_msix_fail;
+		goto resume_disable_device;
 	}
 
 	sop_reinit_all_ioq(h);
@@ -2478,12 +2477,12 @@ static int sop_resume(struct pci_dev *pdev)
 	if (rc) {
 		dev_warn(&h->pdev->dev,
 			"Resume: failed to register MSI-X for admin queue\n");
-		goto resume_io_irq_fail;
+		goto resume_admin_q_fail;
 	}
 	rc = sop_create_io_queue_pairs(h);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "Resume: failed to create i/o queues\n");
-		goto resume_setup_ioq_fail;
+		goto resume_admin_q_fail;
 	}
 	set_bit(SOP_FLAGS_BITPOS_IOQ_RDY, &h->flags);
 
@@ -2496,13 +2495,12 @@ static int sop_resume(struct pci_dev *pdev)
 	return 0;
 
 resume_io_irq_fail:
-	/* TODO */
-resume_setup_ioq_fail:
-	/* TODO */
+	sop_free_io_irqs(h);
+	clear_bit(SOP_FLAGS_BITPOS_IOQ_RDY, &h->flags);
 resume_admin_q_fail:
-	/* TODO */
-resume_msix_fail:
-	/* TODO */
+	clear_bit(SOP_FLAGS_BITPOS_IOQ_RDY, &h->flags);
+	sop_free_irq(h, 0);
+	pci_disable_msix(pdev);
 resume_disable_device:
 	pci_disable_device(pdev);
 	return -ENODEV;
