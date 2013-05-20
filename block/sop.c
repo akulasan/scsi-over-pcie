@@ -2390,18 +2390,13 @@ static void sop_stop_unit(struct sop_device *h);
 
 static int sop_release_hw(struct sop_device *h, u32 action)
 {
-	int ret;
-
-
 	sop_stop_unit(h);
 	sop_fail_all_outstanding_io(h);
-	ret = sop_power_action(h, action);
 	sop_free_io_irqs(h);
 	sop_delete_io_queues(h);
 	sop_free_admin_irq_and_disable_msix(h);
 	sop_delete_admin_queues(h);
-
-	return ret;
+	return sop_power_action(h, action);
 }
 
 static int sop_suspend(struct pci_dev *pdev, pm_message_t state)
