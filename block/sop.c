@@ -974,7 +974,7 @@ static int sop_create_admin_queues(struct sop_device *h)
 	/* Mark the ADMIn queue as ready so that timeout can occur on them */
 	set_bit(SOP_FLAGS_BITPOS_ADMIN_RDY, &h->flags);
 
-	dev_warn(&h->pdev->dev, "Successfully created admin queues\n");
+	dev_info(&h->pdev->dev, "Successfully created admin queues\n");
 	return 0;
 
 bailout:
@@ -1942,6 +1942,8 @@ static int sop_create_io_queue_pairs(struct sop_device *h)
 		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_TO_DEVICE))
 			return -1;
 	}
+	dev_info(&h->pdev->dev, "Successfully created %d IO queue pairs\n",
+		h->nr_queue_pairs - 1);
 
 	return 0;
 }
@@ -1991,8 +1993,6 @@ allocate_queue_mem:
 	/* Mark the IO queues as ready so that timeout can occur on them */
 	set_bit(SOP_FLAGS_BITPOS_IOQ_RDY, &h->flags);
 
-	dev_warn(&h->pdev->dev, "Successfully created %d IO queue pairs\n",
-		h->nr_queue_pairs - 1);
 	return 0;
 
 bail_out:
