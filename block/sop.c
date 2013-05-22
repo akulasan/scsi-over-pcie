@@ -3968,6 +3968,10 @@ static int sop_add_timeout(struct queue_info *q, uint timeout)
 
 static void sop_rem_timeout(struct queue_info *q, uint tmo_slot)
 {
+	/* Check for invalid slot - if it has already timed out */
+	if (tmo_slot >= MAX_SOP_TIMEOUT)
+		return;
+
 	if (atomic_read(&q->tmo.time_slot[tmo_slot]) == 0) {
 		dev_err(&q->h->pdev->dev,
 			"Q[%d] TM slot[%d] count is 0, cur_slot=%d\n",
@@ -4063,15 +4067,11 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 	int count = 0;
 	struct sop_request *ser;
 
-	/* Update time slot to include all commands for error cases */
-	if (action != SOP_ERR_NONE)
-		tmo_slot = -1;
-
 	/* Process timeout by linear search of request bits in qinfo*/
 	maxid = q->qdepth - 1;
 	for_each_set_bit(rqid, q->request_bits, maxid) {
 		ser = &q->request[rqid];
-		if ((tmo_slot > 0) && (ser->tmo_slot != tmo_slot))
+		if ((action == SOP_ERR_NONE) && (ser->tmo_slot != tmo_slot))
 			continue;
 
 		/* Found a timed out command, process timeout */
@@ -4086,13 +4086,19 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 			break;
 
 		case SOP_ERR_NONE:
+		case SOP_ERR_DEV_FAULT:
 			/* TODO: Need to abort this command */
-			/* For now, fall thru and reset as below */
+			/* For now, reset the controller only */
 			set_bit(SOP_FLAGS_BITPOS_DO_RESET, &q->h->flags);
+
+			/* Remove from timer so it doesn't timeout again */
+			ser->tmo_slot = INVALID_TIMEOUT;
 			ser->retry_count++;
 
+			/* Do not free request - it will be done at RESET */
+			continue;
+
 		case SOP_ERR_DEV_RESET:
-		case SOP_ERR_DEV_FAULT:
 			/*
 			 * Requeue this command and
 			 * reset the controller at end
@@ -4105,15 +4111,13 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 					sop_queue_cmd(q, ser->bio);
 				spin_unlock_irq(&q->iq->qlock);
 			} else {
-				if (action != SOP_ERR_DEV_RESET)
-					/* Do not free the request */
-					continue;
-
 				sop_timeout_sync_cmd(q, ser);
 			}
 			break;
 		}
 		/* Free the sop request now */
+		atomic_dec(&q->h->cmd_pending);
+		atomic_dec(&q->cur_qdepth);
 		clear_bit(rqid, q->request_bits);
 	}
 
@@ -4261,12 +4265,13 @@ start_reset:
 
 	clear_bit(SOP_FLAGS_BITPOS_RESET_PEND, &h->flags);
 
-	/* Need to revalidate the disk unconditionally */
+	/* Requeue any pending I/O commands */
+	sop_requeue_all_outstanding_io(h);
+
+	/* Now, need to revalidate the disk unconditionally */
 	clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
 	sop_revalidate(h->disk);
 
-	/* Process any pending I/O commands */
-	sop_requeue_all_outstanding_io(h);
 	/* Next: sop_resubmit_waitq for all Q */
 	for (i = 1; i < h->nr_queue_pairs; i++)
 		sop_resubmit_waitq(&h->qinfo[i], false);
