@@ -1582,6 +1582,7 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	request->waiting = &wait;
 	request->response_accumulated = 0;
 	request->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
+	request->retry_count = 0;
 	pqi_notify_device_queue_written(qinfo->iq);
 	wait_for_completion(&wait);
 	sop_rem_timeout(qinfo, request->tmo_slot);
@@ -1804,6 +1805,7 @@ static int sop_report_general(struct sop_device *h)
 		goto rep_gen_prep_fail;
 	}
 	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
+	ser->retry_count = 0;
 	send_sop_command(h, qinfo, ser);
 	sop_rem_timeout(qinfo, ser->tmo_slot);
 	busaddr = le64_to_cpu(r->sg.address);
@@ -3025,6 +3027,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 
 	r->xfer_size = cpu_to_le32(ser->xfer_size);
 	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
+	ser->retry_count = 0;
 
 	sop_start_io_acct(bio);
 	/* Submit it to the device */
@@ -3447,6 +3450,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 				ser->xfer_size, sio->data_dir);
 
 	ser->tmo_slot = sop_add_timeout(qinfo, sio->timeout);
+	ser->retry_count = 0;
 	send_sop_command(h, qinfo, ser);
 	return process_direct_cdb_response(h, sio, qinfo, ser);
 
@@ -4085,6 +4089,7 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 			/* TODO: Need to abort this command */
 			/* For now, fall thru and reset as below */
 			set_bit(SOP_FLAGS_BITPOS_DO_RESET, &q->h->flags);
+			ser->retry_count++;
 
 		case SOP_ERR_DEV_RESET:
 		case SOP_ERR_DEV_FAULT:
@@ -4094,7 +4099,10 @@ static int sop_timeout_queued_cmds(struct queue_info *q,
 			 */
 			if (ser->bio) {
 				spin_lock_irq(&q->iq->qlock);
-				sop_queue_cmd(q, ser->bio);
+				if (ser->retry_count > MAX_RETRY_COUNT)
+					sop_fail_cmd(q, ser);
+				else
+					sop_queue_cmd(q, ser->bio);
 				spin_unlock_irq(&q->iq->qlock);
 			} else {
 				if (action != SOP_ERR_DEV_RESET)
@@ -4133,8 +4141,9 @@ static void sop_timeout_ios(struct queue_info *q, int action)
 	cmd_pend -= sop_timeout_queued_cmds(q, cur_slot, action);
 
 	if ((action == SOP_ERR_NONE) && cmd_pend)
-		dev_warn(&q->h->pdev->dev, "SOP timeout!! Cannot account for %d cmds\n",
-				cmd_pend);
+		dev_warn(&q->h->pdev->dev, "SOP timeout!! Q[%d] Slot [%d] "
+				"Cannot account for %d cmds\n",
+				qinfo_to_qid(q), cur_slot, cmd_pend);
 
 	/* Reset the count of the curremnt slot */
 	atomic_set(&q->tmo.time_slot[cur_slot], 0);

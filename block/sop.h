@@ -289,9 +289,12 @@ struct sop_wait_queue {
 	struct bio_list iq_cong;
 };
 
-/* Note: MAX cannot be greater than 255 as it is stored in u8 */
+/* Note: Value below is stored in u16 */
 #define	MAX_SOP_TIMEOUT		64
 #define	DEF_IO_TIMEOUT		30
+#define INVALID_TIMEOUT		0xFFFF
+
+#define MAX_RETRY_COUNT		3
 
 struct sop_timeout {
 	atomic_t time_slot[MAX_SOP_TIMEOUT];
@@ -406,7 +409,8 @@ struct sop_request {
 	u32 xfer_size;
 	u16 response_accumulated;
 	u16 request_id;
-	u16 num_sg;
+	u8 num_sg;
+	u8 retry_count;
 	u16 tmo_slot;
 	unsigned long start_time;
 	u8 response[MAX_RESPONSE_SIZE];
