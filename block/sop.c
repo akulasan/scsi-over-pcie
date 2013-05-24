@@ -1869,7 +1869,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 	spin_lock_init(&ioq->qlock);
 	r = pqi_alloc_elements(aq, 1);
 	request_id = alloc_request(h, 0);
-	if (request_id < 0) {
+	if (request_id == (u16) -EBUSY) {
 		dev_warn(&h->pdev->dev, "Requests exhausted for create Q #%d\n",
 			queue_pair_index);
 		goto bail_out;
@@ -3395,7 +3395,7 @@ static int send_sync_cdb(struct sop_device *h, struct sop_sync_cdb_req *sio,
 	qinfo = &h->qinfo[queue_pair_index];
 	spin_lock_irq(&qinfo->iq->qlock);
 	request_id = alloc_request(h, queue_pair_index);
-	if (request_id < 0) {
+	if (request_id == (u16) -EBUSY) {
 		if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT))
 			dev_warn(&h->pdev->dev,
 				"%s: Failed to allocate request\n", __func__);
