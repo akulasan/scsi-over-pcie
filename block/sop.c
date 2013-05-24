@@ -44,13 +44,13 @@
 #include "sop_kernel_compat.h"
 #include "sop.h"
 
-#define DRIVER_VERSION "1.0"
+#define DRIVER_VERSION "1.1"
 #define DRIVER_NAME "sop (v " DRIVER_VERSION ")"
 #define SOP "sop"
 
 MODULE_AUTHOR("Hewlett-Packard Company");
 MODULE_AUTHOR("SanDisk Inc.");
-MODULE_DESCRIPTION("sop driver" DRIVER_VERSION);
+MODULE_DESCRIPTION("sop driver v" DRIVER_VERSION);
 MODULE_SUPPORTED_DEVICE("sop devices");
 MODULE_VERSION(DRIVER_VERSION);
 MODULE_LICENSE("GPL");
