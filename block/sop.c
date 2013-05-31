@@ -2389,7 +2389,7 @@ static int sop_power_action(struct sop_device *h, u32 action)
 
 static void sop_stop_unit(struct sop_device *h);
 
-static int sop_release_hw(struct sop_device *h, u32 action)
+static int sop_release_hw(struct sop_device *h)
 {
 	sop_stop_unit(h);
 	sop_fail_all_outstanding_io(h);
@@ -2397,7 +2397,7 @@ static int sop_release_hw(struct sop_device *h, u32 action)
 	sop_delete_io_queues(h);
 	sop_free_admin_irq_and_disable_msix(h);
 	sop_delete_admin_queues(h);
-	return sop_power_action(h, action);
+	return 0;
 }
 
 static int sop_suspend(struct pci_dev *pdev, pm_message_t state)
@@ -2417,7 +2417,8 @@ static int sop_suspend(struct pci_dev *pdev, pm_message_t state)
 				| PQI_DEV_POWER_ACTION_D3);
 		break;
 	}
-	sop_release_hw(h, action);
+	sop_release_hw(h);
+	sop_power_action(h, action);
 
 	/*
 	 * sop_thread is already frozen by kernel
@@ -2515,8 +2516,7 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	dev_warn(&pdev->dev, "Remove called.\n");
 	h = pci_get_drvdata(pdev);
 	sop_remove_disk(h);
-	sop_release_hw(h, (PQI_SYS_POWER_ACTION_SHUTDOWN |
-				PQI_DEV_POWER_ACTION_D3));
+	sop_release_hw(h);
 	sop_free_io_queues(h);
 	sop_free_admin_queues(h);
 	if (h->pqireg)
@@ -2542,7 +2542,8 @@ static void sop_shutdown(struct pci_dev *pdev)
 	dev_warn(&pdev->dev, "Shutdown sop.\n");
 
 	h = pci_get_drvdata(pdev);
-	sop_release_hw(h, (PQI_SYS_POWER_ACTION_SHUTDOWN |
+	sop_release_hw(h);
+	sop_power_action(h, (PQI_SYS_POWER_ACTION_SHUTDOWN |
 				PQI_DEV_POWER_ACTION_D3));
 }
 
