@@ -40,6 +40,7 @@
 #include <scsi/sg.h>
 #include <scsi/scsi_cmnd.h>
 #include <linux/freezer.h>
+#include <linux/uio.h>
 
 #include "sop_kernel_compat.h"
 #include "sop.h"
