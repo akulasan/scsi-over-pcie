@@ -4219,7 +4219,7 @@ static void sop_requeue_all_outstanding_io(struct sop_device *h)
 }
 
 /* In case of device Error flag set, delay before reset is done in seconds */
-#define SOP_ERROR_RESET_DEALY_SEC	DEF_IO_TIMEOUT
+#define SOP_ERROR_RESET_DELAY_SEC	DEF_IO_TIMEOUT
 #define	MAX_RESET_COUNT			3
 
 /* Run time controller reset */
@@ -4288,8 +4288,8 @@ reset_err:
 			reset_count, MAX_RESET_COUNT);
 	if (reset_count < MAX_RESET_COUNT) {
 		/* Delay before next reset issue */
-		usleep_range((SOP_ERROR_RESET_DEALY_SEC - 1) * 1000 * 1000,
-				(SOP_ERROR_RESET_DEALY_SEC + 1) * 1000 * 1000);
+		usleep_range((SOP_ERROR_RESET_DELAY_SEC - 1) * 1000 * 1000,
+				(SOP_ERROR_RESET_DELAY_SEC + 1) * 1000 * 1000);
 		goto start_reset;
 	}
 
@@ -4399,7 +4399,7 @@ static void sop_process_dev_timer(struct sop_device *h)
 
 			/* Reset the controller */
 			if (action == SOP_ERR_DEV_FAULT)
-				delay = SOP_ERROR_RESET_DEALY_SEC * HZ;
+				delay = SOP_ERROR_RESET_DELAY_SEC * HZ;
 
 			dev_warn(&h->pdev->dev,
 				"Scheduling a controller reset in %d sec\n",
