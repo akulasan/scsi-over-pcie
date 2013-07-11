@@ -2936,6 +2936,70 @@ static int sop_scatter_gather(struct sop_device *h,
 	return 0;
 }
 
+static int sop_send_sync_cache(struct sop_device *h, struct bio *bio,
+				struct queue_info *qinfo)
+{
+	struct sop_limited_cmd_iu *r;
+	struct sop_request *ser;
+	struct scatterlist *sgl;
+	u16 request_id;
+	int num_sg;
+
+	request_id = alloc_request(h, qinfo_to_qid(qinfo));
+	if (request_id == (u16) -EBUSY)
+		return -EBUSY;
+
+	r = pqi_alloc_elements(qinfo->iq, 1);
+	if (IS_ERR(r)) {
+		if ((sop_dbg_lvl & SOP_DBG_LVL_RARE_NORM_EVENT))
+			dev_warn(&h->pdev->dev,
+				"SUBQ[%d] pqi_alloc_elements for bio %p returned %ld\n",
+				qinfo_to_qid(qinfo), bio, PTR_ERR(r));
+		goto alloc_elem_fail;
+	}
+
+	r->iu_type = SOP_LIMITED_CMD_IU;
+	r->compatible_features = 0;
+	r->queue_id = cpu_to_le16(qinfo->oq->queue_id);
+	r->work_area = 0;
+	r->request_id = request_id;
+	ser = &qinfo->request[request_id];
+	sgl = ser->sgl;
+	ser->xfer_size = 0;
+	ser->bio = bio;
+	ser->waiting = NULL;
+	r->flags = SOP_DATA_DIR_NONE;
+
+	memset(r->cdb, 0, sizeof(r->cdb));
+	r->cdb[0] = SYNCHRONIZE_CACHE;
+
+	ser->xfer_size = 0;
+
+	num_sg = 0;
+	atomic_inc(&qinfo->cur_qdepth);
+	if (qinfo->max_qdepth < atomic_read(&qinfo->cur_qdepth))
+		qinfo->max_qdepth = atomic_read(&qinfo->cur_qdepth);
+	atomic_inc(&h->cmd_pending);
+	if (atomic_read(&h->cmd_pending) > h->max_cmd_pending)
+		h->max_cmd_pending = atomic_read(&h->cmd_pending);
+	ser->num_sg = 0;
+	sop_scatter_gather(h, qinfo, num_sg, r, sgl, &ser->xfer_size);
+
+	r->xfer_size = cpu_to_le32(ser->xfer_size);
+	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
+	ser->retry_count = 0;
+
+	sop_start_io_acct(bio);
+	/* Submit it to the device */
+	writew(qinfo->iq->unposted_index, qinfo->iq->index.to_dev.pi);
+
+	return 0;
+
+alloc_elem_fail:
+	free_request(h, qinfo_to_qid(qinfo), request_id);
+	return -EBUSY;
+}
+
 static int sop_process_bio(struct sop_device *h, struct bio *bio,
 			   struct queue_info *qinfo)
 {
@@ -2945,6 +3009,19 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	struct scatterlist *sgl;
 	u16 request_id;
 	int num_sg;
+
+	if (unlikely(bio->bi_rw & REQ_FLUSH)) {
+		int rc;
+
+		/* If no data to transfer, just sync and return */
+		if (!bio_phys_segments(h->rq, bio))
+			return sop_send_sync_cache(h, bio, qinfo);
+
+		/* otherwise sync then continue on to send the data */
+		rc = sop_send_sync_cache(h, bio, qinfo);
+		if (rc)
+			return rc;
+	}
 
 	request_id = alloc_request(h, qinfo_to_qid(qinfo));
 	if (request_id == (u16) -EBUSY)
@@ -3645,6 +3722,8 @@ static int sop_add_disk(struct sop_device *h)
 	queue_flag_set_unlocked(QUEUE_FLAG_NOMERGES, rq);
 	queue_flag_set_unlocked(QUEUE_FLAG_NONROT, rq);
 	blk_queue_make_request(rq, sop_make_request);
+	blk_queue_flush(rq, REQ_FLUSH | REQ_FUA);
+	blk_queue_flush_queueable(rq, false);
 	rq->queuedata = h;
 
 	disk = alloc_disk(SOP_MINORS);
