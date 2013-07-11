@@ -283,12 +283,6 @@ struct pqi_device_capabilities {
 #define DRIVER_MAX_IQ_NELEMENTS MAX_CMDS
 #define DRIVER_MAX_OQ_NELEMENTS MAX_CMDS
 
-struct sop_wait_queue {
-	wait_queue_head_t iq_full;
-	wait_queue_t iq_cong_wait;
-	struct bio_list iq_cong;
-};
-
 /* Note: Value below is stored in u16 */
 #define	MAX_SOP_TIMEOUT		64
 #define	DEF_IO_TIMEOUT		30
@@ -310,14 +304,14 @@ struct queue_info {
 	u16 qdepth;
 	atomic_t cur_qdepth;
 	u32 max_qdepth;
-	u32 waitq_depth;
+	u32 waitlist_depth;
 	struct sop_request *request;
 	unsigned long *request_bits;
 	struct pqi_device_queue *iq;
 	struct pqi_device_queue *oq;
 	struct pqi_sgl_descriptor *sg;
 	dma_addr_t sg_bus_addr;
-	struct sop_wait_queue *wq;
+	struct bio_list wait_list;
 	struct sop_timeout tmo;
 };
 

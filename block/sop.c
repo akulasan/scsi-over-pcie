@@ -81,7 +81,11 @@ static int sop_thread_proc(void *data);
 static int sop_add_timeout(struct queue_info *q, uint timeout);
 static void sop_rem_timeout(struct queue_info *q, uint tmo_slot);
 static void sop_fail_all_outstanding_io(struct sop_device *h);
-static void sop_resubmit_waitq(struct queue_info *qinfo, int fail);
+static void sop_resubmit_wait_list(struct queue_info *qinfo,
+	int (*bio_process)(struct sop_device *h, struct bio *bio,
+			   struct queue_info *qinfo));
+static int sop_process_bio(struct sop_device *h, struct bio *bio,
+			   struct queue_info *qinfo);
 
 #ifdef CONFIG_COMPAT
 static int sop_compat_ioctl(struct block_device *dev, fmode_t mode,
@@ -153,7 +157,7 @@ static ssize_t sop_sysfs_show_debug(struct device_driver *dd, char *buf)
 				"    OQ depth[%02d] = %d, Max %d, Wait %d\n",
 				i, atomic_read(&h->qinfo[i].cur_qdepth),
 				h->qinfo[i].max_qdepth,
-				h->qinfo[i].waitq_depth);
+				h->qinfo[i].waitlist_depth);
 			strcat(buf, line);
 		}
 	}
@@ -361,23 +365,6 @@ bailout:
 	return -ENOMEM;
 }
 
-static int allocate_wait_queue(struct queue_info *q)
-{
-	struct sop_wait_queue *wq;
-
-	/* Allocate wait queue structure for TO DEVICE queue */
-	wq = kzalloc(sizeof(struct sop_wait_queue), GFP_KERNEL);
-	if (!wq)
-		return -ENOMEM;
-	q->wq = wq;
-
-	init_waitqueue_head(&wq->iq_full);
-	init_waitqueue_entry(&wq->iq_cong_wait, sop_thread);
-	bio_list_init(&wq->iq_cong);
-
-	return 0;
-}
-
 static int pqi_device_queue_alloc(struct sop_device *h,
 		struct pqi_device_queue **xq,
 		u16 n_q_elements, u8 q_element_size_over_16,
@@ -475,8 +462,6 @@ static void pqi_device_queue_free(struct sop_device *h,
 static void pqi_iq_buffer_free(struct sop_device *h, struct queue_info *qinfo)
 {
 	free_q_request_buffers(qinfo);
-	kfree(qinfo->wq);
-	qinfo->wq = NULL;
 	free_sgl_area(h, qinfo);
 }
 
@@ -490,11 +475,7 @@ static int pqi_iq_data_alloc(struct sop_device *h, struct queue_info *qinfo)
 		goto bailout_iq;
 	}
 
-	if (allocate_wait_queue(qinfo)) {
-		dev_warn(&h->pdev->dev, "Failed to alloc waitq #%d\n",
-			queue_pair_index);
-		goto bailout_iq;
-	}
+	bio_list_init(&qinfo->wait_list);
 
 	/* Allocate SGL area for submission queue */
 	if (allocate_sgl_area(h, qinfo)) {
@@ -1402,7 +1383,7 @@ static irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 	 * any pending commands in the wait Q
 	 */
 	if (ret == IRQ_HANDLED && !SOP_DEVICE_BUSY(q->h))
-		sop_resubmit_waitq(q, false);
+		sop_resubmit_wait_list(q, sop_process_bio);
 
 	return ret;
 }
@@ -3047,13 +3028,8 @@ alloc_elem_fail:
 
 static void sop_queue_cmd(struct queue_info *qinfo, struct bio *bio)
 {
-	struct sop_wait_queue *wq = qinfo->wq;
-
-	if (bio_list_empty(&wq->iq_cong))
-		add_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
-	bio_list_add(&wq->iq_cong, bio);
-
-	qinfo->waitq_depth++;
+	bio_list_add(&qinfo->wait_list, bio);
+	qinfo->waitlist_depth++;
 }
 
 static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
@@ -3063,7 +3039,6 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 	int cpu;
 	int qpindex;
 	struct queue_info *qinfo;
-	struct sop_wait_queue *wq;
 
 	atomic_inc(&h->bio_count);
 
@@ -3080,13 +3055,11 @@ static MRFN_TYPE sop_make_request(struct request_queue *q, struct bio *bio)
 	/* Get the queues */
 	qpindex = find_sop_queue(h, cpu);
 	qinfo = &h->qinfo[qpindex];
-	wq = qinfo->wq;
-	BUG_ON(!wq);
 
 	spin_lock_irq(&qinfo->iq->qlock);
 
 	result = -EBUSY;
-	if (bio_list_empty(&wq->iq_cong))
+	if (bio_list_empty(&qinfo->wait_list))
 		/* Try to submit the command */
 		result = sop_process_bio(h, bio, qinfo);
 
@@ -4155,43 +4128,29 @@ static void sop_timeout_ios(struct queue_info *q, int action)
 	atomic_set(&q->tmo.time_slot[cur_slot], 0);
 }
 
-static void sop_resubmit_waitq(struct queue_info *qinfo, int fail)
-{
-	struct sop_wait_queue *wq;
-	struct sop_device *h;
-	int ret, at_least_one_bio;
+static void sop_resubmit_wait_list(struct queue_info *qinfo,
 	int (*bio_process)(struct sop_device *h, struct bio *bio,
-			   struct queue_info *qinfo);
+			   struct queue_info *qinfo))
+{
+	struct bio_list *bl;
+	struct sop_device *h;
+	int ret;
 	unsigned long flags;
 
 	h = qinfo->h;
-	wq = qinfo->wq;
-	if (!wq) {
-		dev_warn(&h->pdev->dev, "sop_resubmit_waitq: wq null for SubmitQ[%d]!\n",
-					qinfo_to_qid(qinfo));
-		return;
-	}
+	bl = &qinfo->wait_list;
 
-	if (fail)
-		bio_process = sop_fail_bio;
-	else
-		bio_process = sop_process_bio;
-
-	at_least_one_bio = 0;
 	spin_lock_irqsave(&qinfo->iq->qlock, flags);
-	while (bio_list_peek(&wq->iq_cong)) {
-		struct bio *bio = bio_list_pop(&wq->iq_cong);
+	while (bio_list_peek(bl)) {
+		struct bio *bio = bio_list_pop(bl);
 
-		at_least_one_bio = 1;
 		ret = bio_process(h, bio, qinfo);
 		if (ret) {
-			bio_list_add_head(&wq->iq_cong, bio);
+			bio_list_add_head(bl, bio);
 			break;
 		}
-		qinfo->waitq_depth--;
+		qinfo->waitlist_depth--;
 	}
-	if (at_least_one_bio && bio_list_empty(&wq->iq_cong))
-		remove_wait_queue(&wq->iq_full, &wq->iq_cong_wait);
 	spin_unlock_irqrestore(&qinfo->iq->qlock, flags);
 }
 
@@ -4274,9 +4233,9 @@ start_reset:
 	clear_bit(SOP_FLAGS_BITPOS_REVALIDATE, &h->flags);
 	sop_revalidate(h->disk);
 
-	/* Next: sop_resubmit_waitq for all Q */
+	/* Next: sop_resubmit_wait_list for all Q */
 	for (i = 1; i < h->nr_queue_pairs; i++)
-		sop_resubmit_waitq(&h->qinfo[i], false);
+		sop_resubmit_wait_list(&h->qinfo[i], sop_process_bio);
 
 end_reset:
 	dev_warn(&h->pdev->dev, "Reset Complete Success\n");
@@ -4380,8 +4339,8 @@ static void sop_process_dev_timer(struct sop_device *h)
 					schedule_delayed_work(&h->dwork, 0);
 				}
 
-				/* Process wait queue */
-				sop_resubmit_waitq(q, false);
+				/* Process wait list commands */
+				sop_resubmit_wait_list(q, sop_process_bio);
 			}
 		}
 	}
@@ -4462,7 +4421,7 @@ static void sop_fail_all_outstanding_io(struct sop_device *h)
 			spin_unlock_irq(&q->oq->qlock);
 
 			/* Fail all commands waiting in internal queue */
-			sop_resubmit_waitq(q, true);
+			sop_resubmit_wait_list(q, sop_fail_bio);
 		}
 	}
 }
