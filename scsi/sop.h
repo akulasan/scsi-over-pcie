@@ -92,6 +92,7 @@ struct pqi_device_queue {
 #define PQI_DIR_FROM_DEVICE 1
 	struct sop_request *request; /* used by oq only */
 	struct pqi_device_register_set *registers;
+	spinlock_t qlock;
 };
 
 #define PQI_QUEUE_FULL (-1)
@@ -263,7 +264,6 @@ struct queue_info {
 	struct sop_device *h;
 	int irq;
 	int msix_vector;
-	spinlock_t qlock;
 	u16 qdepth;
 	struct sop_request *request;
 	unsigned long *request_bits;

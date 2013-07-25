@@ -783,6 +783,9 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	h->qinfo[0].pqiq = &h->admin_q_from_dev;
 	h->qinfo[1].pqiq = &h->admin_q_to_dev;
 
+	spin_lock_init(&h->qinfo[0].pqiq->qlock);
+	spin_lock_init(&h->qinfo[1].pqiq->qlock);
+
 	/* Allocate request buffers for admin queues */
 	if (allocate_q_request_buffers(&h->qinfo[0],
 				ADMIN_QUEUE_ELEMENT_COUNT,
@@ -1312,9 +1315,9 @@ static void free_request(struct sop_device *h, u8 q, u16 request_id)
 	unsigned long flags;
 
 	BUG_ON((request_id >> h->qid_shift) != q);
-	spin_lock_irqsave(&h->qinfo[q].qlock, flags);
+	spin_lock_irqsave(&h->qinfo[q].pqiq->qlock, flags);
 	clear_bit(request_id & h->qid_mask, h->qinfo[q].request_bits);
-	spin_unlock_irqrestore(&h->qinfo[q].qlock, flags);
+	spin_unlock_irqrestore(&h->qinfo[q].pqiq->qlock, flags);
 }
 
 static void fill_create_io_queue_request(struct sop_device *h,
@@ -1566,6 +1569,7 @@ static int sop_setup_io_queues(struct sop_device *h)
 
 		q = &h->io_q_from_dev[i];
 		spin_lock_init(&q->index_lock);
+		spin_lock_init(&q->qlock);
 		h->qinfo[h->io_q_from_dev[i].queue_id].pqiq = q;
 		r = pqi_alloc_elements(aq, 1);
 		request_id = alloc_request(h, aq->queue_id);
@@ -1594,6 +1598,7 @@ static int sop_setup_io_queues(struct sop_device *h)
 		r = pqi_alloc_elements(aq, 1);
 		q = &h->io_q_to_dev[i];
 		spin_lock_init(&q->index_lock);
+		spin_lock_init(&q->qlock);
 		h->qinfo[h->io_q_to_dev[i].queue_id].pqiq = q;
 		request_id = alloc_request(h, aq->queue_id);
 		request_idx = request_id & h->qid_mask;
@@ -1852,10 +1857,8 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	atomic_set(&h->curr_outstanding_commands, 0);
 	spin_lock_init(&h->stat_lock);
 	h->ctlr = controller_num;
-	for (i = 0; i < MAX_TOTAL_QUEUES; i++) {
-		spin_lock_init(&h->qinfo[i].qlock);
+	for (i = 0; i < MAX_TOTAL_QUEUES; i++)
 		h->qinfo[i].h = h;
-	}
 	controller_num++;
 	sprintf(h->devname, "sop-%d\n", h->ctlr);
 
@@ -2123,7 +2126,7 @@ static int sop_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *sc)
 
 	cpu = get_cpu();
 	submitq = find_submission_queue(h, cpu);
-	spin_lock_irq(&submitq->qlock);
+	spin_lock_irq(&submitq->pqiq->qlock);
 	replyq = find_reply_queue(h, cpu);
 	if (!submitq)
 		dev_warn(&h->pdev->dev, "queuecommand: q is null!\n");
@@ -2174,13 +2177,13 @@ static int sop_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *sc)
 		memset(r, 0, 4); /* NULL IU */
 		free_request(h, submitq->pqiq->queue_id, request_id);
 		pqi_notify_device_queue_written(h, submitq->pqiq);
-		spin_unlock_irq(&submitq->qlock);
+		spin_unlock_irq(&submitq->pqiq->qlock);
 		put_cpu();
 		return SCSI_MLQUEUE_HOST_BUSY;
 	}
 	r->xfer_size = cpu_to_le32(sopr->xfer_size);
 	pqi_notify_device_queue_written(h, submitq->pqiq);
-	spin_unlock_irq(&submitq->qlock);
+	spin_unlock_irq(&submitq->pqiq->qlock);
 	put_cpu();
 	return 0;
 }
@@ -2245,13 +2248,13 @@ static int sop_abort_handler(struct scsi_cmnd *sc)
 	dev_warn(&h->pdev->dev, "sop_abort_handler: this code is UNTESTED.\n");
 	cpu = get_cpu();
 	submitq = find_submission_queue(h, cpu);
-	spin_lock_irq(&submitq->qlock);
+	spin_lock_irq(&submitq->pqiq->qlock);
 	replyq = find_reply_queue(h, cpu);
 	abort_cmd = pqi_alloc_elements(submitq->pqiq, 1);
 	if (IS_ERR(abort_cmd)) {
 		dev_warn(&h->pdev->dev, "%s: pqi_alloc_elements returned %ld\n",
 				__func__, PTR_ERR(abort_cmd));
-		spin_unlock_irq(&submitq->qlock);
+		spin_unlock_irq(&submitq->pqiq->qlock);
 		put_cpu();
 		return FAILED;
 	}
@@ -2260,14 +2263,14 @@ static int sop_abort_handler(struct scsi_cmnd *sc)
 		dev_warn(&h->pdev->dev, "%s: Failed to allocate request\n",
 					__func__);
 		/* don't free it, just let it be a NULL IU */
-		spin_unlock_irq(&submitq->qlock);
+		spin_unlock_irq(&submitq->pqiq->qlock);
 		put_cpu();
 		return FAILED;
 	}
 	fill_task_mgmt_request(abort_cmd, replyq, request_id,
 				sopr_to_abort->request_id, SOP_ABORT_TASK);
 	send_sop_command(h, submitq, request_id);
-	spin_unlock_irq(&submitq->qlock);
+	spin_unlock_irq(&submitq->pqiq->qlock);
 	return process_task_mgmt_response(h, submitq, request_id);
 }
 
