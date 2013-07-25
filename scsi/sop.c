@@ -245,7 +245,7 @@ static void free_all_q_sgl_areas(struct sop_device *h)
 {
 	int i;
 
-	for (i = 0; i < h->nr_queues; i++)
+	for (i = 0; i < h->nr_queue_pairs; i++)
 		free_sgl_area(h, &h->qinfo[i]);
 }
 
@@ -270,7 +270,7 @@ bailout:
 static void free_all_q_request_buffers(struct sop_device *h)
 {
 	int i;
-	for (i = 0; i < h->nr_queues; i++)
+	for (i = 0; i < h->nr_queue_pairs; i++)
 		free_q_request_buffers(&h->qinfo[i]);
 }
 
@@ -281,7 +281,7 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 {
 	void *vaddr = NULL;
 	dma_addr_t dhandle;
-	int i, nqs_alloced = 0, err = 0;
+	int nqs_alloced = 0, err = 0;
 	struct queue_info *qinfo;
 
 	int total_size = (n_q_elements * q_element_size_over_16 * 16) +
@@ -312,7 +312,7 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 		if (allocate_q_request_buffers(qinfo, n_q_elements,
 				sizeof(struct sop_request)))
 			goto bailout;
-		dev_warn(&h->pdev->dev, "   6 Allocated #%d\n", i);
+		dev_warn(&h->pdev->dev, "   6 Allocated #%d\n", queue_pair_index);
 		/* Allocate SGL area for submission queue */
 		if (allocate_sgl_area(h, qinfo))
 			goto bailout;
@@ -1020,7 +1020,7 @@ static void handle_management_response(struct sop_device *h,
 	scmd->result |= (DID_ERROR << 16);
 }
 
-static void complete_scsi_cmd(struct sop_device *h,
+static void complete_scsi_cmd(struct sop_device *h, struct qinfo *qinfo,
 				struct sop_request *r)
 {
 	struct scsi_cmnd *scmd;
@@ -1035,7 +1035,7 @@ static void complete_scsi_cmd(struct sop_device *h,
 
         scmd->result = (DID_OK << 16);           /* host byte */
         scmd->result |= (COMMAND_COMPLETE << 8); /* msg byte */
-	free_request(h, r->request_id >> h->qid_shift, r->request_id);
+	free_request(h, qinfo_to_qid(qinfo), r->request_id);
 
 	switch (r->response[0]) {
 	case SOP_RESPONSE_CMD_SUCCESS_IU_TYPE:
@@ -1106,9 +1106,9 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 			q, q->pqiq->queue_id, q->msix_vector);
 #endif
 	do {
-		struct sop_request *r = q->pqiq->request;
+		struct sop_request *r = q->oq->cur_req;
 
-		if (pqi_from_device_queue_is_empty(q->pqiq)) {
+		if (pqi_from_device_queue_is_empty(q->oq)) {
 			/* dev_warn(&h->pdev->dev, "==== interrupt, ioq %d is empty ====\n",
 					q->pqiq->queue_id); */
 			break;
@@ -1116,30 +1116,30 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 
 		if (r == NULL) {
 			/* Receiving completion of a new request */ 
-			iu_type = pqi_peek_ui_type_from_device(q->pqiq);
-			request_id = pqi_peek_request_id_from_device(q->pqiq);
+			iu_type = pqi_peek_ui_type_from_device(q->oq);
+			request_id = pqi_peek_request_id_from_device(q->oq);
 			request_idx = request_id & h->qid_mask;
 			sq = request_id >> h->qid_shift; /* find submit queue */
-			r = q->pqiq->request =
-				&h->qinfo[sq].request[request_idx];
+			r = q->og->cur_req = &q->request[request_idx];
 			r->request_id = request_id;
 			r->response_accumulated = 0;
 		}
-		rc = pqi_dequeue_from_device(q->pqiq,
+		rc = pqi_dequeue_from_device(q->oq,
 				&r->response[r->response_accumulated]); 
 		if (rc) { /* queue is empty */
-			dev_warn(&h->pdev->dev, "=-=-=- io OQ %hhu is empty\n", q->pqiq->queue_id);
+			dev_warn(&h->pdev->dev, "=-=-=- io OQ[%hhu] PI %d CI %d is empty(rc = %d)\n",
+				q->oq->queue_id, *(q->oq->pi), q->oq->unposted_index, rc);
 			return IRQ_HANDLED;
 		}
-		r->response_accumulated += q->pqiq->element_size;
+		r->response_accumulated += q->oq->element_size;
 		/* dev_warn(&h->pdev->dev, "accumulated %d bytes\n", r->response_accumulated); */
 		if (sop_response_accumulated(r)) {
 			/* dev_warn(&h->pdev->dev, "accumlated response\n"); */
-			q->pqiq->request = NULL;
+			q->oq->cur_req = NULL;
 			wmb();
 			WARN_ON((!r->waiting && !r->scmd));
 			if (likely(r->scmd)) {
-				complete_scsi_cmd(h, r);
+				complete_scsi_cmd(h, q, r);
 				r = NULL;
 			} else {
 				if (likely(r->waiting)) {
@@ -1150,10 +1150,10 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 					dev_warn(&h->pdev->dev, "r->scmd and r->waiting both null\n");
 				}
 			}
-			pqi_notify_device_queue_read(q->pqiq);
+			pqi_notify_device_queue_read(q->oq);
 			atomic_dec(&h->curr_outstanding_commands);
 		}
-	} while (1);
+	} while (!pqi_from_device_queue_is_empty(q->oq));
 
 	return IRQ_HANDLED;
 }
@@ -1168,34 +1168,32 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 	u8 sq;
 
 	do {
-		struct sop_request *r = h->admin_q_from_dev.request;
+		struct sop_request *r = q->oq->cur_req;
 
-		if (pqi_from_device_queue_is_empty(&h->admin_q_from_dev))
-			break;
+		if (pqi_from_device_queue_is_empty(q->oq))
+			return IRQ_NONE;
 
 		if (r == NULL) {
 			/* Receiving completion of a new request */ 
-			iu_type = pqi_peek_ui_type_from_device(&h->admin_q_from_dev);
-			request_id = pqi_peek_request_id_from_device(&h->admin_q_from_dev);
-			request_idx = request_id & request_id;
+			iu_type = pqi_peek_ui_type_from_device(q->oq);
+			request_id = pqi_peek_request_id_from_device(q->oq);
+			request_idx = request_id & h->qid_mask;
 			sq = request_id >> h->qid_shift; /* find submit queue */
-			r = h->admin_q_from_dev.request =
-				&h->qinfo[sq].request[request_idx];
+			r = q->oq->cur_req = &q->request[request_idx];
 			r->response_accumulated = 0;
 		}
-		rc = pqi_dequeue_from_device(&h->admin_q_from_dev,
-			&r->response[r->response_accumulated]); 
+		rc = pqi_dequeue_from_device(q->oq, &r->response[r->response_accumulated]); 
 		if (rc) /* queue is empty */
 			return IRQ_HANDLED;
-		r->response_accumulated += h->admin_q_from_dev.element_size;
+		r->response_accumulated += q->oq->element_size;
 		if (sop_response_accumulated(r)) {
-			h->admin_q_from_dev.request = NULL;
+			q->oq->cur_req = NULL;
 			wmb();
 			complete(r->waiting);
-			pqi_notify_device_queue_read(&h->admin_q_from_dev);
+			pqi_notify_device_queue_read(q->oq);
 			atomic_dec(&h->curr_outstanding_commands);
 		}
-	} while (1);
+	} while (!pqi_from_device_queue_is_empty(q->oq));
 
 	return IRQ_HANDLED;
 }
@@ -2241,13 +2239,13 @@ static int sop_change_queue_depth(struct scsi_device *sdev,
 }
 
 static void fill_task_mgmt_request(struct sop_task_mgmt_iu *tm,
-		struct queue_info *replyq, u16 request_id,
+		struct queue_info *q, u16 request_id,
 		u16 request_id_to_manage, u8 task_mgmt_function)
 {
 	memset(tm, 0, sizeof(*tm));
 	tm->iu_type = SOP_TASK_MGMT_IU;
 	tm->iu_length = cpu_to_le16(0x001C);
-	tm->queue_id = cpu_to_le16(replyq->pqiq->queue_id);
+	tm->queue_id = cpu_to_le16(q->iq->queue_id);
 	tm->request_id = request_id;
 	tm->nexus_id = 0;
 	tm->lun = 0;
@@ -2256,9 +2254,9 @@ static void fill_task_mgmt_request(struct sop_task_mgmt_iu *tm,
 }
 
 static int process_task_mgmt_response(struct sop_device *h,
-			struct queue_info *submitq, u16 request_id)
+			struct queue_info *qinfo, u16 request_id)
 {
-	struct sop_request *sopr = &submitq->request[request_id & h->qid_mask];
+	struct sop_request *sopr = &qinfo->request[request_id & h->qid_mask];
 	struct sop_task_mgmt_response *tmr =
 		(struct sop_task_mgmt_response *) sopr->response;
 	u8 response_code;
@@ -2267,7 +2265,7 @@ static int process_task_mgmt_response(struct sop_device *h,
 		dev_warn(&h->pdev->dev, "Unexpected IU type %hhu in %s\n",
 				tmr->iu_type, __func__);
 	response_code = tmr->response_code;
-	free_request(h, submitq->pqiq->queue_id, request_id);
+	free_request(h, qinfo->oq->queue_id, request_id);
 	switch (response_code) {
 	case SOP_TMF_COMPLETE:
 	case SOP_TMF_SUCCEEDED:
@@ -2282,7 +2280,7 @@ static int sop_abort_handler(struct scsi_cmnd *sc)
 	struct sop_device *h;
 	struct sop_request *sopr_to_abort =
 			(struct sop_request *) sc->host_scribble;
-	struct queue_info *submitq, *replyq;
+	struct queue_info *q;
 	struct sop_task_mgmt_iu *abort_cmd;
 	int request_id, cpu;
 
@@ -2290,31 +2288,30 @@ static int sop_abort_handler(struct scsi_cmnd *sc)
 
 	dev_warn(&h->pdev->dev, "sop_abort_handler: this code is UNTESTED.\n");
 	cpu = get_cpu();
-	submitq = find_submission_queue(h, cpu);
-	spin_lock_irq(&submitq->pqiq->qlock);
-	replyq = find_reply_queue(h, cpu);
-	abort_cmd = pqi_alloc_elements(submitq->pqiq, 1);
+	q = find_sop_queue(h, cpu);
+	spin_lock_irq(&q->iq->qlock);
+	abort_cmd = pqi_alloc_elements(q->iq, 1);
 	if (IS_ERR(abort_cmd)) {
 		dev_warn(&h->pdev->dev, "%s: pqi_alloc_elements returned %ld\n",
 				__func__, PTR_ERR(abort_cmd));
-		spin_unlock_irq(&submitq->pqiq->qlock);
+		spin_unlock_irq(&q->iq->qlock);
 		put_cpu();
 		return FAILED;
 	}
-	request_id = alloc_request(h, submitq->pqiq->queue_id);
+	request_id = alloc_request(h, qinfo_to_qid(q));
 	if (request_id < 0) {
 		dev_warn(&h->pdev->dev, "%s: Failed to allocate request\n",
 					__func__);
 		/* don't free it, just let it be a NULL IU */
-		spin_unlock_irq(&submitq->pqiq->qlock);
+		spin_unlock_irq(&q->iq->qlock);
 		put_cpu();
 		return FAILED;
 	}
-	fill_task_mgmt_request(abort_cmd, replyq, request_id,
+	fill_task_mgmt_request(abort_cmd, q, request_id,
 				sopr_to_abort->request_id, SOP_ABORT_TASK);
-	send_sop_command(h, submitq, request_id);
-	spin_unlock_irq(&submitq->pqiq->qlock);
-	return process_task_mgmt_response(h, submitq, request_id);
+	send_sop_command(h, q, request_id);
+	spin_unlock_irq(&q->iq->qlock);
+	return process_task_mgmt_response(h, q, request_id);
 }
 
 static int sop_device_reset_handler(struct scsi_cmnd *sc)
@@ -2322,7 +2319,7 @@ static int sop_device_reset_handler(struct scsi_cmnd *sc)
 	struct sop_device *h;
 	struct sop_request *sopr_to_reset =
 			(struct sop_request *) sc->host_scribble;
-	struct queue_info *submitq, *replyq;
+	struct queue_info *q;
 	struct sop_task_mgmt_iu *reset_cmd;
 	int request_id, cpu;
 
@@ -2330,25 +2327,24 @@ static int sop_device_reset_handler(struct scsi_cmnd *sc)
 
 	dev_warn(&h->pdev->dev, "sop_device_reset_handler: this code is UNTESTED.\n");
 	cpu = get_cpu();
-	submitq = find_submission_queue(h, cpu);
-	replyq = find_reply_queue(h, cpu);
-	reset_cmd = pqi_alloc_elements(submitq->pqiq, 1);
+	q = find_sop_queue(h, cpu);
+	reset_cmd = pqi_alloc_elements(q->iq, 1);
 	if (IS_ERR(reset_cmd)) {
 		dev_warn(&h->pdev->dev, "%s: pqi_alloc_elements returned %ld\n",
 				__func__, PTR_ERR(reset_cmd));
 		return FAILED;
 	}
-	request_id = alloc_request(h, submitq->pqiq->queue_id);
+	request_id = alloc_request(h, qinfo_to_qid(q->iq));
 	if (request_id < 0) {
 		dev_warn(&h->pdev->dev, "%s: Failed to allocate request\n",
 					__func__);
 		/* don't free it, just let it be a NULL IU */
 		return FAILED;
 	}
-	fill_task_mgmt_request(reset_cmd, replyq, request_id,
+	fill_task_mgmt_request(reset_cmd, q, request_id,
 				sopr_to_reset->request_id, SOP_LUN_RESET);
-	send_sop_command(h, submitq, request_id);
-	return process_task_mgmt_response(h, submitq, request_id);
+	send_sop_command(h, q, request_id);
+	return process_task_mgmt_response(h, q, request_id);
 }
 
 static int sop_slave_alloc(struct scsi_device *sdev)

@@ -89,7 +89,7 @@ struct pqi_device_queue {
 	spinlock_t index_lock;
 #define PQI_DIR_TO_DEVICE 0
 #define PQI_DIR_FROM_DEVICE 1
-	struct sop_request *request; /* used by oq only */
+	struct sop_request *cur_req; /* used by oq only */
 	struct pqi_device_register_set *registers;
 	spinlock_t qlock;
 	dma_addr_t dhandle;
@@ -311,7 +311,7 @@ struct sop_device {
 	u16 qid_shift;
 	u16 qid_mask;
 	u16 current_id;
-	struct queue_info qinfo[MAX_TOTAL_QUEUES];
+	struct queue_info qinfo[MAX_TOTAL_QUEUE_PAIRS];
 #define qpindex_from_pqiq(pqiq) (pqiq->queue_id / 2)
 #define qinfo_to_qid(qinfo) (qpindex_from_pqiq(qinfo->oq))
 	struct Scsi_Host *sh;
