@@ -281,7 +281,7 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 {
 	void *vaddr = NULL;
 	dma_addr_t dhandle;
-	int nqs_alloced = 0, err = 0;
+	int err = 0;
 	struct queue_info *qinfo;
 
 	int total_size = (n_q_elements * q_element_size_over_16 * 16) +
@@ -759,12 +759,20 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	function_and_status = paf & 0xff;
 	pqi_device_state = status & 0xff;
 
-	pqi_device_queue_init(&h->qinfo[0].oq, h->pqireg,
+	h->qinfo[0].iq = kzalloc(sizeof(*h->qinfo[0].iq), GFP_KERNEL);
+	h->qinfo[0].oq = kzalloc(sizeof(*h->qinfo[0].oq), GFP_KERNEL);
+
+	if (!h->qinfo[0].iq || !h->qinfo[0].oq) {
+		dev_warn(&h->pdev->dev, "failed to allocate admin queues\n");
+		goto bailout;
+	}
+
+	pqi_device_queue_init(h->qinfo[0].oq, h->pqireg,
 		admin_oq, admin_oq_pi, admin_oq_ci,
 		(u16) h->pqicap.admin_oq_element_length * 16,
 		ADMIN_QUEUE_ELEMENT_COUNT, admin_oq_busaddr);
 
-	pqi_device_queue_init(&h->qinfo[0].iq, h->pqireg,
+	pqi_device_queue_init(h->qinfo[0].iq, h->pqireg,
 		admin_iq, admin_iq_pi, admin_iq_ci,
 		(u16) h->pqicap.admin_iq_element_length * 16,
 		ADMIN_QUEUE_ELEMENT_COUNT, admin_iq_busaddr);
@@ -837,8 +845,11 @@ static int sop_delete_admin_queues(struct sop_device *h)
 	if (wait_for_admin_queues_to_become_idle(h))
 		return -1;
 	writeq(PQI_DELETE_ADMIN_QUEUES, &h->pqireg->process_admin_function);
-	if (!wait_for_admin_command_ack(h))
+	if (!wait_for_admin_command_ack(h)) {
+		kfree(h->qinfo[0].iq);
+		kfree(h->qinfo[0].oq);
 		return 0;
+	}
 
 	/* Try to get some clues about why it failed. */
 	dev_warn(&h->pdev->dev, "Failed waiting for admin command acknowledgment\n");
@@ -866,17 +877,11 @@ static int sop_setup_msix(struct sop_device *h)
 {
 	int i, err;
 
-	struct msix_entry msix_entry[MAX_TOTAL_QUEUES];
+	struct msix_entry msix_entry[MAX_TOTAL_QUEUE_PAIRS];
 
 	h->nr_queue_pairs = num_online_cpus() + 1;
 	if (h->nr_queue_pairs > MAX_TOTAL_QUEUE_PAIRS)
 		h->nr_queue_pairs = MAX_TOTAL_QUEUE_PAIRS;
-
-	h->niqs = h->noqs = h->nr_queues / 2;
-	h->niqs = h->noqs;
-
-	dev_warn(&h->pdev->dev, "zzz 1 h->noqs = %d, h->niqs = %d\n",
-				h->noqs, h->niqs);
 
 	/*
 	 * Set up (h->nr_queue_pairs - 1) msix vectors. -1 because
@@ -892,11 +897,11 @@ static int sop_setup_msix(struct sop_device *h)
 	/* TODO: fall back if we get fewer msix vectors */
 	err = pci_enable_msix(h->pdev, msix_entry, h->nr_queue_pairs - 1);
 	if (err > 0)
-		h->noqs = err;
+		h->nr_queue_pairs = err;
 
 	dev_warn(&h->pdev->dev,
-		"zzz 2 (after pci_enable_msix) h->noqs = %d, h->niqs = %d\n",
-		h->noqs, h->niqs);
+		"zzz 2 (after pci_enable_msix) h->nr_queue_pairs = %d\n",
+		h->nr_queue_pairs);
 
 	if (err == 0) {
 		for (i = 0; i < h->nr_queue_pairs; i++) {
@@ -1020,7 +1025,7 @@ static void handle_management_response(struct sop_device *h,
 	scmd->result |= (DID_ERROR << 16);
 }
 
-static void complete_scsi_cmd(struct sop_device *h, struct qinfo *qinfo,
+static void complete_scsi_cmd(struct sop_device *h, struct queue_info *qinfo,
 				struct sop_request *r)
 {
 	struct scsi_cmnd *scmd;
@@ -1097,7 +1102,6 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 {
 	u16 request_id, request_idx;
 	u8 iu_type;
-	u8 sq;
 	int rc;
 	struct queue_info *q = devid;
 	struct sop_device *h = q->h;
@@ -1119,8 +1123,7 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 			iu_type = pqi_peek_ui_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
 			request_idx = request_id & h->qid_mask;
-			sq = request_id >> h->qid_shift; /* find submit queue */
-			r = q->og->cur_req = &q->request[request_idx];
+			r = q->oq->cur_req = &q->request[request_idx];
 			r->request_id = request_id;
 			r->response_accumulated = 0;
 		}
@@ -1165,7 +1168,6 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 	u16 request_id, request_idx;
 	int rc;
 	struct sop_device *h = q->h;
-	u8 sq;
 
 	do {
 		struct sop_request *r = q->oq->cur_req;
@@ -1178,7 +1180,6 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 			iu_type = pqi_peek_ui_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
 			request_idx = request_id & h->qid_mask;
-			sq = request_id >> h->qid_shift; /* find submit queue */
 			r = q->oq->cur_req = &q->request[request_idx];
 			r->response_accumulated = 0;
 		}
@@ -1203,15 +1204,14 @@ static void sop_irq_affinity_hints(struct sop_device *h)
 	int i, cpu;
 
 	cpu = cpumask_first(cpu_online_mask);
-	for (i = 0; i < h->noqs; i++) {
-		int idx = i ? i + 1 : i;
+	for (i = 1; i < h->nr_queue_pairs; i++) {
 		int rc;
-		rc = irq_set_affinity_hint(h->qinfo[idx].msix_vector,
+		rc = irq_set_affinity_hint(h->qinfo[i].msix_vector,
 					get_cpu_mask(cpu));
 
 		if (rc)
 			dev_warn(&h->pdev->dev, "Failed to hint affinity of vector %d to cpu %d\n",
-					h->qinfo[idx].msix_vector, cpu);
+					h->qinfo[i].msix_vector, cpu);
 		cpu = cpumask_next(cpu, cpu_online_mask);
 	}
 }
@@ -1219,8 +1219,10 @@ static void sop_irq_affinity_hints(struct sop_device *h)
 static int sop_request_irq(struct sop_device *h, int queue_index,
 				irq_handler_t msix_handler)
 {
+	int rc;
+
 	dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d for queue %d\n",
-			msix_vector, queue_index);
+			h->qinfo[queue_index].msix_vector, queue_index - 1, queue_index);
 	rc = request_irq(h->qinfo[queue_index].msix_vector, msix_handler,
 				IRQF_SHARED, h->devname, &h->qinfo[queue_index]);
 	if (rc != 0)
@@ -1249,13 +1251,12 @@ static void sop_free_irqs(struct sop_device *h)
 {
 	int i;
 
-	for (i = 0; i < h->noqs; i++) {
-		int idx, vector;
+	for (i = 0; i < h->nr_queue_pairs; i++) {
+		int vector;
 
-		idx = i ? i + 1 : 0;
-		vector = h->qinfo[idx].msix_vector; 
+		vector = h->qinfo[i].msix_vector; 
 		irq_set_affinity_hint(vector, NULL);
-		free_irq(vector, &h->qinfo[idx]);
+		free_irq(vector, &h->qinfo[i]);
 	}
 }
 
@@ -1355,7 +1356,7 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 	request = &h->qinfo[0].request[request_idx];
 	request->waiting = &wait;
 	request->response_accumulated = 0;
-	pqi_notify_device_queue_written(h->qinfo[0].iq);
+	pqi_notify_device_queue_written(h, h->qinfo[0].iq);
 	wait_for_completion(&wait);
 }
 
@@ -1375,12 +1376,14 @@ static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
 	wait_for_completion(&wait);
 }
 
-static sop_create_io_queue(struct sop_device *h, struct queue_info *q,
+static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 				int queue_pair_index, int direction)
 {
 	struct pqi_device_queue *aq = h->qinfo[0].iq;
 	struct pqi_device_queue *ioq;
+	struct pqi_create_operational_queue_request *r;
 	int request_id;
+	volatile struct pqi_create_operational_queue_response *resp;
 
 	if (direction == PQI_DIR_FROM_DEVICE) {
 		ioq = q->oq;
@@ -1410,10 +1413,10 @@ static sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 		goto bail_out;
 	}
 	if (direction == PQI_DIR_TO_DEVICE)
-		h->qinfo[queue_pair_index].ci = ((void *) h->pqireg) +
+		h->qinfo[queue_pair_index].iq->ci = ((void *) h->pqireg) +
 						le64_to_cpu(resp->index_offset);
 	else
-		h->qinfo[queue_pair_index].pi = ((void *) h->pqireg) +
+		h->qinfo[queue_pair_index].oq->pi = ((void *) h->pqireg) +
 						le64_to_cpu(resp->index_offset);
 	free_request(h, 0, request_id);
 	return 0;
@@ -1429,10 +1432,10 @@ static int sop_setup_io_queue_pairs(struct sop_device *h)
 	/* from 1, not 0, to skip admin oq, which was already set up */
 	for (i = 1; i < h->nr_queue_pairs; i++) {
 		if (pqi_device_queue_alloc(h, &h->qinfo[i].iq,
-				IQ_NELEMENTS, IQ_IU_SIZE / 16, PQI_DIR_FROM_DEVICE, i))
+				h->elements_per_io_queue, IQ_IU_SIZE / 16, PQI_DIR_FROM_DEVICE, i))
 			goto bail_out;
 		if (pqi_device_queue_alloc(h, &h->qinfo[i].iq,
-				OQ_NELEMENTS, OQ_IU_SIZE / 16, PQI_DIR_TO_DEVICE, i))
+				h->elements_per_io_queue, OQ_IU_SIZE / 16, PQI_DIR_TO_DEVICE, i))
 			goto bail_out;
 		if (sop_create_io_queue(h, &h->qinfo[i], i, PQI_DIR_FROM_DEVICE))
 			goto bail_out;
@@ -1476,7 +1479,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 {
 	struct report_pqi_device_capability_iu *r;
 	volatile struct report_pqi_device_capability_response *resp;
-	struct pqi_device_queue *aq = &h->admin_q_to_dev;
+	struct pqi_device_queue *aq = h->qinfo[0].iq;
 	struct pqi_device_capabilities *buffer;
 	int request_id;
 	u16 request_idx;
@@ -1668,79 +1671,70 @@ bail_out:
 }
 #endif
 
-static void sop_free_io_queues(struct sop_device *h)
+static void sop_free_pqiq(struct sop_device *h, struct pqi_device_queue *q)
 {
 	size_t total_size, n_q_elements, element_size;
-	int remainder;
-	if (h->iq_vaddr) {
-		n_q_elements = h->io_q_to_dev[0].nelements;
-		element_size = h->io_q_to_dev[0].element_size;
-		total_size = n_q_elements * element_size + sizeof(u64);
-		remainder = total_size % 64;
-		total_size += remainder ? 64 - remainder : 0;
-		pci_free_consistent(h->pdev, total_size,
-				h->iq_vaddr, h->iq_dhandle);
-		h->iq_vaddr = NULL;
-		h->iq_dhandle = 0;
+
+	// int remainder;
+
+	n_q_elements = q->nelements;
+	element_size = q->element_size;
+	total_size = n_q_elements * element_size + sizeof(u64);
+#if 0
+	remainder = total_size % 64;
+	total_size += remainder ? 64 - remainder : 0;
+#endif
+	pci_free_consistent(h->pdev, total_size, q->vaddr, q->dhandle);
+	q->vaddr = NULL;
+	q->dhandle = 0;
+}
+
+static void sop_free_io_queues(struct sop_device *h)
+{
+	int i;
+
+	for (i = 0; i < h->nr_queue_pairs; i++) {
+		struct queue_info *qinfo = &h->qinfo[i];
+
+		sop_free_pqiq(h, qinfo->iq);
+		sop_free_pqiq(h, qinfo->oq);
 	}
-	if (h->oq_vaddr) {
-		n_q_elements = h->io_q_from_dev[0].nelements;
-		element_size = h->io_q_from_dev[0].element_size;
-		total_size = n_q_elements * element_size + sizeof(u64);
-		remainder = total_size % 64;
-		total_size += remainder ? 64 - remainder : 0;
-		pci_free_consistent(h->pdev, total_size,
-				h->oq_vaddr, h->oq_dhandle);
-		h->oq_vaddr = NULL;
-		h->oq_dhandle = 0;
+}
+
+static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
+{
+	struct pqi_delete_operational_queue_request *r;
+	struct pqi_device_queue *aq = h->qinfo[0].iq;
+	int request_id;
+	volatile struct pqi_delete_operational_queue_response *resp;
+	u16 qid;
+
+	r = pqi_alloc_elements(aq, 1);
+	request_id = alloc_request(h, 0);
+	if (request_id < 0) { /* FIXME: now what? */
+		dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
+		goto bail_out;
 	}
+	qid = qpindex_to_qid(qpindex, to_device);
+	fill_delete_io_queue_request(h, r, qid, to_device, request_id);
+	send_admin_command(h, request_id);
+	resp = (volatile struct pqi_delete_operational_queue_response *)
+		h->qinfo[0].request[request_id & 0x00ff].response;
+	if (resp->status != 0)
+		dev_warn(&h->pdev->dev, "Failed to tear down OQ... now what?\n");
+	free_request(h, 0, request_id);
+bail_out:
+	/* TODO something better */
+	return -1;
 }
 
 static int sop_delete_io_queues(struct sop_device *h)
 {
 	int i;
-	struct pqi_delete_operational_queue_request *r;
-	struct pqi_device_queue *aq = &h->admin_q_to_dev;
-	int request_id;
-	u16 request_idx;
 
-	for (i = 0; i < h->noqs - 1; i++) {
-		volatile struct pqi_delete_operational_queue_response *resp;
-		u16 qid;
-
-		r = pqi_alloc_elements(aq, 1);
-		request_id = alloc_request(h, aq->queue_id);
-		if (request_id < 0) { /* FIXME: now what? */
-			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
-		}
-		request_idx = request_id & h->qid_mask;
-		qid = h->io_q_from_dev[i].queue_id;
-		fill_delete_io_queue_request(h, r, qid, 1, request_id);
-		send_admin_command(h, request_id);
-		resp = (volatile struct pqi_delete_operational_queue_response *)
-			h->qinfo[aq->queue_id].request[request_idx].response;
-		if (resp->status != 0)
-			dev_warn(&h->pdev->dev, "Failed to tear down OQ... now what?\n");
-		free_request(h, aq->queue_id, request_id);
-	}
-	for (i = 0; i < h->niqs - 1; i++) {
-		volatile struct pqi_delete_operational_queue_response *resp;
-		u16 qid;
-
-		r = pqi_alloc_elements(aq, 1);
-		request_id = alloc_request(h, aq->queue_id);
-		if (request_id < 0) { /* FIXME: now what? */
-			dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
-		}
-		request_idx = request_id & h->qid_mask;
-		qid = h->io_q_to_dev[i].queue_id;
-		fill_delete_io_queue_request(h, r, qid, 0, request_id);
-		send_admin_command(h, request_id);
-		resp = (volatile struct pqi_delete_operational_queue_response *)
-			h->qinfo[aq->queue_id].request[request_idx].response;
-		if (resp->status != 0)
-			dev_warn(&h->pdev->dev, "Failed to tear down IQ... now what?\n");
-		free_request(h, aq->queue_id, request_id);
+	for (i = 1; i < h->nr_queue_pairs; i++) {
+		sop_delete_io_queue(h, i, 1);
+		sop_delete_io_queue(h, i, 0);
 	}
 	sop_free_io_queues(h);
 	return 0;
@@ -1815,10 +1809,10 @@ static void sop_figure_request_id_encoding(struct sop_device *h)
 {
 	int i;
 
-	BUG_ON(h->noqs > 256 || h->noqs < 2);
+	BUG_ON(h->nr_queue_pairs / 2 > 256 || h->nr_queue_pairs < 1);
 
 	for (i = 7; i >= 0; i--) {
-		if (h->noqs <= (1 << i))
+		if (h->nr_queue_pairs / 2 <= (1 << i))
 			continue;
 		h->qid_shift = 16 - (i + 2);
 		h->qid_mask = (1 << h->qid_shift) - 1;
@@ -1901,7 +1895,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	atomic_set(&h->curr_outstanding_commands, 0);
 	spin_lock_init(&h->stat_lock);
 	h->ctlr = controller_num;
-	for (i = 0; i < MAX_TOTAL_QUEUES; i++)
+	for (i = 0; i < MAX_TOTAL_QUEUE_PAIRS; i++)
 		h->qinfo[i].h = h;
 	controller_num++;
 	sprintf(h->devname, "sop-%d\n", h->ctlr);
@@ -2016,6 +2010,8 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	pci_disable_device(pdev);
 	pci_release_regions(pdev);
 	pci_set_drvdata(pdev, NULL);
+	free_all_q_request_buffers(h);
+	free_all_q_sgl_areas(h);
 	kfree(h);
 }
 
@@ -2282,13 +2278,14 @@ static int sop_abort_handler(struct scsi_cmnd *sc)
 			(struct sop_request *) sc->host_scribble;
 	struct queue_info *q;
 	struct sop_task_mgmt_iu *abort_cmd;
-	int request_id, cpu;
+	int queue_pair_index, request_id, cpu;
 
 	h = sdev_to_hba(sc->device);
 
 	dev_warn(&h->pdev->dev, "sop_abort_handler: this code is UNTESTED.\n");
 	cpu = get_cpu();
-	q = find_sop_queue(h, cpu);
+	queue_pair_index = find_sop_queue(h, cpu);
+	q = &h->qinfo[queue_pair_index];
 	spin_lock_irq(&q->iq->qlock);
 	abort_cmd = pqi_alloc_elements(q->iq, 1);
 	if (IS_ERR(abort_cmd)) {
@@ -2298,7 +2295,7 @@ static int sop_abort_handler(struct scsi_cmnd *sc)
 		put_cpu();
 		return FAILED;
 	}
-	request_id = alloc_request(h, qinfo_to_qid(q));
+	request_id = alloc_request(h, queue_pair_index);
 	if (request_id < 0) {
 		dev_warn(&h->pdev->dev, "%s: Failed to allocate request\n",
 					__func__);
@@ -2321,20 +2318,21 @@ static int sop_device_reset_handler(struct scsi_cmnd *sc)
 			(struct sop_request *) sc->host_scribble;
 	struct queue_info *q;
 	struct sop_task_mgmt_iu *reset_cmd;
-	int request_id, cpu;
+	int queue_pair_index, request_id, cpu;
 
 	h = sdev_to_hba(sc->device);
 
 	dev_warn(&h->pdev->dev, "sop_device_reset_handler: this code is UNTESTED.\n");
 	cpu = get_cpu();
-	q = find_sop_queue(h, cpu);
+	queue_pair_index = find_sop_queue(h, cpu);
+	q = &h->qinfo[queue_pair_index];
 	reset_cmd = pqi_alloc_elements(q->iq, 1);
 	if (IS_ERR(reset_cmd)) {
 		dev_warn(&h->pdev->dev, "%s: pqi_alloc_elements returned %ld\n",
 				__func__, PTR_ERR(reset_cmd));
 		return FAILED;
 	}
-	request_id = alloc_request(h, qinfo_to_qid(q->iq));
+	request_id = alloc_request(h, queue_pair_index);
 	if (request_id < 0) {
 		dev_warn(&h->pdev->dev, "%s: Failed to allocate request\n",
 					__func__);

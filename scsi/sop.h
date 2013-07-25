@@ -22,8 +22,9 @@
  *
  */
 
-/* #define MAX_SGLS (1024) */
-#define MAX_SGLS (32)
+#define MAX_SGLS        (128)
+#define MAX_CMDS        (1024)
+#define MAX_CMDS_LOW    (64)
 
 struct sop_request;
 
@@ -287,7 +288,6 @@ struct sop_device {
 	int intr_mode;
 	char devname[20];
 	int ctlr;
-	struct pqi_device_queue admin_q_to_dev, admin_q_from_dev;
 	struct pqi_device_queue *io_q_to_dev;
 	struct pqi_device_queue *io_q_from_dev;
 
@@ -314,6 +314,7 @@ struct sop_device {
 	struct queue_info qinfo[MAX_TOTAL_QUEUE_PAIRS];
 #define qpindex_from_pqiq(pqiq) (pqiq->queue_id / 2)
 #define qinfo_to_qid(qinfo) (qpindex_from_pqiq(qinfo->oq))
+#define qpindex_to_qid(qpindex, to_device) (((qpindex) * 2) + (!to_device))
 	struct Scsi_Host *sh;
 	struct Scsi_Host *scsi_host;
 	int elements_per_io_queue;
