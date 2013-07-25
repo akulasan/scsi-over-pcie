@@ -281,7 +281,8 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 {
 	void *vaddr = NULL;
 	dma_addr_t dhandle;
-	int err = 0;
+	int err = -ENOMEM;
+
 	struct queue_info *qinfo;
 
 	int total_size = (n_q_elements * q_element_size_over_16 * 16) +
@@ -318,8 +319,6 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 			goto bailout;
 	}
 
-	err = 0;
-
 	if (queue_direction == PQI_DIR_TO_DEVICE) {
 		(*xq)->ci = vaddr + q_element_size_over_16 * 16 * n_q_elements;
 		(*xq)->queue_id = queue_pair_index * 2 + 1; /* TODO probably do not need to store this */
@@ -332,7 +331,7 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 	(*xq)->unposted_index = 0;
 	(*xq)->element_size = q_element_size_over_16 * 16;
 	(*xq)->nelements = n_q_elements;
-	return 1;
+	return 0;
 
 bailout:
 	dev_warn(&h->pdev->dev, "Failed to allocate queues\n");
