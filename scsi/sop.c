@@ -1342,12 +1342,13 @@ static void fill_delete_io_queue_request(struct sop_device *h,
 static void send_admin_command(struct sop_device *h, u16 request_id)
 {
 	struct sop_request *request;
+	struct queue_info *qinfo = &h->qinfo[0];
 	DECLARE_COMPLETION_ONSTACK(wait);
 
-	request = &h->qinfo[0].request[request_id];
+	request = &qinfo->request[request_id];
 	request->waiting = &wait;
 	request->response_accumulated = 0;
-	pqi_notify_device_queue_written(h, h->qinfo[0].iq);
+	pqi_notify_device_queue_written(h, qinfo->iq);
 	wait_for_completion(&wait);
 }
 
@@ -1482,7 +1483,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 		return -ENOMEM;
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 2\n");
 	r = pqi_alloc_elements(aq, 1);
-	request_id = alloc_request(h, aq->queue_id);
+	request_id = alloc_request(h, 0);
 	if (fill_get_pqi_device_capabilities(h, r, request_id, buffer,
 						(u32) sizeof(*buffer))) {
 		/* we have to submit request (already in queue) but it
@@ -1506,7 +1507,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	resp = (volatile struct report_pqi_device_capability_response *)
 			h->qinfo[0].request[request_id].response;
 	if (resp->status != 0) {
-		free_request(h, aq->queue_id, request_id);
+		free_request(h, 0, request_id);
 		goto error;
 	}
 	free_request(h, 0, request_id);
