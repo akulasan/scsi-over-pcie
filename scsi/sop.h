@@ -84,7 +84,6 @@ struct pqi_device_queue {
 					 */
 	u16 element_size;		/* must be multiple of 16 */
 	u8 nelements;
-	dma_addr_t dhandle;
 	u16 queue_id;
 	u8 direction;
 	spinlock_t index_lock;
@@ -93,6 +92,8 @@ struct pqi_device_queue {
 	struct sop_request *request; /* used by oq only */
 	struct pqi_device_register_set *registers;
 	spinlock_t qlock;
+	dma_addr_t dhandle;
+	void *vaddr;
 };
 
 #define PQI_QUEUE_FULL (-1)
@@ -311,9 +312,9 @@ struct sop_device {
 	u16 qid_mask;
 	u16 current_id;
 	struct queue_info qinfo[MAX_TOTAL_QUEUES];
+#define qpindex_from_pqiq(pqiq) (pqiq->queue_id / 2)
+#define qinfo_to_qid(qinfo) (qpindex_from_pqiq(qinfo->oq))
 	struct Scsi_Host *sh;
-	dma_addr_t iq_dhandle, oq_dhandle;
-	void *iq_vaddr, *oq_vaddr;
 	struct Scsi_Host *scsi_host;
 	int elements_per_io_queue;
 	int max_outstanding_commands;
