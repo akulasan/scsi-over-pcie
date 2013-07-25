@@ -1429,10 +1429,10 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 		goto bail_out;
 	}
 	if (direction == PQI_DIR_TO_DEVICE)
-		h->qinfo[queue_pair_index].iq->ci = ((void *) h->pqireg) +
+		h->qinfo[queue_pair_index].iq->pi = ((void *) h->pqireg) +
 						le64_to_cpu(resp->index_offset);
 	else
-		h->qinfo[queue_pair_index].oq->pi = ((void *) h->pqireg) +
+		h->qinfo[queue_pair_index].oq->ci = ((void *) h->pqireg) +
 						le64_to_cpu(resp->index_offset);
 	free_request(h, 0, request_id);
 	return 0;
