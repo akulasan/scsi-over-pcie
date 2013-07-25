@@ -1404,13 +1404,12 @@ static int fill_get_pqi_device_capabilities(struct sop_device *h,
 			u16 request_id, void *buffer, u32 buffersize)
 {
 	u64 busaddr;
-	struct pqi_device_queue *response_queue = &h->admin_q_from_dev;
 
 	memset(r, 0, sizeof(*r));
 	r->iu_type = REPORT_PQI_DEVICE_CAPABILITY;
 	r->compatible_features = 0;
-	r->iu_length = cpu_to_le16(0x003C);
-	r->response_oq = cpu_to_le16(response_queue->queue_id);
+	r->iu_length = cpu_to_le16(sizeof(*r) - PQI_IU_HEADER_SIZE);;
+	r->response_oq = 0;
 	r->work_area = 0;
 	r->request_id = request_id;
 	r->function_code = 0;
@@ -1418,13 +1417,11 @@ static int fill_get_pqi_device_capabilities(struct sop_device *h,
 
         busaddr = pci_map_single(h->pdev, buffer, buffersize,
                                 PCI_DMA_FROMDEVICE);
+	if (dma_mapping_error(&h->pdev->dev, busaddr))
+		return -ENOMEM;
 	r->sg.address = cpu_to_le64(busaddr);
 	r->sg.length = cpu_to_le32(buffersize);
 	r->sg.descriptor_type = PQI_SGL_DATA_BLOCK;
-	if (!busaddr) {
-		memset(r, 0, 4); /* NULL IU */
-		return -1;
-	}
 	return 0;
 }
 
@@ -1468,12 +1465,12 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 						PCI_DMA_FROMDEVICE);
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 5\n");
 	resp = (volatile struct report_pqi_device_capability_response *)
-			h->qinfo[aq->queue_id].request[request_idx].response;
+			h->qinfo[0].request[request_idx].response;
 	if (resp->status != 0) {
 		free_request(h, aq->queue_id, request_id);
 		goto error;
 	}
-	free_request(h, aq->queue_id, request_id);
+	free_request(h, 0, request_id);
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 6\n");
 	h->max_iqs = le16_to_cpu(buffer->max_iqs);
 	h->max_iq_elements = le16_to_cpu(buffer->max_iq_elements);

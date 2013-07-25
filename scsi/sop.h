@@ -114,6 +114,8 @@ struct pqi_iq_extra_params {
 	u8 reserved[10];
 };
 
+#define PQI_IU_HEADER_SIZE	4
+
 struct pqi_create_operational_queue_request {
 	u8 iu_type;
 #define OPERATIONAL_QUEUE_IU_TYPE 0x60
