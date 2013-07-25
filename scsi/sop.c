@@ -906,6 +906,7 @@ static int sop_setup_msix(struct sop_device *h)
 		for (i = 0; i < h->nr_queue_pairs; i++) {
 			/* vid makes admin q share with io q 0 */
 			int vid = i ? i - 1 : 0;
+			h->qinfo[i].msix_entry = msix_entry[vid].entry;
 			h->qinfo[i].msix_vector = msix_entry[vid].vector;
 			dev_warn(&h->pdev->dev, "q[%d] msix_entry[%d] = %d\n",
 				i, vid, msix_entry[vid].vector);
@@ -1221,7 +1222,8 @@ static int sop_request_irq(struct sop_device *h, int queue_index,
 	int rc;
 
 	dev_warn(&h->pdev->dev, "Requesting irq %d for msix vector %d for queue %d\n",
-			h->qinfo[queue_index].msix_vector, queue_index - 1, queue_index);
+			h->qinfo[queue_index].msix_vector,
+			h->qinfo[queue_index].msix_entry, queue_index);
 	rc = request_irq(h->qinfo[queue_index].msix_vector, msix_handler,
 				IRQF_SHARED, h->devname, &h->qinfo[queue_index]);
 	if (rc != 0)
@@ -1401,7 +1403,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 	}
 	fill_create_io_queue_request(h, r, ioq,
 					direction == PQI_DIR_TO_DEVICE,
-					request_id, q->msix_vector);
+					request_id, q->msix_entry);
 	send_admin_command(h, request_id);
 	resp = (volatile struct pqi_create_operational_queue_response *)
 		h->qinfo[0].request[request_id & 0x00ff].response;	

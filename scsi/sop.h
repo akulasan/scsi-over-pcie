@@ -264,7 +264,7 @@ struct pqi_device_capabilities {
 struct sop_device;
 struct queue_info {
 	struct sop_device *h;
-	int irq;
+	int msix_entry;
 	int msix_vector;
 	u16 qdepth;
 	struct sop_request *request;
