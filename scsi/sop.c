@@ -1312,12 +1312,8 @@ static int alloc_request(struct sop_device *h, u8 q)
 
 static void free_request(struct sop_device *h, u8 q, u16 request_id)
 {
-	unsigned long flags;
-
 	BUG_ON((request_id >> h->qid_shift) != q);
-	spin_lock_irqsave(&h->qinfo[q].pqiq->qlock, flags);
 	clear_bit(request_id & h->qid_mask, h->qinfo[q].request_bits);
-	spin_unlock_irqrestore(&h->qinfo[q].pqiq->qlock, flags);
 }
 
 static void fill_create_io_queue_request(struct sop_device *h,
