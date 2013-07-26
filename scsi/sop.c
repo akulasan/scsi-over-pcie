@@ -1922,7 +1922,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	rc = pci_enable_device(pdev);
 	if (rc) {
 		dev_warn(&h->pdev->dev, "unable to enable PCI device\n");
-		return rc;
+		goto bail_set_drvdata;
 	}
 
 	/* Enable bus mastering (pci_disable_device may disable this) */
@@ -1932,13 +1932,13 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	if (rc) {
 		dev_err(&h->pdev->dev,
 			"cannot obtain PCI resources, aborting\n");
-		return rc;
+		goto bail_pci_enable;
 	}
 
 	h->pqireg = pci_ioremap_bar(pdev, 0);
 	if (!h->pqireg) {
 		rc = -ENOMEM;
-		goto bail;
+		goto bail_request_regions;
 	}
 	if (reset_devices) {
 		rc = sop_init_time_host_reset(h);
@@ -1949,21 +1949,21 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 
 	if (sop_set_dma_mask(pdev)) {
 		dev_err(&pdev->dev, "failed to set DMA mask\n");
-		goto bail;
+		goto bail_remap_bar;
 	}
 
 	if (safe_readq(sig, &signature, &h->pqireg->signature)) {
 		dev_warn(&pdev->dev, "Unable to read PQI signature\n");
-		goto bail;
+		goto bail_remap_bar;
 	}
 	if (memcmp("PQI DREG", &signature, sizeof(signature)) != 0) {
 		dev_warn(&pdev->dev, "device does not appear to be a PQI device\n");
-		goto bail;
+		goto bail_remap_bar;
 	}
 
 	rc = sop_setup_msix(h);
 	if (rc != 0)
-		goto bail;
+		goto bail_remap_bar;
 
 	sop_figure_request_id_encoding(h);
 
@@ -1992,9 +1992,19 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail;
 
 	return 0;
+
 bail:
+	dev_warn(&h->pdev->dev, "Bailing out in probe - not freeing a lot\n");
+	pci_disable_msix(pdev);
+bail_remap_bar:
 	if (h && h->pqireg)
 		iounmap(h->pqireg);
+bail_request_regions:
+	pci_release_regions(pdev);
+bail_pci_enable:
+	pci_disable_device(pdev);
+bail_set_drvdata:
+	pci_set_drvdata(pdev, NULL);
 	kfree(h);
 	return -1;
 }
@@ -2015,19 +2025,20 @@ static void __devexit sop_remove(struct pci_dev *pdev)
 	struct sop_device *h;
 
 	h = pci_get_drvdata(pdev);
+	dev_warn(&h->pdev->dev, "remove called.\n");
         scsi_remove_host(h->scsi_host);
         scsi_host_put(h->scsi_host);
         h->scsi_host = NULL;
 	sop_delete_io_queues(h);
 	sop_free_irqs_and_disable_msix(h);
 	sop_delete_admin_queues(h);
-	if (h && h->pqireg)
-		iounmap(h->pqireg);
-	pci_disable_device(pdev);
-	pci_release_regions(pdev);
-	pci_set_drvdata(pdev, NULL);
 	free_all_q_request_buffers(h);
 	free_all_q_sgl_areas(h);
+	if (h && h->pqireg)
+		iounmap(h->pqireg);
+	pci_release_regions(pdev);
+	pci_disable_device(pdev);
+	pci_set_drvdata(pdev, NULL);
 	kfree(h);
 }
 
