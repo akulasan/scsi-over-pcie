@@ -1935,7 +1935,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 
 bail:
 	dev_warn(&h->pdev->dev, "Bailing out in probe - not freeing a lot\n");
-	pci_disable_msix(pdev);
+	/* pci_disable_msix(pdev); */
 bail_remap_bar:
 	if (h && h->pqireg)
 		iounmap(h->pqireg);
