@@ -1940,11 +1940,9 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		rc = -ENOMEM;
 		goto bail_request_regions;
 	}
-	if (reset_devices) {
-		rc = sop_init_time_host_reset(h);
-		if (rc)
-			return -1;
-	}
+	rc = sop_init_time_host_reset(h);
+	if (rc)
+		return -1;
 	sig = &h->pqireg->signature;
 
 	if (sop_set_dma_mask(pdev)) {
@@ -2512,9 +2510,10 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(admin_iq_ci_addr, 0x68);
 	VERIFY_OFFSET(admin_oq_pi_addr, 0x70);
 	VERIFY_OFFSET(admin_queue_param, 0x78);
-	VERIFY_OFFSET(error_data, 0x80);
-	VERIFY_OFFSET(reset, 0x88);
-	VERIFY_OFFSET(power_action, 0x90);
+	VERIFY_OFFSET(device_error, 0x80);
+	VERIFY_OFFSET(error_data, 0x88);
+	VERIFY_OFFSET(reset, 0x90);
+	VERIFY_OFFSET(power_action, 0x94);
 
 #undef VERIFY_OFFSET
 
