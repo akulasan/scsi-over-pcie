@@ -322,13 +322,13 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 
 	if (queue_direction == PQI_DIR_TO_DEVICE) {
 		(*xq)->ci = vaddr + q_element_size_over_16 * 16 * n_q_elements;
-		(*xq)->queue_id = queue_pair_index * 2 + 1; /* TODO probably do not need to store this */
 		/* (*xq)->pi is unknown now, hardware will tell us later */
 	} else {
 		(*xq)->pi = vaddr + q_element_size_over_16 * 16 * n_q_elements;
-		(*xq)->queue_id = queue_pair_index * 2; /* TODO remove this later */
 		/* (*xq)->ci is unknown now, hardware will tell us later */
 	}
+	(*xq)->queue_id = qpindex_to_qid(queue_pair_index,
+				(queue_direction == PQI_DIR_TO_DEVICE));
 	(*xq)->unposted_index = 0;
 	(*xq)->element_size = q_element_size_over_16 * 16;
 	(*xq)->nelements = n_q_elements;
