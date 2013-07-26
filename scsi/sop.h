@@ -332,7 +332,6 @@ struct sop_request {
 	u32 xfer_size;
 	u16 response_accumulated;
 	u16 request_id;
-	u8 q;
 	u8 response[MAX_RESPONSE_SIZE];
 };
 #pragma pack()
