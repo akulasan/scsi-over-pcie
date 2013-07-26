@@ -308,8 +308,6 @@ struct sop_device {
 	u32 protocol_support_bitmask;
 	u16 admin_sgl_support_bitmask;
 
-	u16 qid_shift;
-	u16 qid_mask;
 	u16 current_id;
 	struct queue_info qinfo[MAX_TOTAL_QUEUE_PAIRS];
 #define qpindex_from_pqiq(pqiq) (pqiq->queue_id)

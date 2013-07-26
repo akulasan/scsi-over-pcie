@@ -1094,7 +1094,7 @@ static void complete_scsi_cmd(struct sop_device *h, struct queue_info *qinfo,
 
 irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 {
-	u16 request_id, request_idx;
+	u16 request_id;
 	u8 iu_type;
 	int rc;
 	struct queue_info *q = devid;
@@ -1116,8 +1116,7 @@ irqreturn_t sop_ioq_msix_handler(int irq, void *devid)
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
-			request_idx = request_id & h->qid_mask;
-			r = q->oq->cur_req = &q->request[request_idx];
+			r = q->oq->cur_req = &q->request[request_id];
 			r->request_id = request_id;
 			r->response_accumulated = 0;
 		}
@@ -1159,7 +1158,7 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 {
 	struct queue_info *q = devid;
 	u8 iu_type;
-	u16 request_id, request_idx;
+	u16 request_id;
 	int rc;
 	struct sop_device *h = q->h;
 
@@ -1173,8 +1172,7 @@ irqreturn_t sop_adminq_msix_handler(int irq, void *devid)
 			/* Receiving completion of a new request */ 
 			iu_type = pqi_peek_ui_type_from_device(q->oq);
 			request_id = pqi_peek_request_id_from_device(q->oq);
-			request_idx = request_id & h->qid_mask;
-			r = q->oq->cur_req = &q->request[request_idx];
+			r = q->oq->cur_req = &q->request[request_id];
 			r->response_accumulated = 0;
 		}
 		rc = pqi_dequeue_from_device(q->oq, &r->response[r->response_accumulated]); 
@@ -1272,7 +1270,6 @@ static int alloc_request(struct sop_device *h, u8 queue_pair_index)
 	struct queue_info *qinfo = &h->qinfo[queue_pair_index];
 
 	BUG_ON(qinfo->qdepth > h->elements_per_io_queue);
-	BUG_ON(queue_pair_index > 127); /* high bit reserved for error reporting */
 
         do {
                 rc = (u16) find_first_zero_bit(qinfo->request_bits, qinfo->qdepth);
@@ -1281,13 +1278,13 @@ static int alloc_request(struct sop_device *h, u8 queue_pair_index)
 			return -EBUSY;
 		}
         } while (test_and_set_bit((int) rc, qinfo->request_bits));
-	return rc | (queue_pair_index << 8);
+	return rc;
 }
 
 static void free_request(struct sop_device *h, u8 queue_pair_index, u16 request_id)
 {
-	BUG_ON((request_id >> h->qid_shift) != queue_pair_index);
-	clear_bit(request_id & h->qid_mask, h->qinfo[queue_pair_index].request_bits);
+	BUG_ON(request_id >= h->qinfo[queue_pair_index].qdepth);
+	clear_bit(request_id, h->qinfo[queue_pair_index].request_bits);
 }
 
 static void fill_create_io_queue_request(struct sop_device *h,
@@ -1346,9 +1343,8 @@ static void send_admin_command(struct sop_device *h, u16 request_id)
 {
 	struct sop_request *request;
 	DECLARE_COMPLETION_ONSTACK(wait);
-	u16 request_idx = request_id & h->qid_mask;
 
-	request = &h->qinfo[0].request[request_idx];
+	request = &h->qinfo[0].request[request_id];
 	request->waiting = &wait;
 	request->response_accumulated = 0;
 	pqi_notify_device_queue_written(h, h->qinfo[0].iq);
@@ -1361,7 +1357,7 @@ static void send_sop_command(struct sop_device *h, struct queue_info *qinfo,
 	struct sop_request *sopr;
 	DECLARE_COMPLETION_ONSTACK(wait);
 
-	sopr = &qinfo->request[request_id & h->qid_mask];
+	sopr = &qinfo->request[request_id];
 	memset(sopr, 0, sizeof(*sopr));
 	sopr->request_id = request_id;
 	sopr->waiting = &wait;
@@ -1390,7 +1386,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 	r = pqi_alloc_elements(aq, 1);
 	request_id = alloc_request(h, 0);
 	dev_warn(&h->pdev->dev, "Allocated request %hu, %p\n", request_id,
-			&h->qinfo[aq->queue_id].request[request_id & 0x00ff]);
+			&h->qinfo[aq->queue_id].request[request_id]);
 	if (request_id < 0) { /* FIXME: now what? */
 		dev_warn(&h->pdev->dev, "requests unexpectedly exhausted\n");
 		goto bail_out;
@@ -1400,7 +1396,7 @@ static int sop_create_io_queue(struct sop_device *h, struct queue_info *q,
 					request_id, q->msix_entry);
 	send_admin_command(h, request_id);
 	resp = (volatile struct pqi_create_operational_queue_response *)
-		h->qinfo[0].request[request_id & 0x00ff].response;	
+		h->qinfo[0].request[request_id].response;	
 	dev_warn(&h->pdev->dev, "resp.status = %hhu, resp.index_offset = %llu\n",
 		resp->status, le64_to_cpu(resp->index_offset));
 	if (resp->status != 0) {
@@ -1477,7 +1473,6 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	struct pqi_device_queue *aq = h->qinfo[0].iq;
 	struct pqi_device_capabilities *buffer;
 	int request_id;
-	u16 request_idx;
 	u64 busaddr;
 
 	h->elements_per_io_queue = DRIVER_MAX_IQ_NELEMENTS;
@@ -1488,7 +1483,6 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 2\n");
 	r = pqi_alloc_elements(aq, 1);
 	request_id = alloc_request(h, aq->queue_id);
-	request_idx = request_id & h->qid_mask;
 	if (fill_get_pqi_device_capabilities(h, r, request_id, buffer,
 						(u32) sizeof(*buffer))) {
 		/* we have to submit request (already in queue) but it
@@ -1510,7 +1504,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 						PCI_DMA_FROMDEVICE);
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 5\n");
 	resp = (volatile struct report_pqi_device_capability_response *)
-			h->qinfo[0].request[request_idx].response;
+			h->qinfo[0].request[request_id].response;
 	if (resp->status != 0) {
 		free_request(h, aq->queue_id, request_id);
 		goto error;
@@ -1714,7 +1708,7 @@ static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
 	fill_delete_io_queue_request(h, r, qid, to_device, request_id);
 	send_admin_command(h, request_id);
 	resp = (volatile struct pqi_delete_operational_queue_response *)
-		h->qinfo[0].request[request_id & 0x00ff].response;
+		h->qinfo[0].request[request_id].response;
 	if (resp->status != 0)
 		dev_warn(&h->pdev->dev, "Failed to tear down OQ... now what?\n");
 	free_request(h, 0, request_id);
@@ -1783,36 +1777,6 @@ add_host_failed:
 bail:
 	dev_err(&h->pdev->dev, "scsi_host_alloc failed.\n");
 	return -ENOMEM;
-}
-
-/*
- * sop_figure_request_id_encoding figures how many bits of the
- * request ID to use for queue ID and how many for request ID.
- *
- * The Requst ID field of all the IUs is 2 bytes.  Part of this
- * must include the queue ID, so we know on completion which queue
- * the associated request resides with, and to keep request IDs unique
- * across all queues.   Depending on how many queues there are, the
- * different numbers of bits are used for the queue ID and the request ID.
- * With 256 queues, maximum queue depth is 256, with 128 queues,
- * max queue depth is 512, with 64 queues, max qdepth is 1024, etc.
- *
- * The device may have further limitations on queue depth besides what
- * is imposed by the driver design here.
- */
-static void sop_figure_request_id_encoding(struct sop_device *h)
-{
-	int i;
-
-	BUG_ON(h->nr_queue_pairs / 2 > 256 || h->nr_queue_pairs < 1);
-
-	for (i = 7; i >= 0; i--) {
-		if (h->nr_queue_pairs / 2 <= (1 << i))
-			continue;
-		h->qid_shift = 16 - (i + 2);
-		h->qid_mask = (1 << h->qid_shift) - 1;
-		return;
-	}
 }
 
 #define PQI_RESET_ACTION_SHIFT 5
@@ -1941,8 +1905,6 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	rc = sop_setup_msix(h);
 	if (rc != 0)
 		goto bail_remap_bar;
-
-	sop_figure_request_id_encoding(h);
 
 	rc = sop_create_admin_queues(h);
 	if (rc)
@@ -2125,7 +2087,7 @@ static int sop_scatter_gather(struct sop_device *h,
 		return 0;
 	}
 
-	sg_block_number = (r->request_id & h->qid_mask) * MAX_SGLS;
+	sg_block_number = r->request_id * MAX_SGLS;
 	*xfer_size = 0;
 	r->iu_length = cpu_to_le16(no_sgl_size + sizeof(*datasg) * 2);
 	datasg = &r->sg[0];
@@ -2186,7 +2148,7 @@ static int sop_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *sc)
 	r->queue_id = cpu_to_le16(queue_pair_index);
 	r->work_area = 0;
 	r->request_id = request_id;
-	sopr = &qinfo->request[request_id & h->qid_mask];
+	sopr = &qinfo->request[request_id];
 	sopr->xfer_size = 0;
 	sopr->scmd = sc;
 	sc->host_scribble = (unsigned char *) sopr;
@@ -2256,7 +2218,7 @@ static void fill_task_mgmt_request(struct sop_task_mgmt_iu *tm,
 static int process_task_mgmt_response(struct sop_device *h,
 			struct queue_info *qinfo, u16 request_id)
 {
-	struct sop_request *sopr = &qinfo->request[request_id & h->qid_mask];
+	struct sop_request *sopr = &qinfo->request[request_id];
 	struct sop_task_mgmt_response *tmr =
 		(struct sop_task_mgmt_response *) sopr->response;
 	u8 response_code;
