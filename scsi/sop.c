@@ -1279,7 +1279,7 @@ static int sop_request_io_irqs(struct sop_device *h,
 {
 	int i;
 
-	for (i = 0; i < h->nr_queue_pairs; i++) {
+	for (i = 1; i < h->nr_queue_pairs; i++) {
 		if (sop_request_irq(h, i, msix_handler))
 			goto irq_fail;
 	}
