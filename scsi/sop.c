@@ -608,9 +608,10 @@ static int wait_for_admin_command_ack(struct sop_device *h)
 	int count = 0;
 	__iomem void *sig = &h->pqireg->signature;
 
-#define ADMIN_SLEEP_INTERVAL_MIN 100 /* microseconds */
-#define ADMIN_SLEEP_INTERVAL_MAX 150 /* microseconds */
-#define ADMIN_SLEEP_INTERATIONS 1000 /* total of 100 milliseconds */
+#define ADMIN_SLEEP_INTERVAL_MIN	100 /* microseconds */
+#define ADMIN_SLEEP_INTERVAL_MAX	150 /* microseconds */
+#define ADMIN_SLEEP_INTERATIONS		1000 /* total of 100 milliseconds */
+#define ADMIN_SLEEP_TMO_MS		100 /* total of 100 milliseconds */
 
 	do {
 		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
@@ -628,15 +629,18 @@ static int wait_for_admin_command_ack(struct sop_device *h)
 	return -1;
 }
 
-static int wait_for_admin_queues_to_become_idle(struct sop_device *h, u8 device_state)
+static int wait_for_admin_queues_to_become_idle(struct sop_device *h,
+						int timeout_ms,
+						u8 device_state)
 {
 	int i;
 	u64 paf;
 	u32 status;
 	u8 pqi_device_state, function_and_status;
 	__iomem void *sig = &h->pqireg->signature;
+	int tmo_count = timeout_ms * 10;	/* Each loop is 100us */
 
-	for (i = 0; i < ADMIN_SLEEP_INTERATIONS; i++) {
+	for (i = 0; i < tmo_count; i++) {
 		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
 				ADMIN_SLEEP_INTERVAL_MAX);
 		if (safe_readq(sig, &paf,
@@ -771,7 +775,8 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	__iomem void *tmpptr;
 
 	/* Check that device is ready to be set up */
-	if (wait_for_admin_queues_to_become_idle(h, PQI_READY_FOR_ADMIN_FUNCTION))
+	if (wait_for_admin_queues_to_become_idle(h, ADMIN_SLEEP_TMO_MS,
+					PQI_READY_FOR_ADMIN_FUNCTION))
 		return -1;
 
 	admin_iq = h->qinfo[0].iq;
@@ -873,7 +878,8 @@ static int sop_delete_admin_queues(struct sop_device *h)
 	u8 function_and_status;
 	__iomem void *sig = &h->pqireg->signature;
 
-	if (wait_for_admin_queues_to_become_idle(h, PQI_READY_FOR_IO))
+	if (wait_for_admin_queues_to_become_idle(h, ADMIN_SLEEP_TMO_MS,
+						PQI_READY_FOR_IO))
 		return -1;
 	writeq(PQI_DELETE_ADMIN_QUEUES, &h->pqireg->process_admin_function);
 	if (wait_for_admin_command_ack(h) == 0)
@@ -1656,11 +1662,18 @@ static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
 	int request_id;
 	volatile struct pqi_delete_operational_queue_response *resp;
 	u16 qid;
+	int err = 0;
+
+	/* Check to see if the Admin queue is ready for taking commands */
+	if (wait_for_admin_queues_to_become_idle(h, ADMIN_SLEEP_TMO_MS,
+							PQI_READY_FOR_IO))
+		return -ENODEV;
 
 	r = pqi_alloc_elements(aq, 1);
 	request_id = alloc_request(h, 0);
 	if (request_id < 0) {
 		dev_warn(&h->pdev->dev, "Requests unexpectedly exhausted\n");
+		err = -ENOMEM;
 		goto bail_out;
 	}
 	qid = qpindex_to_qid(qpindex, to_device);
@@ -1668,12 +1681,14 @@ static int sop_delete_io_queue(struct sop_device *h, int qpindex, int to_device)
 	send_admin_command(h, request_id);
 	resp = (volatile struct pqi_delete_operational_queue_response *)
 		h->qinfo[0].request[request_id].response;
-	if (resp->status != 0)
+	if (resp->status != 0) {
 		dev_warn(&h->pdev->dev, "Failed to tear down OQ... now what?\n");
+		err = -EIO;
+	}
+
 	free_request(h, 0, request_id);
 bail_out:
-	/* TODO something better */
-	return -1;
+	return err;
 }
 
 static int sop_delete_io_queues(struct sop_device *h)
@@ -1681,8 +1696,10 @@ static int sop_delete_io_queues(struct sop_device *h)
 	int i;
 
 	for (i = 1; i < h->nr_queue_pairs; i++) {
-		sop_delete_io_queue(h, i, 1);
-		sop_delete_io_queue(h, i, 0);
+		if (sop_delete_io_queue(h, i, 1))
+			break;
+		if (sop_delete_io_queue(h, i, 0))
+			break;
 	}
 	sop_free_io_queues(h);
 	return 0;
@@ -1743,18 +1760,14 @@ bail:
 #define PQI_START_RESET (1 << PQI_RESET_ACTION_SHIFT)
 #define PQI_SOFT_RESET (1)
 #define PQI_START_RESET_COMPLETED (2 << PQI_RESET_ACTION_SHIFT)
-static int sop_init_time_host_reset(struct sop_device *h)
+
+static int sop_wait_for_host_reset_ack(struct sop_device *h, uint tmo_ms)
 {
-	u64 paf;
-	unsigned char *x;
-	u32 status, reset_register, prev;
-	u8 function_and_status;
-	u8 pqi_device_state;
-	__iomem void *sig = &h->pqireg->signature;
+	u32 reset_register, prev;
+	int count = 0;
+	int tmo_iter = tmo_ms * 10;	/* Each iteration is 100 us */
 
 	prev = -1;
-	dev_warn(&h->pdev->dev, "Resetting host\n");
-	writel(PQI_START_RESET | PQI_SOFT_RESET, &h->pqireg->reset);
 	do {
 		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
 				ADMIN_SLEEP_INTERVAL_MAX);
@@ -1768,8 +1781,28 @@ static int sop_init_time_host_reset(struct sop_device *h)
 			dev_warn(&h->pdev->dev, "Reset register is: 0x%08x\n",
 				reset_register);
 		prev = reset_register;
-	} while ((reset_register & PQI_RESET_ACTION_MASK) !=
-					PQI_START_RESET_COMPLETED);
+		if ((reset_register & PQI_RESET_ACTION_MASK) ==
+					PQI_START_RESET_COMPLETED)
+			return 0;
+		count++;
+	} while (count < tmo_iter);
+
+	return -1;
+}
+
+#define ADMIN_RESET_TMO_MS		3000
+static int sop_init_time_host_reset(struct sop_device *h)
+{
+	u64 paf;
+	u32 status;
+	u8 pqi_device_state, function_and_status;
+	__iomem void *sig = &h->pqireg->signature;
+
+	dev_warn(&h->pdev->dev, "Resetting host\n");
+	writel(PQI_START_RESET | PQI_SOFT_RESET, &h->pqireg->reset);
+
+	if (sop_wait_for_host_reset_ack(h, ADMIN_RESET_TMO_MS))
+		return -1;
 
 	dev_warn(&h->pdev->dev, "Host reset initiated.\n");
 	do {
@@ -1782,7 +1815,6 @@ static int sop_init_time_host_reset(struct sop_device *h)
 			dev_warn(&h->pdev->dev, "Unable to read from device memory");
 			return -1;
 		}
-		x = (unsigned char *) &status;
 		function_and_status = paf & 0xff;
 		pqi_device_state = status & 0xff;
 		usleep_range(ADMIN_SLEEP_INTERVAL_MIN,
@@ -1843,8 +1875,11 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 		goto bail_request_regions;
 	}
 	rc = sop_init_time_host_reset(h);
-	if (rc)
-		return -1;
+	if (rc) {
+		dev_warn(&h->pdev->dev, "Failed to Reset Device\n");
+		goto bail_remap_bar;
+	}
+
 	sig = &h->pqireg->signature;
 
 	if (sop_set_dma_mask(pdev)) {
