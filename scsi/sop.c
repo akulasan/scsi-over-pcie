@@ -663,22 +663,74 @@ static void sop_free_admin_queues(struct sop_device *h)
 		kfree(adminq->oq);
 }
 
+#define ADMIN_QUEUE_ELEMENT_COUNT 64
+static int __devinit sop_alloc_admin_queues(struct sop_device *h)
+{
+	u64 pqicap;
+	u8 admin_iq_elem_count, admin_oq_elem_count;
+	__iomem void *sig = &h->pqireg->signature;
+	char *msg = "";
+
+	if (safe_readq(sig, &pqicap, &h->pqireg->capability)) {
+		dev_warn(&h->pdev->dev,  "Unable to read pqi capability register\n");
+		return -1;
+	}
+	memcpy(&h->pqicap, &pqicap, sizeof(h->pqicap));
+
+	admin_iq_elem_count = admin_oq_elem_count = ADMIN_QUEUE_ELEMENT_COUNT;
+
+	if (h->pqicap.max_admin_iq_elements < admin_iq_elem_count)
+		admin_iq_elem_count = h->pqicap.max_admin_iq_elements;
+	if (h->pqicap.max_admin_oq_elements < admin_oq_elem_count)
+		admin_oq_elem_count = h->pqicap.max_admin_oq_elements;
+	if (admin_oq_elem_count == 0 || admin_iq_elem_count == 0) {
+		dev_warn(&h->pdev->dev, "Invalid Admin Q elerment count %d in PQI caps\n",
+				ADMIN_QUEUE_ELEMENT_COUNT);
+		return -1;
+	}
+
+	if (pqi_device_queue_alloc(h, &h->qinfo[0].oq, admin_oq_elem_count,
+			h->pqicap.admin_iq_element_length,
+			PQI_DIR_FROM_DEVICE, 0))
+		return -1;
+
+	if (pqi_device_queue_alloc(h, &h->qinfo[0].iq, admin_iq_elem_count,
+			h->pqicap.admin_iq_element_length,
+			PQI_DIR_TO_DEVICE, 0))
+		goto bailout;
+
+#define PQI_REG_ALIGNMENT 16
+
+	if (h->qinfo[0].iq->dhandle % PQI_REG_ALIGNMENT != 0 ||
+		h->qinfo[0].oq->dhandle % PQI_REG_ALIGNMENT != 0) {
+		dev_warn(&h->pdev->dev, "Admin queues are not properly aligned.\n");
+		dev_warn(&h->pdev->dev, "admin_iq_busaddr = %llx\n",
+				(unsigned long long)h->qinfo[0].iq->dhandle);
+		dev_warn(&h->pdev->dev, "admin_oq_busaddr = %llx\n",
+				(unsigned long long)h->qinfo[0].oq->dhandle);
+	}
+	return 0;
+
+bailout:
+	sop_free_admin_queues(h);
+
+	dev_warn(&h->pdev->dev, "%s: %s\n", __func__, msg);
+	return -1;
+}
+
 static int __devinit sop_create_admin_queues(struct sop_device *h)
 {
-	u64 paf, pqicap, admin_iq_pi_offset, admin_oq_ci_offset;
+	u64 paf, admin_iq_pi_offset, admin_oq_ci_offset;
 	u32 status, admin_queue_param;
 	u8 function_and_status;
 	u8 pqi_device_state;
-	int total_admin_queue_size = 0;
-	void *admin_iq = NULL, *admin_oq;
+	struct pqi_device_queue *admin_iq, *admin_oq;
 	volatile u16 *admin_iq_ci, *admin_oq_pi;
 	__iomem u16 *admin_iq_pi, *admin_oq_ci;
-	dma_addr_t admin_iq_busaddr = 0, admin_oq_busaddr;
 	dma_addr_t admin_iq_ci_busaddr, admin_oq_pi_busaddr;
 	u16 msix_vector;
 	int rc;
 	char *msg = "";
-	dma_addr_t admin_q_dhandle;
 	__iomem void *sig = &h->pqireg->signature;
 	__iomem void *tmpptr;
 
@@ -686,69 +738,18 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	if (wait_for_admin_queues_to_become_idle(h, PQI_READY_FOR_ADMIN_FUNCTION))
 		return -1;
 
-	if (safe_readq(sig, &pqicap, &h->pqireg->capability)) {
-		msg = "Unable to read pqi capability register";
-		goto bailout;
-	}
-	memcpy(&h->pqicap, &pqicap, sizeof(h->pqicap));
+	admin_iq = h->qinfo[0].iq;
+	admin_oq = h->qinfo[0].oq;
 
-#define ADMIN_QUEUE_ELEMENT_COUNT 64 
+	admin_iq_ci = admin_iq->index.to_dev.ci;
+	admin_oq_pi = admin_oq->index.from_dev.pi;
 
-	if (h->pqicap.max_admin_iq_elements < ADMIN_QUEUE_ELEMENT_COUNT ||
-		h->pqicap.max_admin_oq_elements < ADMIN_QUEUE_ELEMENT_COUNT) {
-		dev_warn(&h->pdev->dev, "Can't create %d element PQI admin queues\n",
-				ADMIN_QUEUE_ELEMENT_COUNT);
-		return -1;
-	}
-
-	/*
-	 * Calculate total size of inbound and outbound admin queues including
-	 * queue elements and producer and consumer indexes, and allocate.
-	 * The extra 32 bytes are for the producer and consumer indexes, which
-	 * are only u16's, but we count them as 16 bytes each so that
-	 * everything comes out cache-line aligned.
-	 */
-	total_admin_queue_size = ((h->pqicap.admin_iq_element_length * 16) +
-				(h->pqicap.admin_oq_element_length * 16)) *
-				ADMIN_QUEUE_ELEMENT_COUNT + 32;
-	admin_iq = pci_alloc_consistent(h->pdev, total_admin_queue_size,
-						&admin_q_dhandle);
-	if (!admin_iq) {
-		msg = "failed to allocate PQI admin queues";
-		goto bailout;
-	}
-	admin_iq_ci = admin_iq + ADMIN_QUEUE_ELEMENT_COUNT *
-				h->pqicap.admin_iq_element_length * 16;
-	admin_oq = admin_iq + (h->pqicap.admin_iq_element_length * 16) *
-				ADMIN_QUEUE_ELEMENT_COUNT + 16;
-	admin_oq_pi = admin_oq + ADMIN_QUEUE_ELEMENT_COUNT *
-				h->pqicap.admin_oq_element_length * 16;
-
-	admin_iq_busaddr = admin_q_dhandle;
-	admin_iq_ci_busaddr = admin_iq_busaddr +
+	admin_iq_ci_busaddr = admin_iq->dhandle +
 				(h->pqicap.admin_iq_element_length * 16) *
-				ADMIN_QUEUE_ELEMENT_COUNT;
-	admin_oq_busaddr = admin_iq_ci_busaddr + 16;
-	admin_oq_pi_busaddr = admin_oq_busaddr +
+				admin_iq->nelements;
+	admin_oq_pi_busaddr = admin_oq->dhandle +
 				(h->pqicap.admin_oq_element_length * 16) *
-				ADMIN_QUEUE_ELEMENT_COUNT;
-
-#define PQI_REG_ALIGNMENT 16
-
-	if (admin_iq_busaddr % PQI_REG_ALIGNMENT != 0 ||
-		admin_oq_busaddr % PQI_REG_ALIGNMENT != 0 ||
-		admin_iq_ci_busaddr % PQI_REG_ALIGNMENT != 0 ||
-		admin_oq_pi_busaddr % PQI_REG_ALIGNMENT != 0) {
-		dev_warn(&h->pdev->dev, "Admin queues are not properly aligned.\n");
-		dev_warn(&h->pdev->dev, "admin_iq_busaddr = %p\n",
-				(void *) admin_iq_busaddr);
-		dev_warn(&h->pdev->dev, "admin_oq_busaddr = %p\n",
-				(void *) admin_oq_busaddr);
-		dev_warn(&h->pdev->dev, "admin_iq_ci_busaddr = %p\n",
-				(void *) admin_iq_ci_busaddr);
-		dev_warn(&h->pdev->dev, "admin_oq_pi_busaddr = %p\n",
-				(void *) admin_oq_pi_busaddr);
-	}
+				admin_oq->nelements;
 
 	msix_vector = 0; /* Admin Queue always uses vector [0] */
 	admin_queue_param = ADMIN_QUEUE_ELEMENT_COUNT |
@@ -756,8 +757,8 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 			(msix_vector << 16);
 
 	/* Tell the hardware about the admin queues */
-	writeq(admin_iq_busaddr, &h->pqireg->admin_iq_addr);
-	writeq(admin_oq_busaddr, &h->pqireg->admin_oq_addr);
+	writeq(admin_iq->dhandle, &h->pqireg->admin_iq_addr);
+	writeq(admin_oq->dhandle, &h->pqireg->admin_oq_addr);
 	writeq(admin_iq_ci_busaddr, &h->pqireg->admin_iq_ci_addr);
 	writeq(admin_oq_pi_busaddr, &h->pqireg->admin_oq_pi_addr);
 	writel(admin_queue_param, &h->pqireg->admin_queue_param);
@@ -795,10 +796,12 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 		msg = "Unable to read admin oq ci offset register";
 		goto bailout;
 	}
+
 	tmpptr = (__iomem void *) h->pqireg;
 	admin_iq_pi = (__iomem u16 *) (tmpptr + admin_iq_pi_offset);
 	admin_oq_ci = (__iomem u16 *) (tmpptr + admin_oq_ci_offset);
 
+	/* TODO: why do we read the status register here? block driver doesn't. */
 	if (safe_readl(sig, &status, &h->pqireg->pqi_device_status)) {
 		msg = "Failed to read device status register";
 		goto bailout;
@@ -806,21 +809,10 @@ static int __devinit sop_create_admin_queues(struct sop_device *h)
 	function_and_status = paf & 0xff;
 	pqi_device_state = status & 0xff;
 
-	h->qinfo[0].iq = kzalloc(sizeof(*h->qinfo[0].iq), GFP_KERNEL);
-	h->qinfo[0].oq = kzalloc(sizeof(*h->qinfo[0].oq), GFP_KERNEL);
-
-	if (!h->qinfo[0].iq || !h->qinfo[0].oq) {
-		msg = "Failed to allocate admin queues memory";
-		goto bailout;
-	}
-
 	pqi_device_queue_init(admin_oq, admin_oq_ci, admin_oq_pi,
 				PQI_DIR_FROM_DEVICE);
 	pqi_device_queue_init(admin_iq, admin_iq_pi, admin_iq_ci,
 				PQI_DIR_TO_DEVICE);
-
-	spin_lock_init(&h->qinfo[0].iq->qlock);
-	spin_lock_init(&h->qinfo[0].oq->qlock);
 
 	/* Allocate request buffers for admin queues */
 	if (allocate_q_request_buffers(&h->qinfo[0],
@@ -1932,6 +1924,10 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	rc = sop_setup_msix(h);
 	if (rc != 0)
 		goto bail_remap_bar;
+
+	rc = sop_alloc_admin_queues(h);
+	if (rc)
+		goto bail_enable_msix;
 
 	rc = sop_create_admin_queues(h);
 	if (rc)
