@@ -1473,7 +1473,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	volatile struct report_pqi_device_capability_response *resp;
 	struct pqi_device_queue *aq = h->qinfo[0].iq;
 	struct pqi_device_capabilities *buffer;
-	int request_id;
+	int request_id = (u16) -EBUSY, rc = 0;
 	u64 busaddr;
 
 	h->elements_per_io_queue = DRIVER_MAX_IQ_NELEMENTS;
@@ -1483,7 +1483,17 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 		return -ENOMEM;
 	dev_warn(&h->pdev->dev, "Getting pqi device capabilities 2\n");
 	r = pqi_alloc_elements(aq, 1);
+	if (IS_ERR(r)) {
+		dev_warn(&h->pdev->dev, "pqi_alloc_elements failed\n");
+		rc = PTR_ERR(r);
+		goto error;
+	}
 	request_id = alloc_request(h, 0);
+	if (request_id == (u16) -EBUSY) {
+		dev_warn(&h->pdev->dev, "alloc_request failed\n");
+		rc = -ENOMEM;
+		goto error;
+	}
 	if (fill_get_pqi_device_capabilities(h, r, request_id, buffer,
 						(u32) sizeof(*buffer))) {
 		/* we have to submit request (already in queue) but it
@@ -1507,6 +1517,7 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	resp = (volatile struct report_pqi_device_capability_response *)
 			h->qinfo[0].request[request_id].response;
 	if (resp->status != 0) {
+		dev_warn(&h->pdev->dev, "resp->status = %d\n", resp->status);	
 		free_request(h, 0, request_id);
 		goto error;
 	}
@@ -1564,8 +1575,10 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	return 0;
 
 error:
+	if (request_id != (u16) -EBUSY)
+		free_request(h, 0, request_id);
 	kfree(buffer);
-	return -1;
+	return rc;
 }
 #if 0
 static int sop_setup_io_queues(struct sop_device *h)
