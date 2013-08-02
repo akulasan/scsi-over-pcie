@@ -876,10 +876,8 @@ static int sop_delete_admin_queues(struct sop_device *h)
 	if (wait_for_admin_queues_to_become_idle(h, PQI_READY_FOR_IO))
 		return -1;
 	writeq(PQI_DELETE_ADMIN_QUEUES, &h->pqireg->process_admin_function);
-	if (!wait_for_admin_command_ack(h)) {
-		sop_delete_admin_queues(h);
+	if (wait_for_admin_command_ack(h) == 0)
 		return 0;
-	}
 
 	/* Try to get some clues about why it failed. */
 	dev_warn(&h->pdev->dev, "Failed waiting for admin command acknowledgment\n");
