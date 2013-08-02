@@ -917,41 +917,53 @@ static int sop_setup_msix(struct sop_device *h)
 	 * Set up (h->nr_queue_pairs - 1) msix vectors. -1 because
 	 * outbound admin queue shares with io queue 0
 	 */
-	for (i = 0; i < h->nr_queue_pairs; i++) {
+	for (i = 0; i < h->nr_queue_pairs - 1; i++) {
 		msix_entry[i].vector = 0;
 		msix_entry[i].entry = i;
 	}
 
+	err = 0;
 	if (!pci_find_capability(h->pdev, PCI_CAP_ID_MSIX))
-		goto default_int_mode;
-	/* TODO: fall back if we get fewer msix vectors */
-	err = pci_enable_msix(h->pdev, msix_entry, h->nr_queue_pairs - 1);
-	if (err > 0)
-		h->nr_queue_pairs = err;
+		goto msix_failed;
 
-	dev_warn(&h->pdev->dev,
-		"zzz 2 (after pci_enable_msix) h->nr_queue_pairs = %d\n",
-		h->nr_queue_pairs);
+	while (1) {
+		err = pci_enable_msix(h->pdev, msix_entry,
+				h->nr_queue_pairs - 1);
+		if (err == 0)
+			break;	/* Success */
+		if (err < 0)
+			goto msix_failed;
 
-	if (err == 0) {
-		for (i = 0; i < h->nr_queue_pairs; i++) {
-			/* vid makes admin q share with io q 0 */
-			int vid = i ? i - 1 : 0;
-			h->qinfo[i].msix_entry = msix_entry[vid].entry;
-			h->qinfo[i].msix_vector = msix_entry[vid].vector;
-			dev_warn(&h->pdev->dev, "q[%d] msix_entry[%d] = %d\n",
-				i, vid, msix_entry[vid].vector);
-		}
-		h->intr_mode = INTR_MODE_MSIX;
-		return 0;
-	}
-	if (err > 0)
+		/* Try reduced number of vectors */
 		dev_warn(&h->pdev->dev,
-				"only %d MSI-X vectors available\n", err);
-	else
-		dev_warn(&h->pdev->dev, "MSI-X init failed %d\n", err);
-default_int_mode:
-	return -1;
+			"Requested %d MSI-X vectors, available %d\n",
+			h->nr_queue_pairs - 1, err);
+		h->nr_queue_pairs = err + 1;
+	}
+	for (i = 0; i < h->nr_queue_pairs; i++) {
+		/* vid makes admin q share with io q 0 */
+		int vid = i ? i - 1 : 0;
+		h->qinfo[i].msix_entry = msix_entry[vid].entry;
+		h->qinfo[i].msix_vector = msix_entry[vid].vector;
+		dev_warn(&h->pdev->dev, "q[%d] msix_entry[%d] = %d\n",
+			i, vid, msix_entry[vid].vector);
+	}
+	h->intr_mode = INTR_MODE_MSIX;
+	return 0;
+
+msix_failed:
+	/* Use regular interrupt */
+	h->nr_queue_pairs = 2;
+
+	h->qinfo[0].msix_entry = 0;
+	h->qinfo[1].msix_entry = 1;
+	h->qinfo[0].msix_vector = h->qinfo[1].msix_vector = h->pdev->irq;
+	h->intr_mode = INTR_MODE_INTX;
+
+	dev_warn(&h->pdev->dev, "MSI-X init failed (using legacy intr): %s\n",
+		err ?	"failed to enable MSI-X" :
+			"device does not support MSI-X");
+	return 0;
 }
 
 /* function to determine whether a complete response has been accumulated */
