@@ -306,7 +306,7 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 		goto bailout;
 	(*xq)->dhandle = dhandle;
 	(*xq)->vaddr = vaddr;
-	(*xq)->queue_vaddr = vaddr;
+	(*xq)->vaddr = vaddr;
 
 	if (queue_direction == PQI_DIR_TO_DEVICE) {
 		dev_warn(&h->pdev->dev, "4 allocating request buffers\n");
@@ -414,12 +414,12 @@ static void *pqi_alloc_elements(struct pqi_device_queue *q,
 					q->nelements, q->unposted_index, extra_elements);
 			return ERR_PTR(-ENOMEM);
 		}
-		p = q->queue_vaddr + q->unposted_index * q->element_size;
+		p = q->vaddr + q->unposted_index * q->element_size;
 		memset(p, 0, (q->nelements - q->unposted_index) *
 						q->element_size);
 		q->unposted_index = 0;
 	}
-	p = q->queue_vaddr + q->unposted_index * q->element_size;
+	p = q->vaddr + q->unposted_index * q->element_size;
 	q->unposted_index = (q->unposted_index + nelements) % q->nelements;
 	return p;
 }
@@ -431,7 +431,7 @@ static int pqi_dequeue_from_device(struct pqi_device_queue *q, void *element)
 	if (pqi_from_device_queue_is_empty(q))
 		return PQI_QUEUE_EMPTY;
 
-	p = q->queue_vaddr + q->unposted_index * q->element_size;
+	p = q->vaddr + q->unposted_index * q->element_size;
 	/* printk(KERN_WARNING "DQ: p = %p, q->unposted_index = %hu, n = %hu\n",
 				p, q->unposted_index, q->nelements); */
 	memcpy(element, p, q->element_size);
@@ -445,14 +445,14 @@ static u8 pqi_peek_ui_type_from_device(struct pqi_device_queue *q)
 {
 	u8 *p;
 
-	p = q->queue_vaddr + q->unposted_index * q->element_size;
+	p = q->vaddr + q->unposted_index * q->element_size;
 	return *p;
 }
 static u16 pqi_peek_request_id_from_device(struct pqi_device_queue *q)
 {
 	u8 *p;
 
-	p = q->queue_vaddr + q->unposted_index * q->element_size + 8;
+	p = q->vaddr + q->unposted_index * q->element_size + 8;
 	return *(u16 *) p;
 }
 
@@ -521,16 +521,16 @@ static void __attribute__((unused)) print_unsubmitted_commands(struct pqi_device
 	}
 	if (pi < q->unposted_index) {
 		for (i = pi; i < q->unposted_index; i++) {
-			iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
+			iu = (unsigned char *) q->vaddr + (i * IQ_IU_SIZE);
 			print_iu(iu);
 		}
 	} else {
 		for (i = pi; i < q->nelements; i++) {
-			iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
+			iu = (unsigned char *) q->vaddr + (i * IQ_IU_SIZE);
 			print_iu(iu);
 		}
 		for (i = 0; i < q->unposted_index; i++) {
-			iu = (unsigned char *) q->queue_vaddr + (i * IQ_IU_SIZE);
+			iu = (unsigned char *) q->vaddr + (i * IQ_IU_SIZE);
 			print_iu(iu);
 		}
 	}
@@ -1645,7 +1645,7 @@ static int sop_setup_io_queues(struct sop_device *h)
 			h->qinfo[aq->queue_id].request[request_idx].response;
 		if (resp->status != 0)
 			dev_warn(&h->pdev->dev, "Failed to set up OQ... now what?\n");
-		/* h->io_q_from_dev[i].pi = h->io_q_from_dev[i].queue_vaddr +
+		/* h->io_q_from_dev[i].pi = h->io_q_from_dev[i].vaddr +
 						le64_to_cpu(resp->index_offset); */
 		h->io_q_from_dev[i].ci = ((void *) h->pqireg) +
 						le64_to_cpu(resp->index_offset);
@@ -1673,7 +1673,7 @@ static int sop_setup_io_queues(struct sop_device *h)
 			h->qinfo[aq->queue_id].request[request_idx].response;
 		if (resp->status != 0)
 			dev_warn(&h->pdev->dev, "Failed to set up IQ... now what?\n");
-		/* h->io_q_to_dev[i].ci = h->io_q_to_dev[i].queue_vaddr +
+		/* h->io_q_to_dev[i].ci = h->io_q_to_dev[i].vaddr +
 						le64_to_cpu(resp->index_offset); */
 		h->io_q_to_dev[i].pi = ((void *) h->pqireg) +
 					le64_to_cpu(resp->index_offset);
