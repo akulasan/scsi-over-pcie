@@ -383,6 +383,14 @@ struct sop_device {
 	int elements_per_io_queue;
 	int max_sgls;
 	struct pqi_device_capability_info devcap;
+
+	/* Next two fields are for dealing with REQ_FLUSH with data
+	 * We can get away with just enough to track only a single such
+	 * bio because there can only be one such bio active
+	 * at a time (see "C1" comment in block/blk-flush.c 
+	 */
+	struct bio *req_flush_bio;
+	int sync_cache_done;
 };
 
 #define	SOP_DEVICE_BUSY(_h)	(((_h)->flags) & (\

@@ -1279,7 +1279,25 @@ static void sop_complete_bio(struct sop_device *h, struct queue_info *qinfo,
 		break;
 	}
 
+	/* Is this (REQ_FLUSH with data) completing? */
+	if (unlikely(h->req_flush_bio != NULL && h->req_flush_bio == r->bio)) {
+		if (!h->sync_cache_done && result != -EIO) {
+			/* SYNC CACHE is now done.  Requeue for data xfer */
+			h->sync_cache_done = 1;
+			retry_sop_request(h, qinfo, r);
+			return;
+		} else {
+			/* This is the data xfer completing, or else -EIO.
+			 * Either way, we'rd done with (REQ_FLUSH with data)
+			 * bio, so complete it in the usual way.
+			 */
+			h->sync_cache_done = 0;
+			h->req_flush_bio = NULL;
+		}
+	}
+
 	atomic_dec(&h->bio_count);
+
 	bio_endio(r->bio, result);
 	free_request(h, qinfo_to_qid(qinfo), r->request_id);
 }
@@ -2937,7 +2955,7 @@ static int sop_scatter_gather(struct sop_device *h,
 }
 
 static int sop_send_sync_cache(struct sop_device *h, struct bio *bio,
-				struct queue_info *qinfo)
+				struct queue_info *qinfo, struct bio *req_flush_bio)
 {
 	struct sop_limited_cmd_iu *r;
 	struct sop_request *ser;
@@ -2989,6 +3007,9 @@ static int sop_send_sync_cache(struct sop_device *h, struct bio *bio,
 	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
 	ser->retry_count = 0;
 
+	h->req_flush_bio = req_flush_bio;
+	if (req_flush_bio)
+		h->sync_cache_done = 0;
 	sop_start_io_acct(bio);
 	/* Submit it to the device */
 	writew(qinfo->iq->unposted_index, qinfo->iq->index.to_dev.pi);
@@ -3010,17 +3031,15 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 	u16 request_id;
 	int num_sg;
 
-	if (unlikely(bio->bi_rw & REQ_FLUSH)) {
-		int rc;
-
+	if (unlikely((bio->bi_rw & REQ_FLUSH) && !h->sync_cache_done)) {
 		/* If no data to transfer, just sync and return */
 		if (!bio_phys_segments(h->rq, bio))
-			return sop_send_sync_cache(h, bio, qinfo);
-
-		/* otherwise sync then continue on to send the data */
-		rc = sop_send_sync_cache(h, bio, qinfo);
-		if (rc)
-			return rc;
+			return sop_send_sync_cache(h, bio, qinfo, NULL);
+		/*
+		 * Otherwise sync cache and set up to send the data xfer
+		 * when the sync completes successfully.
+		 */ 
+		return sop_send_sync_cache(h, bio, qinfo, bio);
 	}
 
 	request_id = alloc_request(h, qinfo_to_qid(qinfo));
