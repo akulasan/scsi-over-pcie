@@ -29,6 +29,7 @@
 #define MAX_CMDS_LOW	(64)
 
 /* #define	SOP_SUPPORT_BIO_LOG	1 */
+/* #define	SOP_IO_COUNTERS */
 
 struct sop_request;
 
@@ -378,9 +379,25 @@ struct sop_device {
 	struct pqi_device_queue *io_q_to_dev;
 	struct pqi_device_queue *io_q_from_dev;
 	u16 current_id;
+
+	/* Command counters */
 	atomic_t bio_count;
 	atomic_t cmd_pending;
 	u32  max_cmd_pending;
+
+#ifdef SOP_IO_COUNTERS
+	/* Cumulative counters */
+#define	SOP_PERF_BLOCK_SIZE_LIMIT	4096
+
+	atomic_t total_sgio_count;
+	atomic_t total_low_io_count;
+	atomic_t total_hi_io_count;
+	u32  max_io_size;
+	u32  min_io_size;
+	atomic_t total_max_size_count;
+	atomic_t total_min_size_count;
+#endif /* SOP_IO_COUNTERS */
+
 	struct queue_info qinfo[MAX_TOTAL_QUEUE_PAIRS];
 #define qpindex_from_pqiq(pqiq) (pqiq->queue_id)
 /* TODO probably do not need this - calculate from qinfo address */

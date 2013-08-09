@@ -258,11 +258,84 @@ static void sop_dump_log(int b_only_incomplete)
 #define sop_dump_log(_only_incomplete)
 #define sop_init_log()			0
 #define sop_update_log(_index, _pi)
+
 #define	SOP_FREE_LOG()
 
 #endif
 
 #define	SOP_MAX_LINE_LEN	256
+
+#ifdef SOP_IO_COUNTERS
+static int sop_print_io_counters(struct sop_device *h, char *buf)
+{
+	char line[SOP_MAX_LINE_LEN];
+	int size;
+
+	size = snprintf(line, SOP_MAX_LINE_LEN,
+		"  #IO(< %d bytes): %d, #IO(>= %d bytes): %d, #SGIO: %d\n",
+		SOP_PERF_BLOCK_SIZE_LIMIT, atomic_read(&h->total_low_io_count),
+		SOP_PERF_BLOCK_SIZE_LIMIT, atomic_read(&h->total_hi_io_count),
+		atomic_read(&h->total_sgio_count));
+	strcat(buf, line);
+	size += snprintf(line, SOP_MAX_LINE_LEN,
+		"  Max IO Size: %d bytes #IO: %d, Min: %d bytes #IO: %d\n",
+		h->max_io_size, atomic_read(&h->total_max_size_count),
+		h->min_io_size, atomic_read(&h->total_min_size_count));
+	strcat(buf, line);
+
+	return size;
+}
+
+static void sop_reset_io_counters(void)
+{
+	struct sop_device *h;
+
+	/* Reset the counters */
+	list_for_each_entry(h, &dev_list, node) {
+		atomic_set(&h->total_sgio_count, 0);
+		atomic_set(&h->total_low_io_count, 0);
+		atomic_set(&h->total_hi_io_count, 0);
+		atomic_set(&h->total_max_size_count, 0);
+		atomic_set(&h->total_min_size_count, 0);
+		h->max_io_size = 0;
+		h->min_io_size = 0xFFFFFFFF;
+	}
+}
+
+static void sop_update_io_counters(struct sop_device *h,
+	struct sop_request *ser, struct bio *bio)
+{
+	/* Size counters */
+	if (ser->xfer_size < SOP_PERF_BLOCK_SIZE_LIMIT)
+		atomic_inc(&h->total_low_io_count);
+	else
+		atomic_inc(&h->total_hi_io_count);
+	if (bio->bi_size > h->max_io_size) {
+		h->max_io_size = bio->bi_size;
+		atomic_set(&h->total_max_size_count, 1);
+	} else if (bio->bi_size == h->max_io_size) {
+		atomic_inc(&h->total_max_size_count);
+	}
+	if (bio->bi_size < h->min_io_size) {
+		h->min_io_size = bio->bi_size;
+		atomic_set(&h->total_min_size_count, 1);
+	} else if (bio->bi_size == h->min_io_size) {
+		atomic_inc(&h->total_min_size_count);
+	}
+}
+
+#define SOP_INIT_IO_COUNTER(h)			(h->min_io_size = 0xFFFFFFFF)
+#define	SOP_UPDATE_SGIO_COUNT(h)		atomic_inc(&h->total_sgio_count)
+
+#else
+#define	sop_print_io_counters(_h, _buf)		0
+#define sop_reset_io_counters()
+#define sop_update_io_counters(_h, _ser, _bio)
+
+#define SOP_INIT_IO_COUNTER(h)
+#define	SOP_UPDATE_SGIO_COUNT(h)
+#endif
+
 static ssize_t sop_sysfs_show_debug(struct device_driver *dd, char *buf)
 {
 	ssize_t	size;
@@ -284,6 +357,8 @@ static ssize_t sop_sysfs_show_debug(struct device_driver *dd, char *buf)
 				atomic_read(&h->cmd_pending),
 				h->max_cmd_pending);
 		strcat(buf, line);
+		size += sop_print_io_counters(h, buf);
+
 		for (i = 1; i < h->nr_queue_pairs; i++) {
 			size += snprintf(line, SOP_MAX_LINE_LEN,
 				"    OQ depth[%02d] = %d, Max %d, ",
@@ -311,6 +386,9 @@ static ssize_t sop_sysfs_set_debug(struct device_driver *dd, const char *buf,
 		pr_err("sop: Not a valid command number in \'%s\'.\n", buf);
 		retval = -EINVAL;
 	}
+	if (sop_dbg_cmd == 0)
+		sop_reset_io_counters();
+
 	return retval;
 }
 
@@ -2362,6 +2440,9 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	h->pdev = pdev;
 	pci_set_drvdata(pdev, h);
 
+	/* Init min counter */
+	SOP_INIT_IO_COUNTER(h);
+
 	spin_lock(&dev_list_lock);
 	list_add(&h->node, &dev_list);
 	spin_unlock(&dev_list_lock);
@@ -3288,6 +3369,7 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 
 	sop_scatter_gather(h, qinfo, num_sg, r, sgl, &ser->xfer_size);
 
+	sop_update_io_counters(h, ser, bio);
 	r->xfer_size = cpu_to_le32(ser->xfer_size);
 	ser->tmo_slot = sop_add_timeout(qinfo, DEF_IO_TIMEOUT);
 	ser->retry_count = 0;
@@ -4177,6 +4259,7 @@ static int sop_sg_io(struct block_device *dev, fmode_t mode,
 			len, iov_count);
 
 	start_time = jiffies;
+	SOP_UPDATE_SGIO_COUNT(h);
 	rc = send_sync_cdb(h, scdb, 0);
 	hp->duration = jiffies_to_msecs(jiffies - start_time);
 	if (copy_to_user(argp, hp, sizeof(*hp))) {
