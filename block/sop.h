@@ -23,6 +23,8 @@
  */
 
 #define MAX_SGLS	(128)
+#define MAX_IO_CMDS	(2048)
+#define MAX_ADMIN_CMDS	(64)
 #define MAX_CMDS	(1024)
 #define MAX_CMDS_LOW	(64)
 
@@ -302,15 +304,12 @@ struct queue_info {
 	int msix_entry;
 	int msix_vector;
 	u16 qdepth;
+	u16 numa_node;
 	atomic_t cur_qdepth;
 	u32 max_qdepth;
 	u32 waitlist_depth;
-	struct sop_request *request;
-	unsigned long *request_bits;
 	struct pqi_device_queue *iq;
 	struct pqi_device_queue *oq;
-	struct pqi_sgl_descriptor *sg;
-	dma_addr_t sg_bus_addr;
 	struct bio_list wait_list;
 	struct sop_timeout tmo;
 };
@@ -332,6 +331,15 @@ struct pqi_device_capability_info {
 	u8 oq_pi_alignment_exponent;
 	u32 protocol_support_bitmask;
 	u16 admin_sgl_support_bitmask;
+};
+
+struct sop_request_pool {
+	struct sop_request *request;
+	unsigned long *request_bits;
+	u16 num_requests;
+	u16 numa_node;
+	struct pqi_sgl_descriptor *sg;
+	dma_addr_t sg_bus_addr;
 };
 
 struct sop_device {
@@ -391,6 +399,10 @@ struct sop_device {
 	 */
 	struct bio *req_flush_bio;
 	int sync_cache_done;
+
+	struct sop_request_pool admin_req;
+	struct sop_request_pool *io_req;
+	int num_io_req_pool;
 };
 
 #define	SOP_DEVICE_BUSY(_h)	(((_h)->flags) & (\
@@ -414,6 +426,8 @@ struct sop_request {
 	u8 num_sg;
 	u8 retry_count;
 	u16 tmo_slot;
+	u16 qid;
+	u16 reserved_align;
 	unsigned long start_time;
 	u8 response[MAX_RESPONSE_SIZE];
 };
