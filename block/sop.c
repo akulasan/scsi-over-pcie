@@ -129,6 +129,139 @@ static u32 sop_dbg_lvl, sop_dbg_cmd;
 
 #define SCSI_LUN_IN_PROCESS_OF_BECOMING_READY 0x0401
 
+#ifdef SOP_SUPPORT_BIO_LOG
+struct sop_log_entry {
+	u8	qid;
+	u8	cdb0;
+	u16	local_pi;
+	u16	ci;
+	u16	req_id;
+	u16	cmpl_pi;
+	u16	q_seq;
+	u32	seq_num;
+};
+
+#define	SOP_LOG_MAX			(64 * 1024)
+struct sop_debug_log_type {
+	struct	sop_log_entry *buffer;
+	u32	size;
+	u32	count;
+	u32	start;
+};
+
+static struct sop_debug_log_type sop_dbg_log;
+static u32 sop_log_seq;
+static DEFINE_SPINLOCK(sop_log_lock);
+
+static int sop_init_log(void)
+{
+	/* Allocate and init the debug log buffer */
+	sop_dbg_log.count = sop_dbg_log.start = 0;
+	sop_dbg_log.buffer = kzalloc(sizeof(struct sop_log_entry) *
+		SOP_LOG_MAX, GFP_KERNEL);
+	if (sop_dbg_log.buffer == NULL)
+		return -ENOMEM;
+
+	sop_dbg_log.size = SOP_LOG_MAX;
+	return 0;
+}
+
+static int sop_debug_add_log(struct sop_device *h, struct queue_info *qinfo,
+			      u16 request_id, u8 cdb)
+{
+	unsigned long flags;
+	struct sop_log_entry *log;
+	int index;
+
+	/* Lock first */
+	spin_lock_irqsave(&sop_log_lock, flags);
+
+	/* Save the values */
+	index = sop_dbg_log.start;
+
+	log = sop_dbg_log.buffer + index;
+	log->qid = qinfo_to_qid(qinfo);
+	log->local_pi = qinfo->iq->unposted_index;
+	log->ci = *qinfo->iq->index.to_dev.ci;
+	log->req_id = request_id;
+	log->q_seq = ++qinfo->seq_num;
+	log->cdb0 = cdb;
+	log->seq_num = ++sop_log_seq;
+	log->cmpl_pi = 0xFFFF;
+
+	/* Update the counters */
+	if (++sop_dbg_log.start == sop_dbg_log.size)
+		sop_dbg_log.start = 0;
+	if (sop_dbg_log.count < sop_dbg_log.size)
+		sop_dbg_log.count++;
+
+	/* Unlock */
+	spin_unlock_irqrestore(&sop_log_lock, flags);
+	return index;
+}
+
+static void sop_update_log(u16 index, u16 cmpl_pi)
+{
+	struct sop_log_entry *log;
+
+	log = sop_dbg_log.buffer + index;
+	log->cmpl_pi = cmpl_pi;
+}
+
+static void sop_dump_log(int b_only_incomplete)
+{
+	unsigned long flags;
+	int i, index;
+
+	/* Lock first */
+	spin_lock_irqsave(&sop_log_lock, flags);
+
+	index = sop_dbg_log.start - sop_dbg_log.count;
+	if (index < 0) {
+		pr_info("History Log wrap around!!\n");
+		index += sop_dbg_log.size;
+	}
+
+	/* Unlock */
+	spin_unlock_irqrestore(&sop_log_lock, flags);
+
+	if (b_only_incomplete)
+		pr_info("SOP Incomplete Commnd Log ");
+	else
+		pr_info("SOP History Log ");
+
+	pr_info("(Total Count = %d start = %d end = %d):-\n",
+		sop_dbg_log.count, index, sop_dbg_log.start);
+	for (i = 0; i < sop_dbg_log.count; i++) {
+		struct sop_log_entry *log = sop_dbg_log.buffer + index;
+
+		if (++index == sop_dbg_log.size)
+			index = 0;
+
+		if (b_only_incomplete && (log->cmpl_pi != 0xFFFF))
+			continue;
+
+		pr_info("%05d: Q[%02d] PI(%02x) CI(%02x) Rq: %02x "
+			"QSeq %05d CDB[0] %02x Cmpl PI(%d)\n",
+			log->seq_num, log->qid, log->local_pi, log->ci,
+			log->req_id, log->q_seq, log->cdb0, log->cmpl_pi);
+	}
+	pr_info("Log Done!\n");
+}
+
+#define	SOP_FREE_LOG()			kfree(sop_dbg_log.buffer)
+
+
+#else
+
+#define sop_debug_add_log(_h, _qinfo, _request_id, _cdb)	0
+#define sop_dump_log(_only_incomplete)
+#define sop_init_log()			0
+#define sop_update_log(_index, _pi)
+#define	SOP_FREE_LOG()
+
+#endif
+
 #define	SOP_MAX_LINE_LEN	256
 static ssize_t sop_sysfs_show_debug(struct device_driver *dd, char *buf)
 {
@@ -145,8 +278,7 @@ static ssize_t sop_sysfs_show_debug(struct device_driver *dd, char *buf)
 
 		dev_num++;
 		size += snprintf(line, SOP_MAX_LINE_LEN,
-				"Dev(%d): Flag=0x%08lx Total Bio = %d "
-				"Issued = %d Max = %d\n",
+				"Dev(%d): Flag=0x%08lx Total Bio = %d Issued = %d Max = %d\n",
 				dev_num, h->flags,
 				atomic_read(&h->bio_count),
 				atomic_read(&h->cmd_pending),
@@ -1318,6 +1450,7 @@ static int sop_msix_handle_ioq(struct queue_info *q)
 
 	do {
 		struct sop_request *r = q->oq->cur_req;
+		int cmpl_pi = 0xFFFF;
 
 		if (r == NULL) {
 			/* Receiving completion of a new request */
@@ -1327,6 +1460,7 @@ static int sop_msix_handle_ioq(struct queue_info *q)
 				&h->io_req[q->numa_node].request[request_id];
 			r->request_id = request_id;
 			r->response_accumulated = 0;
+			cmpl_pi = q->oq->unposted_index;
 		}
 		rc = pqi_dequeue_from_device(q->oq,
 				&r->response[r->response_accumulated]);
@@ -1336,8 +1470,10 @@ static int sop_msix_handle_ioq(struct queue_info *q)
 		if (sop_response_accumulated(r)) {
 			q->oq->cur_req = NULL;
 			wmb();
-			if (likely(r->bio))
+			if (likely(r->bio)) {
+				sop_update_log(r->log_index, cmpl_pi);
 				sop_complete_bio(h, q, r);
+			}
 			else if (likely(r->waiting))
 				complete(r->waiting);
 			else
@@ -2602,6 +2738,10 @@ static int __init sop_init(void)
 		return PTR_ERR(sop_thread);
 	}
 
+	result = sop_init_log();
+	if (result)
+		goto allocate_fail;
+
 	result = register_blkdev(sop_major, SOP);
 	if (result <= 0)
 		goto blkdev_fail;
@@ -2637,6 +2777,8 @@ create_fail:
  blkdev_fail:
 	pr_warn("%s Init: Blkdev register failed with %d!\n", DRIVER_NAME,
 		result);
+	SOP_FREE_LOG();
+allocate_fail:
 	kthread_stop(sop_thread);
 	return result;
 
@@ -2646,6 +2788,7 @@ static void __exit sop_exit(void)
 {
 	driver_remove_file(&sop_pci_driver.driver, &driver_attr_debug);
 	driver_remove_file(&sop_pci_driver.driver, &driver_attr_dbg_lvl);
+	SOP_FREE_LOG();
 	pci_unregister_driver(&sop_pci_driver);
 	unregister_blkdev(sop_major, SOP);
 	kthread_stop(sop_thread);
@@ -3141,6 +3284,8 @@ static int sop_process_bio(struct sop_device *h, struct bio *bio,
 		r->cdb[0], r->cdb[1], r->cdb[2], r->cdb[3],
 		r->cdb[4], r->cdb[5], ser->xfer_size, num_sg);
 #endif
+	ser->log_index = sop_debug_add_log(h, qinfo, request_id, r->cdb[0]);
+
 	sop_scatter_gather(h, qinfo, num_sg, r, sgl, &ser->xfer_size);
 
 	r->xfer_size = cpu_to_le32(ser->xfer_size);
@@ -4267,6 +4412,8 @@ static void sop_timeout_ios(struct queue_info *q, int action)
 
 	dev_warn(&q->h->pdev->dev, "SOP timeout!! %d cmds left on Q[%d] slot[%d]\n",
 				cmd_pend, qinfo_to_qid(q), cur_slot);
+	sop_dump_log(0);
+	sop_dump_log(1);
 
 	/* Process timeout */
 	cmd_pend -= sop_timeout_queued_cmds(q, cur_slot, action);

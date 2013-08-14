@@ -28,6 +28,8 @@
 #define MAX_CMDS	(1024)
 #define MAX_CMDS_LOW	(64)
 
+/* #define	SOP_SUPPORT_BIO_LOG	1 */
+
 struct sop_request;
 
 #define	SOP_SIGNATURE_STR	"PQI DREG"
@@ -305,6 +307,9 @@ struct queue_info {
 	int msix_vector;
 	u16 qdepth;
 	u16 numa_node;
+#ifdef SOP_SUPPORT_BIO_LOG
+	u32 seq_num;
+#endif
 	atomic_t cur_qdepth;
 	u32 max_qdepth;
 	u32 waitlist_depth;
@@ -427,7 +432,7 @@ struct sop_request {
 	u8 retry_count;
 	u16 tmo_slot;
 	u16 qid;
-	u16 reserved_align;
+	u16 log_index;		/* Used for log only - reserved otherwise */
 	unsigned long start_time;
 	u8 response[MAX_RESPONSE_SIZE];
 };
