@@ -69,6 +69,7 @@ DEFINE_PCI_DEVICE_TABLE(sop_id_table) = {
 MODULE_DEVICE_TABLE(pci, sop_id_table);
 
 static int sop_major;
+static int size_kernel_mem, size_lsgl_mem, size_pci_mem;
 
 static DEFINE_SPINLOCK(dev_list_lock);
 static LIST_HEAD(dev_list);
@@ -534,6 +535,7 @@ static int allocate_sgl_area(struct sop_device *h,
 				sizeof(struct pqi_sgl_descriptor);
 
 	p->sg = pci_alloc_consistent(h->pdev, total_size, &p->sg_bus_addr);
+	size_pci_mem += total_size;
 	return (p->sg) ? 0 : -ENOMEM;
 }
 
@@ -561,12 +563,14 @@ static int allocate_pool_request_buffers(struct sop_request_pool *p, int nsgl,
 	if (!p->request_bits)
 		return -ENOMEM;
 	memset(p->request_bits, 0, size);
+	size_kernel_mem += size;
 
 	size = sizeof(struct sop_request) * nbuffers;
 	p->request = kmalloc_node(size, GFP_KERNEL, node);
 	if (!p->request)
 		goto bailout;
 	memset(p->request, 0, size);
+	size_kernel_mem += size;
 	if (nsgl) {
 		int i;
 
@@ -575,6 +579,7 @@ static int allocate_pool_request_buffers(struct sop_request_pool *p, int nsgl,
 				sizeof(struct scatterlist), GFP_KERNEL, node);
 			if (!p->request[i].sgl)
 				goto bailout;
+			size_lsgl_mem += sizeof(struct scatterlist);
 		}
 	}
 	return 0;
@@ -610,12 +615,14 @@ static int pqi_device_queue_alloc(struct sop_device *h,
 			queue_pair_index, queue_direction);
 		goto bailout;
 	}
+	size_kernel_mem += sizeof(**xq);
 	vaddr = pci_alloc_consistent(h->pdev, total_size, &dhandle);
 	if (!vaddr) {
 		dev_warn(&h->pdev->dev, "Failed to alloc PCI buffer #%d, dir %d\n",
 			queue_pair_index, queue_direction);
 		goto bailout;
 	}
+	size_pci_mem += total_size;
 	(*xq)->dhandle = dhandle;
 	(*xq)->vaddr = vaddr;
 
@@ -2423,6 +2430,7 @@ static int __devinit sop_probe(struct pci_dev *pdev,
 	h = kzalloc(sizeof(*h), GFP_KERNEL);
 	if (!h)
 		return -ENOMEM;
+	size_kernel_mem += sizeof(*h);
 
 	rc = sop_set_instance(h);
 	if (rc) {
@@ -2843,6 +2851,11 @@ static int __init sop_init(void)
 		goto create_fail_dbg_lvl;
 
 	pr_info("%s Initialized!\n", DRIVER_NAME);
+	/*
+	pr_info("Allocated Virtual Mem: %d, Coherent Mem: %d, Local SGL Mem: %d\n",
+		size_kernel_mem, size_lsgl_mem, size_pci_mem);
+	*/
+
 	return 0;
 
 create_fail_dbg_lvl:
