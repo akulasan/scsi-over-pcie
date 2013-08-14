@@ -2866,7 +2866,8 @@ static int sop_prepare_scatterlist(struct bio *bio, struct sop_request *ser,
 
 	ser->xfer_size = len;
 
-	sg_mark_end(cur_sg);
+	if (cur_sg)
+		sg_mark_end(cur_sg);
 
 	return num_sg;
 }
