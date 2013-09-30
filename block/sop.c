@@ -1886,7 +1886,10 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 						PCI_DMA_FROMDEVICE);
 	resp = (struct report_pqi_device_capability_response *)
 			h->admin_req.request[request_id].response;
-	if (resp->iu_type != ADMIN_RESPONSE_IU_TYPE || resp->status != 0) {
+	if (resp->iu_type != ADMIN_RESPONSE_IU_TYPE ||
+		(resp->status != DATA_BUFFER_OK &&
+		resp->status != DATA_BUFFER_UNDERFLOW &&
+		resp->status != DATA_BUFFER_OVERFLOW)) {
 		rc = 0;
 		goto out;
 	}
@@ -1903,10 +1906,6 @@ static int sop_get_pqi_device_capabilities(struct sop_device *h)
 	dc->min_oq_element_length = le16_to_cpu(buffer->min_oq_element_length);
 	dc->intr_coalescing_time_granularity =
 		le16_to_cpu(buffer->intr_coalescing_time_granularity);
-	dc->iq_alignment_exponent = buffer->iq_alignment_exponent;
-	dc->oq_alignment_exponent = buffer->oq_alignment_exponent;
-	dc->iq_ci_alignment_exponent = buffer->iq_ci_alignment_exponent;
-	dc->oq_pi_alignment_exponent = buffer->oq_pi_alignment_exponent;
 	dc->protocol_support_bitmask =
 		le32_to_cpu(buffer->protocol_support_bitmask);
 	dc->admin_sgl_support_bitmask =
@@ -5089,19 +5088,17 @@ static void __attribute__((unused)) verify_structure_defs(void)
 	VERIFY_OFFSET(reserved2, 20);
 	VERIFY_OFFSET(max_iq_element_length, 24);
 	VERIFY_OFFSET(min_iq_element_length, 26);
-	VERIFY_OFFSET(max_oqs, 28);
-	VERIFY_OFFSET(max_oq_elements, 30);
-	VERIFY_OFFSET(reserved3, 32);
+	VERIFY_OFFSET(reserved3, 28);
+	VERIFY_OFFSET(max_oqs, 30);
+	VERIFY_OFFSET(max_oq_elements, 32);
 	VERIFY_OFFSET(intr_coalescing_time_granularity, 34);
 	VERIFY_OFFSET(max_oq_element_length, 36);
 	VERIFY_OFFSET(min_oq_element_length, 38);
-	VERIFY_OFFSET(iq_alignment_exponent, 40);
-	VERIFY_OFFSET(oq_alignment_exponent, 41);
-	VERIFY_OFFSET(iq_ci_alignment_exponent, 42);
-	VERIFY_OFFSET(oq_pi_alignment_exponent, 43);
+	VERIFY_OFFSET(reserved4, 40);
 	VERIFY_OFFSET(protocol_support_bitmask, 44);
 	VERIFY_OFFSET(admin_sgl_support_bitmask, 48);
-	VERIFY_OFFSET(reserved4, 50);
+	VERIFY_OFFSET(reserved5, 50);
+	VERIFY_OFFSET(iu_desc, 64);
 #undef VERIFY_OFFSET
 
 #define VERIFY_OFFSET(field, offset) \
